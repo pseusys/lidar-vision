@@ -9,7 +9,7 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
-      target: ftd
+      target: lidar-vision
     volumes:
       - ../out:/~/catkin_ws/out
       - ../config:/~/catkin_ws/src/follow_the_drow/config

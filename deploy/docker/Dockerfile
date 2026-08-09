@@ -16,7 +16,7 @@ ENTRYPOINT ["bash", "entrypoint.sh"]
 CMD ["rosversion", "ros"]
 
 
-FROM basic as ftd
+FROM basic as lidar-vision
 
 COPY library /~
 RUN pip install /~ && find /~ -maxdepth 1 -mindepth 1 ! \( -name 'cpp_core' -o -name 'entrypoint.sh' -o -name 'catkin_ws' \) -exec rm -rf {} + && mv /~/cpp_core /~/fillow_the_drow_library

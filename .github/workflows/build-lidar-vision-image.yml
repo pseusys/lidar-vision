@@ -1,4 +1,4 @@
-name: BUILD-FTD-IMAGE
+name: BUILD-LIDAR-VISION-IMAGE
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - 'deploy/docker/**'
       - 'library/**'
       - 'Makefile'
-      - '.github/workflows/build-ftd-image.yml'
+      - '.github/workflows/build-lidar-vision-image.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

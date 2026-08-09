@@ -36,7 +36,7 @@ It can be re-built using make `build-image` target, defined in `Makefile`:
 make build-image
 ```
 
-> The image is also built and published automatically by the `.github/workflows/build-ftd-image.yml` CI workflow on every push to `main` that touches `deploy/docker/**`, `library/**` or the `Makefile`.
+> The image is also built and published automatically by the `.github/workflows/build-lidar-vision-image.yml` CI workflow on every push to `main` that touches `deploy/docker/**`, `library/**` or the `Makefile`.
 
 ## Run your Nodes
 

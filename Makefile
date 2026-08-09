@@ -11,7 +11,7 @@ CONTAINER_IP := $(shell hostname -I | awk '{print $$1}')
 
 help:
 	@ # Display help information
-	echo "Welcome to the 'FOLLOW THE DROW' project!"
+	echo "Welcome to the 'lidar-vision' project!"
 	echo "This is the available make command list:"
 	echo "    'make venv': create python virtual environment and install latest jupyter server libraries as well as follow_the_drow library, enable required params."
 	echo "    'make build-lib': build follow_the_drow C++ lib, install the lib if run as superuser."

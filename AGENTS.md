@@ -14,12 +14,12 @@ Project index and development reference for coding agents working in this reposi
 | `library/cpp_core/` | C++ static library (`AlgorithmicDetector`, `Cluster`, `Point`, `Tracked`, pybind11 `binding`). Namespace: `follow_the_drow`. |
 | `deploy/` | ROS Noetic package (`follow_the_drow`), Docker image, launch/RVIZ configs, `conf.env`. |
 | `deploy/follow_the_drow/nodes/` | The seven ROS nodes (see ROS section below). |
-| `deploy/docker/` | `Dockerfile` (targets: `basic`, `ftd`), `docker-compose.yml`, `entrypoint.sh`. |
+| `deploy/docker/` | `Dockerfile` (targets: `basic`, `lidar-vision`), `docker-compose.yml`, `entrypoint.sh`. |
 | `utils/` | Research scripts: `train.py`, `train_all.py`, `evaluate.py`, `render_video.py`, `training_notebook.ipynb`. |
 | `compare/` | Two older comparison notebooks (`algorithmic_detector.ipynb`, `redrow_detector.ipynb`); predate the unified `train.py`/`evaluate.py` CLI and duplicate some of what it now does. Kept for now — see "Known gaps" below. |
 | `checkpoints/` | Local training output (gitignored — never commit checkpoints here). |
 | `docs/` | Formal research (`RESEARCH.md`) and deployment (`ROS_IMAGE.md`) documentation. |
-| `.github/workflows/build-ftd-image.yml` | CI: builds/pushes the ROS Docker image, builds the Python lib, builds the C++ lib. |
+| `.github/workflows/build-lidar-vision-image.yml` | CI: builds/pushes the ROS Docker image, builds the Python lib, builds the C++ lib. |
 
 ## Detector registry
 
@@ -120,7 +120,7 @@ All ROS runtime configuration goes through `deploy/conf.env` (per-node enable fl
 
 ```mermaid
 ---
-title: Follow the DROW pipeline
+title: lidar-vision pipeline
 ---
 
 stateDiagram-v2

@@ -1,4 +1,4 @@
-# Follow the DROW
+# lidar-vision
 
 A research project on **person detection from knee-height 2D LiDAR data**, of the kind carried by mobile service robots. We benchmark the published [DROW](https://arxiv.org/abs/1804.02463) and [DR-SPAAM](https://arxiv.org/abs/2004.14079) detectors, [Li2Former](https://doi.org/10.1109/TIM.2024.3420353), the ONNX [LFE-Peaks / LFE-PPN](https://arxiv.org/abs/2306.08531) baselines, and a classical rule-based clustering detector against three novel **full-scan, non-recursive CNN/TCN architectures** proposed here, which drop the fixed-size "cutout" every prior cutout-based method relies on and process the whole LiDAR scan at once. The full pipeline — detection, single-target tracking, and a follow-me behaviour — is also deployed end-to-end on a real mobile robot (RobAIR) over ROS.
 
