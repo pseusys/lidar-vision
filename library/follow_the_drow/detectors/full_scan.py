@@ -591,15 +591,28 @@ class TemporalUNetDetector(nn.Module):
     """
     Architecture C: multi-frame 1-D U-Net with T range scans as input channels.
 
-    Extends LFE-Peaks/LFE-PPN to multi-frame input by replacing the
-    single-channel stem Conv1d(1, C) with Conv1d(T, C), treating T raw
-    range scans as T parallel input channels to a 1-D U-Net that operates
-    over the beam axis.  Structural differences from LFE:
+    NOT a port of LFE-Peaks/LFE-PPN's own backbone. This is a from-scratch,
+    textbook 1-D U-Net (Ronneberger et al., MICCAI 2015: symmetric
+    encoder/decoder, two-conv blocks, MaxPool downsampling, concatenation
+    skips) given a T-channel stem Conv1d(T, C) instead of Conv1d(1, C).
+    LFE's actual backbone is a different design entirely — three residual
+    blocks of depthwise-separable multi-kernel convs (k=9,7,5) with an
+    internal residual add and a "global aggregator" (global max-pool
+    concatenated at every position), roughly constant ~32-channel width, and
+    2x/3x (not three successive 2x) downsampling — see docs/RESEARCH.md
+    Section 5.3 for the full comparison. This model shares LFE's general
+    "full-scan, U-Net-family backbone + heatmap head" idea and its default
+    head, not its specific backbone topology; do not describe results from
+    this model as isolating "temporal context only" relative to LFE.
+
+    Differences from LFE, for what they're worth as a from-scratch design:
 
       * T input channels (vs LFE's 1) — the key temporal extension
       * GroupNorm throughout (vs LFE's Keras BatchNorm, which degrades at B=1)
       * Trained from scratch (vs LFE's published ONNX weights)
       * Raw range input (vs LFE's (1-r/10) normalization; raw is fine with GN)
+      * Channel-doubling U-Net topology (vs LFE's constant-width residual
+        blocks) — a topology difference, not just a normalization/input choice
 
     This model pools over the beam axis, so individual beams from the same
     scan cannot be separated into the PyTorch batch dimension.  BEAM_BATCH=True

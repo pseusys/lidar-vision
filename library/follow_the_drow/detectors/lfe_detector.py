@@ -89,13 +89,40 @@ def _load_onnx(path: Path):
     )
 
 
+def _merge_nearby(
+    detections: List[Tuple[float, float, float]],
+    radius:     float,
+) -> List[Tuple[float, float, float]]:
+    """
+    Greedy NMS-style merge of nearby centroids into single detections.
+
+    Matches the FROG paper's post-processing description (Amodeo et al.,
+    Sec. 5.2.4): "Centroids that are close together are interpreted as legs
+    or part of legs, and merged together into final person detections using
+    a NMS-like process." Highest-confidence centroids are kept first; any
+    remaining centroid within `radius` of an already-kept one is dropped.
+    """
+    if not detections:
+        return []
+    dets = sorted(detections, key=lambda d: -d[0])
+    keep = []
+    for det in dets:
+        _, x, y = det
+        if all(
+            np.sqrt((x - kx) ** 2 + (y - ky) ** 2) > radius
+            for _, kx, ky in keep
+        ):
+            keep.append(det)
+    return keep
+
+
 # ---------------------------------------------------------------------------
 # LFE-Peaks
 # ---------------------------------------------------------------------------
 
 class LFEPeaksDetector:
     """
-    LFE-Peaks: 1-D U-Net FCN + scipy find_peaks post-processing.
+    LFE-Peaks: 1-D U-Net FCN + scipy find_peaks + centroid-merge post-processing.
 
     Returns class-agnostic person detections from a single raw scan.
 
@@ -105,6 +132,10 @@ class LFEPeaksDetector:
     peak_height      : minimum peak height threshold (default 0.01)
     peak_prominence  : minimum prominence for find_peaks (default 0.1)
     peak_width       : minimum width in samples (default 1)
+    merge_radius     : centroids closer than this (metres) are merged into a
+                        single detection, keeping the higher-confidence one
+                        (default: `_PERSON_RADIUS` — the paper describes this
+                        step but does not give an exact radius)
     """
 
     DEFAULT_WEIGHTS = _LFE_PEAKS_PATH
@@ -115,6 +146,7 @@ class LFEPeaksDetector:
         peak_height:     float = 0.01,
         peak_prominence: float = 0.1,
         peak_width:      int   = 1,
+        merge_radius:    float = _PERSON_RADIUS,
     ):
         self._session        = _load_onnx(onnx_path)
         self._input_name     = self._session.get_inputs()[0].name
@@ -122,6 +154,7 @@ class LFEPeaksDetector:
         self._peak_height    = peak_height
         self._peak_prominence = peak_prominence
         self._peak_width     = peak_width
+        self._merge_radius   = merge_radius
 
     def detect(
         self,
@@ -170,7 +203,7 @@ class LFEPeaksDetector:
             y     = r *  np.cos(phi)
             detections.append((score, x, y))
 
-        return detections
+        return _merge_nearby(detections, self._merge_radius)
 
 
 # ---------------------------------------------------------------------------
@@ -219,25 +252,6 @@ class LFEPPNDetector:
     @staticmethod
     def _sigmoid(x: np.ndarray) -> np.ndarray:
         return 1.0 / (1.0 + np.exp(-np.clip(x, -30, 30)))
-
-    @staticmethod
-    def _nms(
-        detections: List[Tuple[float, float, float]],
-        radius:     float,
-    ) -> List[Tuple[float, float, float]]:
-        """Greedy distance-based non-maximum suppression."""
-        if not detections:
-            return []
-        dets = sorted(detections, key=lambda d: -d[0])
-        keep = []
-        for det in dets:
-            _, x, y = det
-            if all(
-                np.sqrt((x - kx) ** 2 + (y - ky) ** 2) > radius
-                for _, kx, ky in keep
-            ):
-                keep.append(det)
-        return keep
 
     def detect(
         self,
@@ -298,4 +312,4 @@ class LFEPPNDetector:
                 y = final_d *  np.cos(final_phi)
                 detections.append((score, x, y))
 
-        return self._nms(detections, self._nms_radius)
+        return _merge_nearby(detections, self._nms_radius)
