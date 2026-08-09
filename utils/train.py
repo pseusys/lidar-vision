@@ -965,8 +965,8 @@ def _default_args(**overrides) -> SimpleNamespace:
         out=Path("weights_trained.pth"),
         resume=None,
         weights=None,
-        # detection head (full-scan models only)
-        head="drow",
+        # detection head (full-scan models only) — resolved below, after
+        # `overrides` is applied, so it can depend on the final `detector`
         heatmap_sigma=2.0,
         # evaluation
         eval_only=False,
@@ -975,6 +975,11 @@ def _default_args(**overrides) -> SimpleNamespace:
         force_cpu=False,
     )
     defaults.update(overrides)
+    if "head" not in overrides:
+        # temporal_unet defaults to heatmap (matches LFE-Peaks); every other
+        # full-scan model defaults to the DROW-style head. Mirrors the CLI's
+        # post-parse resolution in main() — see the comment there.
+        defaults["head"] = "heatmap" if defaults["detector"] == "temporal_unet" else "drow"
     return SimpleNamespace(**defaults)
 
 
@@ -1397,8 +1402,10 @@ def main():
                         help="Disable odometry alignment (use raw, unaligned scans). "
                              "Reproduces the original unaligned baseline.")
     # Detection head (full-scan models only)
-    parser.add_argument("--head", choices=["drow", "heatmap"], default="drow",
-                        help="Detection head for full-scan models (default: drow). "
+    parser.add_argument("--head", choices=["drow", "heatmap"], default=None,
+                        help="Detection head for full-scan models (default: 'drow' "
+                             "for spacetime_cnn/fullscan_tcn, 'heatmap' for "
+                             "temporal_unet — resolved after parsing if omitted). "
                              "'drow': 4-class logits + vote-offset regression, same "
                              "head as DROW/DR-SPAAM — enables direct comparison. "
                              "'heatmap': 1D Gaussian heatmap + BCE loss + peak "
@@ -1436,6 +1443,13 @@ def main():
                         help="Epochs per trial — keep short (default: 10)")
     args = parser.parse_args()
     args.val_split = args.val_split.strip() or None
+    if args.head is None:
+        # temporal_unet defaults to heatmap (matches LFE-Peaks); every other
+        # full-scan model defaults to the DROW-style head for a head-neutral
+        # comparison. Only resolved here if the user didn't pass --head
+        # explicitly (an explicit choice, e.g. --head drow on temporal_unet
+        # for the ablation in docs/RESEARCH.md §5.5, is always respected).
+        args.head = "heatmap" if args.detector == "temporal_unet" else "drow"
 
     # ------------------------------------------------------------------
     # AlgorithmicDetector: eval-only (not an nn.Module)

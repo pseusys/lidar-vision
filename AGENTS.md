@@ -1,6 +1,7 @@
 # AGENTS.md
 
-Project index and development reference for coding agents working in this repository. For the client-facing overview see [README.md](README.md); for the research write-up see [docs/RESEARCH.md](docs/RESEARCH.md); for the ROS/Docker deployment stack see [docs/ROS_IMAGE.md](docs/ROS_IMAGE.md).
+Project index and development reference for coding agents working in this repository.
+For the client-facing overview see [README.md](README.md); for the research write-up see [docs/RESEARCH.md](docs/RESEARCH.md); for the ROS/Docker deployment stack see [docs/ROS_IMAGE.md](docs/ROS_IMAGE.md).
 
 ## Repository map
 
@@ -23,7 +24,9 @@ Project index and development reference for coding agents working in this reposi
 
 ## Detector registry
 
-Keys are the canonical `--detector` CLI value and `DETECTOR_REGISTRY` key (`library/follow_the_drow/detectors/__init__.py`). For which of these are faithful ports of a published architecture (with official weights), which are best-effort reimplementations, and which are this project's own novel designs — see docs/RESEARCH.md §2.1. §2.2 there also lists the classical baselines (ROS `leg_detector`, Arras et al., Leigh et al., PeTra) that the DROW/Li2Former/FROG papers compare against but this repo does not replicate, and why.
+Keys are the canonical `--detector` CLI value and `DETECTOR_REGISTRY` key (`library/follow_the_drow/detectors/__init__.py`).
+For which of these are faithful ports of a published architecture (with official weights), which are best-effort reimplementations, and which are this project's own novel designs — see docs/RESEARCH.md §2.1.
+§2.2 there also lists the classical baselines (ROS `leg_detector`, Arras et al., Leigh et al., PeTra) that the DROW/Li2Former/FROG papers compare against but this repo does not replicate, and why.
 
 | Key | Class | File | Architecture | Weights |
 |---|---|---|---|---|
@@ -37,7 +40,8 @@ Keys are the canonical `--detector` CLI value and `DETECTOR_REGISTRY` key (`libr
 | `lfe_peaks` | `LFEPeaksDetector` | `lfe_detector.py` | 1-D U-Net FCN + peak detection, ONNX (Amodeo et al. 2025) | bundled |
 | `lfe_ppn` | `LFEPPNDetector` | `lfe_detector.py` | 1-D U-Net FCN + region proposals, ONNX (Amodeo et al. 2025) | bundled |
 
-Architecture rationale and design decisions for every detector: [docs/RESEARCH.md](docs/RESEARCH.md). Removed architectures (`FullScanCNNDetector`, `FullScanTransformerDetector` — both used recursive/attention components and were deleted from the codebase) are documented there too, Section 6, for provenance only — do not resurrect references to them.
+Architecture rationale and design decisions for every detector: [docs/RESEARCH.md](docs/RESEARCH.md).
+Removed architectures (`FullScanCNNDetector`, `FullScanTransformerDetector` — both used recursive/attention components and were deleted from the codebase) are documented there too, Section 6, for provenance only — do not resurrect references to them.
 
 ## Datasets
 
@@ -48,7 +52,8 @@ Architecture rationale and design decisions for every detector: [docs/RESEARCH.m
 | `JRDB_Dataset` | DROW-compatible | 541 | Dense (every frame); 1 class. **Manual download required** — free registration at jrdb.erc.monash.edu, then extract into `library/follow_the_drow/include/JRDB-data/`. |
 | `LiveDataset` | ROS topics (queue) | variable | — maintains a T-scan sliding window (`collections.deque(maxlen=time_frame)`) for real-time use |
 
-Most detectors operate on temporal windows of `T` consecutive scans (default T=5); LFE detectors are single-scan only. `algorithmic`, `drow`, `drspaam`, `li2former` odometry-align historical scans before extracting cutouts; the full-scan detectors (`spacetime_cnn`, `fullscan_tcn`, `temporal_unet`) apply the same rotation correction by default via `--align-scans` (pass `--no-align-scans` for the unaligned ablation) — see docs/RESEARCH.md §4.3.
+Most detectors operate on temporal windows of `T` consecutive scans (default T=5); LFE detectors are single-scan only.
+`algorithmic`, `drow`, `drspaam`, `li2former` odometry-align historical scans before extracting cutouts; the full-scan detectors (`spacetime_cnn`, `fullscan_tcn`, `temporal_unet`) apply the same rotation correction by default via `--align-scans` (pass `--no-align-scans` for the unaligned ablation) — see docs/RESEARCH.md §4.3.
 
 DROW sequence files: `.bag.csv` (index, timestamp, scan columns), `.bag.odom2` (index, timestamp, x/y/angle odometry), `.bag.wa`/`.bag.wc`/`.bag.wp` (index, walker/wheelchair/person detection arrays).
 
@@ -61,7 +66,8 @@ pip install ./library                    # installs, downloads ~2 GB of bundled 
 pip install -r utils/requirements.txt    # research script dependencies
 ```
 
-GPU is auto-selected in order CUDA/ROCm → DirectML (`pip install torch-directml`) → CPU. All trainable detectors are CNN/TCN-only (no RNN, no attention), so all are DirectML-compatible — no `force_cpu` workaround needed anywhere in this repo.
+GPU is auto-selected in order CUDA/ROCm → DirectML (`pip install torch-directml`) → CPU.
+All trainable detectors are CNN/TCN-only (no RNN, no attention), so all are DirectML-compatible — no `force_cpu` workaround needed anywhere in this repo.
 
 ### C++ library
 
@@ -95,7 +101,8 @@ python render_video.py --no-algo --drow weights_drow.pth --max-frames 300
 jupyter notebook utils/training_notebook.ipynb
 ```
 
-`train.py --detector` choices: `algorithmic` (eval only), `spacetime_cnn`, `fullscan_tcn`, `temporal_unet`, `li2former`. `evaluate.py` flags mirror the registry: `--drow [WEIGHTS]`, `--drspaam [WEIGHTS]`, `--spacetime-cnn WEIGHTS`, `--fullscan-tcn WEIGHTS`, `--li2former WEIGHTS`, `--lfe-peaks [WEIGHTS]`, `--lfe-ppn [WEIGHTS]` (omit `WEIGHTS` to use bundled/published weights where available). Run `python train.py --help` / `python evaluate.py --help` / `python render_video.py --help` for the full flag list — it changes more often than this file does.
+`train.py --detector` choices: `algorithmic` (eval only), `spacetime_cnn`, `fullscan_tcn`, `temporal_unet`, `li2former`. `evaluate.py` flags mirror the registry: `--drow [WEIGHTS]`, `--drspaam [WEIGHTS]`, `--spacetime-cnn WEIGHTS`, `--fullscan-tcn WEIGHTS`, `--li2former WEIGHTS`, `--lfe-peaks [WEIGHTS]`, `--lfe-ppn [WEIGHTS]` (omit `WEIGHTS` to use bundled/published weights where available).
+Run `python train.py --help` / `python evaluate.py --help` / `python render_video.py --help` for the full flag list — it changes more often than this file does.
 
 ### Notebooks (`compare/`)
 
@@ -114,7 +121,8 @@ make clean                   # clean-docker + clean-local (removes venv, build a
 make help                    # list all Makefile targets with descriptions
 ```
 
-All ROS runtime configuration goes through `deploy/conf.env` (per-node enable flags, topic names, algorithmic-detector tuning parameters, tracking policy, etc.) — see [docs/ROS_IMAGE.md](docs/ROS_IMAGE.md) and the file itself for the full variable list. Node behaviour details (constructor params, topics consumed/produced) are documented per-node below.
+All ROS runtime configuration goes through `deploy/conf.env` (per-node enable flags, topic names, algorithmic-detector tuning parameters, tracking policy, etc.) — see [docs/ROS_IMAGE.md](docs/ROS_IMAGE.md) and the file itself for the full variable list.
+Node behaviour details (constructor params, topics consumed/produced) are documented per-node below.
 
 ## ROS node reference
 

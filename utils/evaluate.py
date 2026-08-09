@@ -52,6 +52,7 @@ from follow_the_drow.detectors import (
     Li2FormerDetector,
     SpaceTimeCNNDetector,
     FullScanTCNDetector,
+    TemporalUNetDetector,
     LFEPeaksDetector,
     LFEPPNDetector,
 )
@@ -465,6 +466,9 @@ def _build_bench_models(T: int) -> List[Tuple[str, torch.nn.Module, str]]:
         ("FullScanTCN",
             FullScanTCNDetector(n_time=T),
             "raw_scan"),
+        ("TemporalUNet",
+            TemporalUNetDetector(n_time=T, head="heatmap"),
+            "raw_scan"),
     ]
 
 
@@ -555,6 +559,7 @@ _NN_MODELS = {
     "li2former":     "li2former",
     "spacetime-cnn": "spacetime_cnn",
     "fullscan-tcn":  "fullscan_tcn",
+    "temporal-unet": "temporal_unet",
 }
 
 # ONNX-based models evaluated via eval_lfe_model

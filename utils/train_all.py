@@ -1,17 +1,18 @@
 #!/usr/bin/env python3
 """
-Train both custom full-scan detectors sequentially.
+Train all custom full-scan detectors sequentially.
 
 DROW and DR-SPAAM use published pre-trained weights and are excluded.
 Calls train_model() from train.py for each detector and collects the final
 val-loss and AUC results in a summary table.
 
-Both spacetime_cnn and fullscan_tcn are non-recursive (CNN/TCN only, no
-RNN/attention) and DirectML-compatible — no force_cpu juggling needed.
+spacetime_cnn, fullscan_tcn and temporal_unet are all non-recursive
+(CNN/TCN/U-Net only, no RNN/attention) and DirectML-compatible — no
+force_cpu juggling needed.
 
 Usage
 -----
-  # Both models + li2former, FROG, 30 epochs, early stopping with patience 5
+  # All four models, FROG, 30 epochs, early stopping with patience 5
   python train_all.py
 
   # Override common settings
@@ -109,6 +110,7 @@ def _run_in_subprocess(target, args):
 _ALL_DETECTORS = [
     "spacetime_cnn",
     "fullscan_tcn",
+    "temporal_unet",
     "li2former",
 ]
 
