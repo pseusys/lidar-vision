@@ -1,0 +1,612 @@
+# Full-Scan, Non-Recursive Convolutional Architectures for 2D LiDAR Person Detection
+
+> Formalized research statement and literature review for this repository. For a client-facing overview, see the [top-level README](../README.md); for a map of the codebase, see [AGENTS.md](../AGENTS.md).
+
+---
+
+## 1. Problem Statement
+
+A mobile robot carries a 2D lidar scanner mounted at leg height (~40 cm off the ground). The scanner rotates in a horizontal plane and produces a single array of **N range measurements** per timestep — one distance value `r_i` for each beam angle `φ_i`, uniformly distributed across the sensor's field of view (DROW: N ≈ 450 beams at 0.5° spacing; FROG: N = 720 beams at 0.5° spacing; JRDB: N = 541 beams at 0.5° spacing over a 270° FoV).
+
+The task is **beam-level classification with spatial vote regression**: for every beam `i` in every scan, predict:
+1. A probability over four classes: background, wheelchair (wc), walker (wa), person/pedestrian (wp)
+2. A 2D vote offset `(dx, dy)` in the sensor frame pointing toward the nearest annotation centre
+
+Post-processing clusters the vote targets from all beams that voted "positive" into discrete person/wheelchair/walker detections (Gaussian-smoothed accumulator + peak detection), avoiding the need to predict the exact count of people.
+
+### Key challenges
+
+| Challenge | Description |
+|---|---|
+| **Scale variance** | A person at 2 m subtends ~12 beams; the same person at 8 m subtends ~3 beams |
+| **Sparse targets** | People occupy <5 % of beams in a typical indoor scan |
+| **Angular ambiguity** | The sensor measures range, not shape; a thin pole and a leg look similar locally |
+| **Temporal drift** | The robot moves between scans, so consecutive scans are in different frames |
+| **Class imbalance** | Background beams outnumber positive beams by ~20:1 |
+
+### Evaluation metric
+
+The standard metric is **Average Precision (AP)** at a matching radius of 0.5 m in Cartesian space, computed separately per class. Literature numbers quoted below use the DROW test set as the reference benchmark unless stated otherwise.
+
+## 2. Goal
+
+Existing learned 2D-LiDAR person detectors (DROW, DR-SPAAM, Li2Former) all rely on a **cutout**: a fixed-size polar window extracted around each beam, processed independently by a per-beam CNN. The cutout was a reasonable choice when these methods were designed (it gives trivial per-beam parallelism and a small, fixed input size), but it hardcodes the spatial context a beam can see and discards everything outside the window.
+
+**This research asks: can a CNN that processes the *entire* scan at once — with no cutout, no per-beam windowing, no hand-set spatial extent — match or exceed cutout-based detectors' accuracy, while removing that fixed-window assumption?**
+
+Three further constraints, made deliberately and stated up front so every later design choice is explainable against them:
+
+1. **Non-recursive only.** Every architecture is built exclusively from CNN and TCN layers (plus pooling/norm/linear "glue") — no RNN/GRU/LSTM, no attention. This is an efficiency choice: it's the architectural feature expected to be the actual winning point against Li2Former (a temporal-Transformer cutout detector with O(N_beams²)/O(T²)-flavoured cost) and against any recurrent design — feed-forward, fully parallel layers are cheaper to run and trivially batchable.
+2. **Raw input, no preprocessing.** Architectures consume the raw scan — angle (implicit in beam index) and distance only. No cutout and no conversion to Cartesian `(x, y)`. This is a bigger departure from prior work than it looks: DROW, DR-SPAAM, and this project's own earlier full-scan designs all rotate historical scans into the current frame using odometry before doing anything else (Section 3.2). Dropping the Cartesian conversion turns the `T`-frame window into a trivial rotating buffer at inference time — see Section 5.0.
+3. **Compare against the cutout-based research.** All of the above is benchmarked against DROW, DR-SPAAM, and Li2Former, on the same datasets and the same evaluation pipeline (Section 8).
+
+Concretely, this research proposes **three** architectures (Section 5): a joint space-time CNN, a TCN-then-CNN fusion, and a temporal U-Net — see Section 6 for why three, not two.
+
+### 2.1 Provenance: replicated vs. novel
+
+Every detector this repo trains or evaluates falls into exactly one of three provenance categories. This distinction matters for how to read any accuracy number produced by this codebase: a "replicated" score is a reproduction of a published result, a "novel" score is this project's own claim.
+
+| Detector | Category | Evidence |
+|---|---|---|
+| `DrowDetector` | **Replicated — official weights** | Architecture is a direct port of the official DROW notebook release; loads the official checkpoint `final-WNet3xLF2p-T5-odom.rot-trainval-50ep.pth.tar` (`library/setup.py`) via `load_state_dict`, which only succeeds because the layer shapes match the original bit-for-bit. |
+| `DrSpaamDetector` | **Replicated — official weights** | Module docstring states the code matches "the official SpatialDROW implementation"; module structure is deliberately nested to load the official checkpoint `dr_spaam_e40.pth` exactly. |
+| `LFEPeaksDetector` / `LFEPPNDetector` | **Replicated — official weights (ONNX)** | Loads the authors' own exported ONNX models (`LFE-Peaks.onnx`, `LFE-PPN.onnx`, hosted at `robotics.upo.es/~famozur/onnx/`) via `onnxruntime.InferenceSession` — genuine published-model inference, not a reimplementation. |
+| `Li2FormerDetector` | **Reimplemented — no official code or weights** | Header says the architecture is "inspired by" Yang et al. (weaker language than the DROW/DR-SPAAM ports) and explicitly notes no published weights exist; this project trains it from scratch from the paper's description alone. No official repo was available to verify against, so treat any AP this project reports for Li2Former as this project's own reproduction attempt, not a confirmed match to the paper's reported 0.764 (DROW) / 0.814 (JRDB). |
+| `AlgorithmicDetector` | **Ported classical algorithm — not from any of the SOTA papers compared here** | The C++ source attributes the algorithm to "O. Aycard" (`cpp_core/sources/detector.cpp`), not to Pantofaru's ROS `leg_detector`, Arras et al., or Leigh et al. — see Section 2.2. It's a distinct two-tier leg+chest clustering/tracking algorithm, included as this repo's own non-learned reference point, not a port of any baseline used by DROW/DR-SPAAM/Li2Former/FROG. |
+| `SpaceTimeCNNDetector`, `FullScanTCNDetector`, `TemporalUNetDetector` | **Novel — proposed by this work** | No prior paper describes these architectures, so no official weights could exist; each must be trained locally. Individual sub-components (SE blocks, Inception-style branching, causal TCN, U-Net skip connections) are explicitly credited to their originating papers in the code (Section 5), but the overall architectures and their combination are this project's own design. |
+
+### 2.2 SOTA baselines mentioned in the literature but not replicated here
+
+The four papers this research compares against (Sections 3, 7) each report their own baseline comparisons. Collated across all of them, three classical detectors recur that this repo does **not** implement:
+
+| Baseline | Used as a comparison point by | Why not replicated here |
+|---|---|---|
+| **ROS `leg_detector`** (Pantofaru, ROS package, 2010) — jump-distance leg clustering + random-forest classifier + Kalman-filter tracking, off-the-shelf pretrained model | DROW (IROS 2018), Li2Former (TIM 2024), and FROG (2025) all use it as their weakest baseline | Consistently the lowest-scoring method in every one of those papers' own tables (e.g. FROG Table 4: mAP 15.8 vs. 73+ for DROW3/DR-SPAAM). This repo already carries its own non-learned reference point (`AlgorithmicDetector`, Section 2.1) — replicating a second classical leg-tracker would duplicate that role without adding anything to the actual research question (full-scan vs. cutout **deep** architectures). |
+| **Segment-based detector, Arras et al.** (ICRA 2007) — jump-distance segmentation + boosted-features classifier on hand-crafted geometric features | DROW (IROS 2018), Li2Former (TIM 2024) | No official training code was ever released — even the DROW paper itself had to fall back on a third-party ROS reimplementation (Linder & Breuers et al.) rather than the original. Replicating it here would itself be an unverified reimplementation, several steps removed from the actual paper, for a baseline that isn't part of this project's own architectural question. |
+| **Joint leg tracker, Leigh et al.** (ICRA 2015) — Kalman-filter tracker jointly associating pairs of leg clusters into person tracks | DROW (IROS 2018), Li2Former (TIM 2024) | The DROW paper's own evaluation found it stops producing detections beyond ~7 m range and requires per-dataset threshold retuning to be usable at all — a known, paper-acknowledged limitation of the two-leg-assumption approach, not a competitive comparison point for this project's learned-detector research. |
+| **PeTra** (Guerrero-Higueras et al., Frontiers in Neurorobotics, 2019) — full 2D U-Net over a 256×256 rasterized occupancy-grid image, with an external leg-pairing post-process | FROG (2025), as its "modern leg-based" baseline | Already discussed as the closest *related* full-scan work in Section 7.2 — but its task framing differs (binary occupancy-grid segmentation, not this project's shared beam-classification-plus-vote-regression head) and it is markedly slower in FROG's own benchmark (~28 ms/scan vs. <2 ms for LFE, ~14 ms for DROW3/DR-SPAAM). A fair replication would need a separate evaluation harness rather than a drop-in addition to the shared pipeline. |
+
+No other model variants were found published alongside `LFEPeaksDetector`/`LFEPPNDetector`: the FROG paper's own benchmark (Table 4) and the authors' file host (`robotics.upo.es/~famozur/onnx/`) contain exactly these two ONNX exports for the LFE family — `LFE-Peaks.onnx` and `LFE-PPN.onnx`, both already bundled here — alongside unrelated models from the same lab's other projects (object detection, dialogue ontologies), not additional LFE variants.
+
+---
+
+## 3. Previous Research and Baselines
+
+These are already reproduced and runnable in this repo (`train.py --detector drow|drspaam|li2former`, `evaluate.py --lfe-peaks --lfe-ppn`).
+
+### 3.1 DROW — Beyer, Hermans, Leibe (ICRA 2016, IROS 2018)
+
+**Reference:** Beyer, Hermans, Leibe. *DROW: Real-Time Deep Learning-Based Wheelchair Detection in 2-D Range Data*. ICRA 2016 / RA-L 2017 extension. arXiv:1603.02636; 3-class extension (wheelchair/walker/person) in the IROS 2018 paper, arXiv:1804.02463.
+
+> "We present a method to detect, segment, and track multiple people in a 2-D range scan... obtaining state of the art detection results." — abstract
+
+#### Key idea: the cutout
+
+For each beam `i`, a window of `S = 48` neighbouring beam ranges is extracted in polar coordinates and centred on beam `i`. This **cutout** forms a 1D signal of length 48 that encodes the local angular neighbourhood of the beam.
+
+A shared 1D CNN is applied to every cutout independently — beams are processed in parallel with no cross-beam communication during feature extraction. The network has three convolutional blocks followed by two upsampling heads (class logits and vote offset).
+
+#### Temporal aggregation: fixed sum
+
+When using `T` consecutive scans, the per-beam CNN is applied to each timestep independently, producing `T` feature vectors per beam. These are simply **summed** across the time dimension before the detection heads. All timesteps are weighted equally; the network has no way to down-weight a noisy or motion-blurred frame.
+
+```
+for each timestep t = 1…T:
+    cutout_t[i]  = extract_48_beams(scan_t, beam_i)
+    feature_t[i] = CNN(cutout_t[i])          ← no cross-beam communication
+
+feature[i] = Σ_t feature_t[i]               ← fixed sum, equal weights
+logit[i], vote[i] = detection_head(feature[i])
+```
+
+#### Odometry alignment
+
+Before feature extraction, historical scans are rotated into the current scan's coordinate frame using the robot's odometry (differential rotation Δθ between timesteps). Only rotation is applied — translation is ignored, approximating that the robot has moved little between T consecutive frames.
+
+#### Performance (DROW test set)
+
+| Class | AP |
+|---|---|
+| Person (wp) | 0.619 |
+| Wheelchair (wc) | 0.658 |
+| Walker (wa) | 0.520 |
+
+#### Identified weaknesses (motivating this research)
+
+1. **Zero cross-beam communication**: the CNN processes each 48-beam window in complete isolation. Two adjacent beams, each individually ambiguous, cannot reinforce each other's detection.
+2. **Fixed temporal weighting**: a scan frame where the person was occluded or the sensor returned a spurious reading contributes equally to the sum.
+3. **Fixed receptive field**: the 48-beam cutout is hardcoded; the network cannot look further or closer based on what it sees.
+4. **Polar-only representation**: the cutout contains raw range values. The CNN must learn to be invariant to the physical distance of the person, which changes the angular width of the cluster.
+
+#### ⚠ Annotation quality concern
+
+The DROW dataset uses **sparse annotations**: only a subset of scan frames in each recording sequence carries ground truth labels. Frames between annotated keyframes have no labels at all — they are neither positive nor explicitly marked as negative.
+
+This creates two training pathologies:
+
+- **False-negative label noise.** If a person is present in an unannotated frame, any detection there is scored as a false positive during training. The model is penalised for correct detections.
+- **Coverage gaps.** The fraction of annotated frames is low (DROW train: 17 665 annotated out of far more recorded frames), so the model sees far fewer positive examples per sequence than actually exist in the data.
+
+Additionally, ground truth positions were obtained by correlating lidar timestamps with an external reference (camera footage or motion capture), introducing **temporal synchronisation error** at fast motion speeds. Annotations very close to the sensor (< 1 m) or at the edge of the field of view are known to be less reliable due to projection ambiguity.
+
+The FROG dataset was recorded specifically to address these issues: every scan frame is annotated, eliminating false-negative noise and providing a denser training signal. When training on DROW and evaluating metrics, these annotation limitations should be kept in mind when interpreting low recall figures. **This annotation-quality analysis is one of this project's own findings**, not from the original DROW paper.
+
+### 3.2 DR-SPAAM — Jia, Hermans, Leibe (IROS 2020, RA-L 2022)
+
+**Reference:** arXiv:2004.14079.
+
+DR-SPAAM retains the DROW cutout extraction and per-beam CNN but replaces the fixed temporal sum with an **auto-regressive spatial attention mechanism** that directly addresses DROW's weaknesses (1) and (2).
+
+This project's implementation is the official **SpatialDROW** from the RA-L 2022 release, loaded from the published checkpoint `dr_spaam_e40.pth`.
+
+#### Architecture: four conv blocks + spatial attention gate
+
+```
+Block 1  (1→128,  3 layers) + MaxPool(2)  ↘
+Block 2  (128→256, 3 layers) + MaxPool(2)  → 256-ch feature map per beam (14 pts for S=56)
+                                             ↓ spatial attention gate
+Block 3  (256→512, 3 layers) + MaxPool(2)
+Block 4  (512→128, 2 layers) + AvgPool
+Conv1d heads → logits (1 or 4 classes), votes (2)
+```
+
+#### Auto-regressive spatial attention (the "A" in DR-SPAAM)
+
+After blocks 1–2, each beam has a feature map `f_t[i]` (spatial, not pooled). The temporal aggregation uses an **auto-regressive template** rather than explicit temporal attention weights:
+
+```
+template_0 = f_0[:]              ← initialised from first scan in window (detached)
+
+for t = 1…T−1:
+    feat_t[i] = encode(scan_t, beam_i)   ← blocks 1–2
+
+    # spatial attention: beam i attends to ±window/2 neighbours in template
+    attn_weight[i,j] = softmax( embed(feat_t[i]) · embed(template[j])
+                                for j in i−K … i+K )
+    template[i] = α · feat_t[i]  +  (1−α) · Σ_j attn_weight[i,j] · template[j]
+                  ↑ current feat       ↑ attended historical template
+
+final_feature[:] = decode(template[:])   ← blocks 3–4 + heads
+```
+
+Key properties:
+
+- **Stop-gradient on template input**: gradients only flow through the current scan's encode/gate path, not back through the full T-step chain (prevents BPTT instability).
+- **Local angular context** (±5 neighbours, `window_size=11`): beam `i` can observe its closest angular neighbours in the historical template.
+- **Alpha blending** (`alpha=0.5`): the gate blends current features with the attended template, preventing the template from collapsing to a running mean.
+- **56-pt cutouts** (`N_SAMP=56`): published weights use a 56-sample polar window instead of DROW's 48.
+- **Pedestrian-only output**: published weights (`dr_spaam_e40.pth`) output a single sigmoid class (person only). This project's training configuration uses 4 classes.
+
+#### Ablation results from the paper
+
+| Component | AP (wp) | Δ vs DROW |
+|---|---|---|
+| DROW (sum only) | 0.619 | — |
+| Temporal attn only | ~0.640 | +2.1 pp |
+| Spatial attn only | ~0.659 | +4.0 pp |
+| DR-SPAAM (both) | **0.696** | **+7.7 pp** |
+| DR-SPAAM RA-L (2022) | **0.720+** | **+10+ pp** |
+
+#### Limitations of DR-SPAAM
+
+1. **Still uses fixed 56-beam cutouts**: the CNN has no access to raw data beyond 56 beams, and the cutout boundary is hardcoded.
+2. **Spatial attention operates on compressed features**: neighbouring beams only communicate *after* independent CNN processing. Raw-signal cross-beam context is impossible.
+3. **Local attention only** (±5 neighbours): each beam can see only its closest neighbours. Global scan structure (e.g., two legs of the same person widely separated) is not captured.
+4. **Performance-driven design**: DR-SPAAM was developed under real-time constraints (ROS node, embedded hardware). Many architectural choices reflect computational budget rather than theoretical optimality.
+
+### 3.3 Li2Former — Yang et al. (IEEE TIM 2024)
+
+**Reference:** Yang et al. *Li2Former: Omni-Dimension Aggregation Transformer for Person Detection in 2-D Range Data*. IEEE Trans. Instrumentation and Measurement, 2024. DOI: 10.1109/TIM.2024.3420353.
+
+Li2Former retains the cutout-based input representation but replaces DR-SPAAM's spatial attention with a **temporal Transformer** that attends over T consecutive cutouts per beam independently.
+
+```
+For each (beam, timestep) pair — cutout width P = 64 samples:
+
+  _ConvBackbone(1 → d_model=512):
+    Stage 1: Conv1d(1→64)×2  + Conv1d(64→128)  + MaxPool(2)   → P/2 positions
+    Stage 2: Conv1d(128→128)×2 + Conv1d(128→256) + MaxPool(2)  → P/4 positions
+    Stage 3: Conv1d(256→256)×2 + Conv1d(256→512) + AdaptiveAvgPool(1) → 1 position
+    → (B*N*T, 512) feature vector per (beam, timestep)
+
+Reshape to (B*N, T, 512)
++ Sinusoidal positional encoding over T timesteps
+TransformerEncoder(d_model=512, nhead=8, 1 layer)  ← temporal self-attention
+Mean-pool over T  → (B*N, 512)
+
+Classification head : Linear(512 → 1)            binary person logit
+Regression head     : Linear(512 → 1024) → ReLU → Linear(1024 → 2)  vote offsets
+```
+
+Key properties:
+
+- **Temporal attention, not spatial**: DR-SPAAM attends across neighbouring beams at a fixed timestep; Li2Former attends across T timesteps for a single beam. The two mechanisms are complementary.
+- **Wider cutout** (P=64 vs. 48 for DROW, 56 for DR-SPAAM): more angular context per beam.
+- **Binary output** (person vs. background): the sigmoid probability is placed in the pedestrian slot for compatibility with the unified evaluation pipeline.
+- **No published weights**: must be trained from scratch using `train.py --detector li2former`.
+- Recurrent-free in the RNN sense, but uses a temporal Transformer — exactly the kind of component constraint 1 (Section 2) excludes from this project's own proposed architectures, and the comparison point that constraint's efficiency argument is made against.
+
+### 3.4 LFE-Peaks and LFE-PPN — Amodeo et al. (2025)
+
+**Reference:** Amodeo, Pérez-Higueras, Merino, Caballero. *FROG: A new people detection dataset for knee-high 2D range finders*. Frontiers in Robotics and AI, 2025. arXiv:2306.08531.
+
+The LFE detectors are inference-only ONNX baselines from the FROG benchmark paper. They differ from all other detectors in two important ways: they operate on a **single scan with no temporal context**, and they use a **1-D U-Net FCN** (the LFE backbone) applied directly to the normalised raw scan vector rather than cutout windows.
+
+```
+Input: (1, N=720, 1)   — normalised range vector  (1.0 = near, 0.0 = far)
+1-D U-Net FCN (encoder-decoder with skip connections)
+→ per-beam probability map (1, N, 1)
+```
+
+They differ only in the detection head:
+
+| Variant | Head | Post-processing |
+|---|---|---|
+| **LFE-Peaks** | Per-beam sigmoid probability | `scipy.find_peaks` on the 1-D probability map |
+| **LFE-PPN** | Anchor grid: N/6 sectors × 31 depth anchors × 3 outputs | Anchor decoding + greedy distance-based NMS |
+
+Key constraints: single-scan only (no odometry, no temporal history); trained on 720-beam FROG scans (inference on 450-beam DROW scans requires zero-padding and may degrade); class-agnostic (person confidence only); ONNX inference only (weights are bundled automatically; re-training is not supported within this framework).
+
+**This is the closest prior work to this project's own proposed architectures** — see Section 7.2.
+
+---
+
+## 4. Preprocessing
+
+### 4.1 Raw sensor data
+
+Each scan is a 1D array of `N` range measurements:
+
+```
+scan = [r_0, r_1, …, r_{N-1}]    r_i ∈ [r_min, r_max] metres
+```
+
+The beam angles are fixed and sensor-specific:
+
+```
+φ_i = φ_min + i · Δφ             (uniformly spaced, e.g. Δφ = 0.5° = 0.00873 rad)
+```
+
+### 4.2 Coordinate representation: the `(r, x, y)` triplet, and why it was dropped
+
+For each beam `i` in each aligned scan:
+
+```python
+x_i = -r_i * sin(φ_i)    # lateral  (DROW frame: x = sideways)
+y_i =  r_i * cos(φ_i)    # forward  (DROW frame: y = forward)
+```
+
+giving a 3-channel per-beam input `(r_i, x_i, y_i)`. This was the representation used by this project's own early full-scan designs (and, implicitly, by the cutout approach's post-hoc vote geometry):
+
+- **`r` (polar range)** tells the network how far away a beam endpoint is, which a fixed-kernel CNN cannot otherwise infer — a person at 2 m spans ~12 beams, at 8 m only ~3.
+- **`(x, y)` (Cartesian)** lets a 1D conv kernel detect a person's roughly constant-diameter body (~0.5–0.8 m) as a dense point cluster directly, without learning trigonometry from `r` and beam index.
+- **Not `(x, y)` alone**: loses the explicit distance/scale signal.
+- **Not first differences `(Δr, Δx, Δy)`**: a 1D CNN with kernel `[-1, +1]` can compute these internally; providing them as input is redundant.
+- **Redundancy**: `x² + y² = r²`, so the three channels are not independent — this creates a null space in the first conv layer's weights but does not prevent learning.
+
+**Current default (Section 5 architectures): raw range only, no Cartesian channels.** `drow_utils.raw_scan(scans_hist)` returns `(T, N_beams, 1)` — just the range value per beam per timestep, no transformation at all. The `(r, x, y)` representation and its supporting function `aligned_scan_xyz()` have been removed; nothing in the currently active architectures calls it anymore. This is deliberate — see constraint 2 in Section 2.
+
+### 4.3 Odometry alignment
+
+When stacking `T` consecutive scans, the robot moves between frames. Only the **rotation component** of odometry (Δθ) is corrected for — translation is negligible over T=5 frames at typical indoor robot speeds:
+
+1. Compute the accumulated rotation `Δθ_k` from odometry between `t−k` and `t`.
+2. Shift each beam's angle: `φ'_i = φ_i + Δθ_k`.
+3. Re-sample onto the original beam grid via nearest-neighbour: `r'_j = r_i` where `i = round((φ'_j − φ_min) / Δφ)`.
+
+`--align-scans` (default: **on**) applies this rotation correction to the raw-scan representation via `aligned_raw_scan()` in `drow_utils.py`, shifting all T frames simultaneously via vectorised NumPy indexing with linear interpolation. When odom data is absent (FROG without an `_odom.npz` file), the shifts are zero and the output is identical to the unaligned baseline. Pass `--no-align-scans` to reproduce the unaligned variant as an ablation — this was the original design (no odometry dependency at inference time, simpler rotating buffer), and whether alignment actually helps accuracy is deliberately left as an open empirical question for Section 8 rather than assumed.
+
+### 4.4 Cutout extraction (DROW / DR-SPAAM / Li2Former only)
+
+The cutout approach replaces the full-scan input with a fixed-width polar window extracted around each beam:
+
+```
+cutout[i] = [r_{i-24}, r_{i-23}, …, r_i, …, r_{i+23}]   ← raw range values only (width 48 for DROW)
+```
+
+This discards all cross-beam information beyond the window, uses raw `r` values only, and hardcodes the spatial context window. It is kept for compatibility with the cutout-based baselines' training pipeline and inference API; the full-scan architectures in Section 5 do not use it.
+
+---
+
+## 5. Proposed Architectures
+
+### 5.0 Design choices that apply to all three
+
+**Raw scan representation.** See Section 4.2 — `(T, N_beams, 1)`, no Cartesian channels.
+
+**Rotating buffer for the `T`-frame window.** Because there's no realignment step required for correctness, maintaining the `T`-scan window at inference time reduces to a fixed-size circular buffer: evict the oldest scan, append the newest, O(1) per measurement. This is already implemented — `LiveDataset.push_measure()` (`library/follow_the_drow/datasets/live_dataset.py`) uses a `collections.deque(maxlen=time_frame)`, which evicts the oldest entry automatically on `append()`.
+
+**What got dropped, and why.** This project previously had four full-scan detector classes; two were removed for violating the non-recursive constraint (Section 2, constraint 1) — see Section 6 for what they were and why they were tried. What's left, `SpaceTimeCNNDetector` and `FullScanTCNDetector`, were already non-recursive before that constraint was stated explicitly; `TemporalUNetDetector` (Architecture C) was added afterward as a controlled ablation against LFE (Section 5.3).
+
+### 5.1 Architecture A — Joint Space-Time CNN (`SpaceTimeCNNDetector`)
+
+**What it does:** reshapes the input to `(1, 1, N_beams, T)` and treats it like a 1-channel image, where the height axis is the beam index and the width axis is time. A stem + two dilated "joint" 2-D conv blocks mix beam and time together from the very first layer; multi-scale Inception-style blocks (parallel branches at kernel sizes 3/5/9, increasing dilation) then specialize along the beam axis (for scale-invariance — near people are wide in beam-space, far people are narrow) and the time axis (for motion).
+
+**Explainability — every block traces to a specific, citable design choice:**
+
+| Block | Borrowed from | Why |
+|---|---|---|
+| Residual skip connections everywhere | He et al., *Deep Residual Learning for Image Recognition*, CVPR 2016 (ResNet) | Lets the network be deep without vanishing gradients; standard in every modern CNN backbone. |
+| Multi-branch, multi-kernel-size blocks merged via 1×1 conv | Szegedy et al., *Going Deeper with Convolutions*, CVPR 2015 (Inception/GoogLeNet) | A person's beam-width varies 4× between near and far range (Section 1); parallel kernel sizes let the network match scale without picking one fixed receptive field. |
+| Squeeze-and-Excitation channel gating | Hu, Shen, Sun, *Squeeze-and-Excitation Networks*, CVPR 2018 | Re-weights channels by global context at near-zero parameter cost. |
+| Joint (not factorized) space-time convolution in the early layers | Standard in video-CNN literature, e.g. Tran et al., *Learning Spatiotemporal Features with 3D Convolutions*, ICCV 2015 (C3D) | Lets the earliest layers learn space-time co-occurrence patterns ("range falling at this specific beam, over these specific frames") that a spatial-then-temporal split cannot represent until much later. |
+
+### 5.2 Architecture B — Causal TCN + Spatial CNN (`FullScanTCNDetector`)
+
+**What it does:** a small causal temporal-convolutional stack runs over each beam's own `T`-frame history *first* (collapsing time to a single per-beam summary), and only then does the spatial `DilatedScanBackbone` mix across beams — so spatial mixing has access to motion-aware features from the start, which Architecture A's joint-from-layer-1 design has to learn implicitly instead.
+
+| Block | Borrowed from | Why |
+|---|---|---|
+| Causal dilated 1-D convolution, "chomp" padding | Bai, Kolter, Koltun, *An Empirical Evaluation of Generic Convolutional and Recurrent Networks for Sequence Modeling*, arXiv 2018 (coined "TCN" in this sense); causal dilated convs originate in van den Oord et al., *WaveNet*, arXiv 2016 | A feed-forward, fully parallel alternative to recurrence (GRU/LSTM) with the same left-to-right dependency structure — directly satisfies constraint 1 while keeping order-sensitivity (unlike plain mean-pooling, which is permutation-invariant in time). |
+| Dilated 1-D conv stack, dilation 1→2→4→8, residual skip (`DilatedScanBackbone`) | He et al. (ResNet); dilated convs from Yu & Koltun, *Multi-Scale Context Aggregation by Dilated Convolutions*, ICLR 2016 | Receptive field grows exponentially (3→7→15→31 beams) with only linear parameter growth — covers a standing person (~12 beams at 2 m) without a hand-picked fixed window. |
+
+**Architecture A vs. B is a deliberate ablation, not two unrelated designs:** "should space and time be fused jointly from layer 1, or should time be collapsed first and space handled afterward?" is analogous to the question studied for video CNNs by Xie et al., *Rethinking Spatiotemporal Feature Learning: Speed-Accuracy Trade-offs in Video Classification*, ECCV 2018 (joint 3-D convolution vs. factorized 2-D-spatial + 1-D-temporal designs). Architecture A is the "joint" point in that design space; Architecture B inverts the factorized order further by doing time *before* space rather than after.
+
+### 5.3 Architecture C — LFE-with-Time U-Net (`TemporalUNetDetector`)
+
+**What it does:** a standard 1-D U-Net backbone (Ronneberger et al., MICCAI 2015) with the single-channel input replaced by T-channel input (one channel per historical scan). Operates over the beam axis — each encoder stage halves N_beams by MaxPool1d(2), the bottleneck sees the full scan compressed 8×, and the decoder upsamples back with skip connections from each encoder stage restoring spatial precision. Default head is heatmap (matching LFE-Peaks).
+
+**Why an explicit third architecture?** Architectures A and B differ from LFE in three things simultaneously: temporal context, backbone type (dilated conv vs U-Net), and detection head. Architecture C adds only temporal context to LFE's backbone and head, isolating temporal contribution in the ablation table:
+
+| Model | Backbone | T | Head | What changes vs previous row |
+|---|---|---|---|---|
+| LFE-Peaks | U-Net | 1 | heatmap | — |
+| **Architecture C** (TemporalUNet + heatmap) | **U-Net** | **5** | **heatmap** | **+temporal context only** |
+| Architecture A + heatmap (SpaceTimeCNN) | dilated 2D CNN | 5 | heatmap | backbone only |
+| Architecture A + drow (SpaceTimeCNN) | dilated 2D CNN | 5 | DROW votes | head only |
+| Architecture B + drow (FullScanTCN) | TCN + dilated 1D CNN | 5 | DROW votes | fusion order |
+
+| Block | Borrowed from | Why |
+|---|---|---|
+| Encoder-decoder with skip connections | Ronneberger et al., *U-Net: Convolutional Networks for Biomedical Image Segmentation*, MICCAI 2015 | Skip connections restore fine beam-level precision lost by pooling: the bottleneck encodes "is there a cluster of short-range readings here?" globally; the skip at E1 restores exactly which beam carries that reading. |
+| T input channels | Same strategy as Architecture A's stem `Conv2d(1, C, 3×3)` treating T as the width axis | The simplest extension of LFE's 1-channel Conv1d stem to multi-frame input. |
+| GroupNorm instead of BatchNorm | Wu & He, ECCV 2018 | LFE's Keras model uses BatchNorm which degrades at B=1 inference — GroupNorm fixes this without changing the architecture. |
+| BEAM_BATCH=True (vs BEAM_BATCH=False for A and B) | DrSpaamDetector (same flag) | The U-Net pools over the beam axis: flattening the batch to (B×N, T, 1) would let MaxPool1d pool across scan boundaries and corrupt the encoder-decoder alignment. |
+| MaxPool1d(2) + F.interpolate(size=skip.shape[-1]) | Standard U-Net | 720 beams (FROG) and 450 beams (DROW) are not powers of 2; matching the skip's exact size avoids padding artifacts. |
+
+**What the U-Net skip connections do and do not do.** A common misreading: skip connections do NOT directly connect beam 0 to beam 719. They connect each *encoder layer* to its *mirror decoder layer at the same spatial resolution*. What connects distant beams indirectly is the bottleneck, where the N//8-beam compressed representation has a large effective receptive field through the Conv1d(k=3) layers.
+
+### 5.4 Cross-cutting hyperparameters
+
+| Hyperparameter | Value | Why |
+|---|---|---|
+| Time window `T` | 5 frames | At a typical robot update rate of ≈ 10 Hz, T=5 covers 500 ms — long enough to observe a single walking half-cycle (≈ 400–600 ms per step, Winter 1990). |
+| Dropout | 0.1 | Light regularisation; output heads are regularised by the small data volume (FROG ≈ 20k train frames). |
+| GroupNorm | largest power-of-2 group count | Wu & He, *Group Normalization*, ECCV 2018 — batch-size-independent, unlike BatchNorm at inference `B=1`. |
+
+<details>
+<summary>Per-architecture design-choice tables (channel widths, kernel sizes, receptive fields)</summary>
+
+#### Architecture A — SpaceTimeCNNDetector
+
+| Design choice | Value(s) | Origin & reasoning |
+|---|---|---|
+| Base channels `C` | 96 | GoogLeNet/Inception's second-stage channel count. For 3-branch parallel blocks of C/3 = 32 ch each, 96 prevents channel collapse; fits within a ~2–3M parameter budget on FROG-scale scans. |
+| Stem | 1 × `Conv2d(1, C, 3×3)` | Minimal entry point, lifting 1 input channel to C. |
+| Joint blocks | 2 × `Conv2d(C, C, 3×3)` at dilations (1,1) and (2,2) | Borrowed from DeepLab v3 / ASPP (Chen et al., ICLR 2018) — two dilation levels build a modest receptive field on both axes before the factorized multi-scale stages. |
+| Spatial stages | default 3 (`n_spatial_stages`), dilations **1, 4, 16** (optional 4th: 64) | Powers-of-4 (WaveNet convention) cover more angular extent with fewer stages: 3 stages + k=9 branches give a 177-beam receptive field (≈ ±44° at 0.5°/beam). |
+| Spatial kernel sizes | (3, 5, 9) | At 0.5°/beam: a person at 2 m subtends ≈ 28 beams; at 8 m ≈ 7 beams — parallel branches let the network learn which size to weight (Inception motivation). |
+| Temporal stages | 2 × `_MultiScaleBlock` on the time axis, kernel sizes (3, 5, 7) | Stage 1 (k=3): velocity-like patterns; Stage 2 (k=5, applied to Stage 1's output): acceleration-like patterns, reaching the full T=5 window. |
+| SE reduction ratio | 8 | Default from Hu et al. (CVPR 2018); 12-channel bottleneck for C=96. |
+| Mean collapse over T | — | Motion is already encoded in the channel dimension after the temporal stages; mean-pooling discards the raw T axis without losing information. |
+
+#### Architecture B — FullScanTCNDetector
+
+| Design choice | Value(s) | Origin & reasoning |
+|---|---|---|
+| TCN channel width | 64 | Smaller than Architecture A's 96 — the TCN stage only summarizes T, it isn't the main spatial-reasoning stage. Matching `tcn_channels = backbone_channels = 64` avoids an extra projection at the handoff. |
+| Number of TCN layers | 2, dilations **1, 2** | With kernel_size=3: total receptive field = 1 + 2×1 + 2×2 = 7 > T=5. Two causal layers are the minimum to cover the full 5-frame window. |
+| Causal "chomp" padding | pad left by `(k−1)×dilation`; drop trailing `2×dilation` positions | Guarantees output position `t` depends only on input positions `≤ t` — same left-to-right dependency as a GRU, via masked convolution instead of recurrence. |
+| Last-timestep selection `[:, :, -1]` | — | The causal TCN output at `t=T−1` has seen all `T` prior steps; equivalent to a GRU's final hidden state, without the permutation-invariance of mean-pooling. |
+| DilatedScanBackbone | 4 × `Conv1d(C, C, 3)` at dilations **1, 2, 4, 8**; 1×1 end-to-end residual skip | Receptive field = 1 + 2×(1+2+4+8) = 31 beams ≈ ±7.5° ≈ 0.8 m at 3 m range — spans a standing person's shoulder width (≈ 0.5 m) with margin. |
+
+#### Architecture C — TemporalUNetDetector
+
+| Design choice | Value(s) | Origin & reasoning |
+|---|---|---|
+| Base channels | 32 (`unet_channels`) | Four stages: 32→64→128→256 channels, ~650k total parameters — lighter than SpaceTimeCNN (≈1-2M). |
+| Number of encoder stages | 3 | Three MaxPool1d(2) stages compress 720 beams to 90 in the bottleneck. |
+| Bottleneck channels | 8C = 256 | Standard U-Net doubling per stage. |
+| Decoder upsample | `F.interpolate(size=skip.shape[-1], mode='linear')` | `ConvTranspose1d` introduces checkerboard artifacts at non-power-of-2 input sizes; linear interpolation exactly matches the encoder's spatial size. |
+| Default head | heatmap | Matches LFE-Peaks, making Architecture C the cleanest extension of LFE; `--head drow` available for ablation. |
+
+</details>
+
+### 5.5 Alternative detection head — Gaussian heatmap (`--head heatmap`)
+
+Both Architecture A and B support a heatmap head as a drop-in replacement for the default DROW-style head; Architecture C defaults to it. Everything else (backbone, training loop, evaluation) is unchanged. This is an **ablation**, not the primary method: the DROW head is kept as default elsewhere because it keeps the comparison with DROW/DR-SPAAM/Li2Former head-neutral.
+
+| Design choice | Value | Origin & reasoning |
+|---|---|---|
+| Target type | 1D Gaussian heatmap over N_beams; one Gaussian per annotated person, summed and clipped to [0, 1] | CenterNet (Zhou et al., *Objects as Points*, CVPR 2019) object-center heatmap targets, applied in 1D. |
+| Gaussian width σ | **2 beams** (`--heatmap-sigma`, default 2.0) | FWHM ≈ 4.7 beams ≈ 2.35° at 0.5°/beam. σ=1 is too sparse; σ≥4 lets adjacent-person Gaussians overlap at typical ≤1 m inter-person spacing. |
+| Loss | Weighted BCE (`pos_weight = n_neg / n_pos`, clamped to 200) against the soft Gaussian target | Compensates the ≈50:1 background-to-foreground ratio; the soft target spreads gradient over ≈2σ beams rather than only the exact peak. |
+| Output head | `nn.Linear(C, 1)` | Strictly simpler than the DROW head's two branches — if it achieves comparable AUC with fewer parameters, that is evidence vote regression was the weak link, not the backbone. |
+| Decoder | `scipy.signal.find_peaks(sigmoid(output), height=0.3, distance=5)` | `height=0.3` suppresses background noise; `distance=5` beams (≈2.5°, ≈0.17 m at 2 m) separates peaks below typical inter-person spacing but above the Gaussian FWHM. |
+| Why it may outperform the DROW head for full-scan architectures | — | The DROW vote-regression head was designed for cutouts, where a beam at the cluster edge must predict an offset without seeing the cluster center. Full-scan backbones (31–177 beam receptive fields) *do* see the cluster center, so a heatmap peak is a more direct target. |
+| Evaluation compatibility | — | The decoder outputs (x, y, confidence) triplets placed in column 3 (person class) of the same `(N_dets, 4)` array `_process_detections`/`_prec_rec_2d` expect — no pipeline changes needed. |
+
+---
+
+## 6. Design History: Architectures Tried and Dropped
+
+This project previously had four full-scan detector classes; two were removed for violating the "non-recursive only" constraint (Section 2). Kept here as a record of what was tried and why — not part of the current comparison.
+
+### FullScanCNNDetector — removed
+
+Used a GRU for temporal aggregation after a dilated 1D CNN backbone processed each timestep independently:
+
+```
+For each timestep t independently:
+  Conv1d(3,    64,  kernel=3, dilation=1 ) → receptive field  3 beams
+  Conv1d(64,  128,  kernel=3, dilation=2 ) → receptive field  7 beams
+  Conv1d(128, 256,  kernel=3, dilation=4 ) → receptive field 15 beams
+  Conv1d(256, 256,  kernel=3, dilation=8 ) → receptive field 31 beams
+  Conv1d(256, 256,  kernel=3, dilation=16) → receptive field 63 beams
+  → (N_beams, 256) per timestep
+
+Temporal: GRU over T, per beam → (N_beams, 256)
+Detection heads: Conv1d(256, 4) + Conv1d(256, 2)
+```
+
+Dropped because the GRU violates the non-recursive constraint. The class was deleted from `full_scan.py`.
+
+### FullScanTransformerDetector — removed
+
+Used global multi-head self-attention over all N_beams simultaneously, after a dilated CNN backbone:
+
+```
+Full-scan dilated CNN backbone  → (N_beams, T, C)
+BeamSelfAttention               → each beam attends to all N_beams (at each T)
+Temporal mean-pool over T       → (N_beams, C)
+Detection heads
+```
+
+The most expressive beam-level architecture in the family (content-adaptive, global beam-to-beam attention via a `N_beams × N_beams = 202,500`-entry attention matrix per layer), but self-attention isn't a CNN/TCN primitive, so it violates constraint 1 — and in the one same-footing benchmark run available, it was both the slowest (~1.5 s/scan on CPU) and lowest-scoring of the four full-scan models. Class deleted, along with the now-unused `BeamSelfAttention` helper. An earlier version used a GRU for temporal aggregation here too; it was replaced with mean-pooling since at T=5 the recurrence added negligible benefit while blocking DirectML — but mean-pooling is permutation-invariant in time, so this architecture structurally cannot use motion direction (approaching vs. receding) at all, unlike FullScanTCNDetector (Section 5.2).
+
+### Architecture comparison (including removed architectures, for provenance)
+
+| Architecture | Beam communication | Temporal | Fusion order | Input representation | Status |
+|---|---|---|---|---|---|
+| DrowDetector | None (per-beam cutout) | Fixed sum | space-then-time | Polar range only | active |
+| DrSpaamDetector | Local (±5 beams, auto-regressive) | Learned blending | joint (auto-regressive) | Polar range only | active |
+| ~~FullScanCNNDetector~~ | Local → growing (dilated, up to ±15 beams) | GRU | space-then-time | (r, x, y) full scan | **removed** |
+| SpaceTimeCNNDetector | Local (spatial + temporal jointly) | Implicit (2D conv) | joint | raw range only, full scan, unaligned by default* | active |
+| ~~FullScanTransformerDetector~~ | Global (all N beams) | Mean-pool | space-then-time | (r, x, y) full scan | **removed** |
+| FullScanTCNDetector | Local → growing (dilated, up to ±15 beams) | Causal TCN | **time-then-space** | raw range only, full scan, unaligned by default* | active |
+| TemporalUNetDetector | Global (bottleneck) + local (skips) | T input channels | joint | raw range only, full scan, unaligned by default* | active |
+| Li2FormerDetector | None (per-beam cutout) | Transformer (T steps) | time-then-space | Polar range only | active |
+| LFEPeaksDetector / LFEPPNDetector | Global (U-Net, full scan) | None (single scan) | n/a | Normalised range only | active |
+
+\* `--align-scans` (default on) applies odometry rotation correction; see Section 4.3.
+
+All active detectors are accessible via `follow_the_drow.detectors.DETECTOR_REGISTRY`; the trainable ones (no published weights) via:
+
+```bash
+python train.py --detector drow|drspaam|spacetime_cnn|fullscan_tcn|temporal_unet|li2former
+```
+
+---
+
+## 7. Related Work
+
+### 7.1 Cutout-based detectors — see Section 3 for full technical detail
+
+- **DROW** — Beyer, Hermans, Leibe, arXiv:1603.02636 / arXiv:1804.02463.
+- **DR-SPAAM** — Jia, Hermans, Leibe, IROS 2020, **arXiv:2004.14079** (this document previously cited `2004.14064`, an unrelated paper — a one-digit transcription error, now fixed).
+- **Li2Former** — Yang et al., IEEE TIM 2024, DOI: 10.1109/TIM.2024.3420353.
+
+All three share the cutout: a fixed-size polar window per beam, processed by a per-beam CNN with no (DROW) or only local (DR-SPAAM, ±5 beams) cross-beam communication during feature extraction, and no (DROW), auto-regressive (DR-SPAAM), or temporal-attention (Li2Former) handling of the time axis.
+
+### 7.2 Full-scan / no-cutout detectors — is this novel?
+
+**Short answer: the full-scan idea itself is not unprecedented, but the specific combination this research proposes — full-scan + raw/unaligned-by-default input + multi-frame temporal context + beam-classification-with-vote-regression, using only non-recursive primitives — appears to be.** Three prior works are close enough to discuss directly:
+
+1. **LFE-Peaks / LFE-PPN** — Amodeo et al., Frontiers in Robotics and AI, 2025, arXiv:2306.08531. **This is the closest prior work.** It applies a 1-D U-Net FCN directly to the raw, full-scan range vector (no cutout) — the same "give the network the whole raw scan" idea used here, including the non-Cartesian, single-channel input (Section 3.4). The key difference: LFE is **single-scan only** — no temporal window at all. This research's contribution relative to LFE is adding the `T`-frame time axis as a first-class input dimension via three different non-recursive fusion strategies (Section 5).
+
+   **Relationship to "extending LFE."** Both Architecture A and B can be read as principled extensions of the LFE spatial idea:
+
+   - *Replace the encoder–decoder with dilated convolutions.* LFE's U-Net compresses the beam axis then reconstructs it via upsampling + skip connections. Architectures A and B use dilated convolutions with `same` padding throughout — the beam axis is never downsampled, so no decoder is needed. This is the same substitution DeepLab (Chen et al. 2015) made in image segmentation: dilated ("atrous") convolutions expand the receptive field without sacrificing spatial resolution.
+   - *Add the temporal axis, via three fusion strategies.* Architecture A fuses space and time jointly from layer 1; Architecture B summarizes time first via a causal TCN, then mixes space; Architecture C keeps LFE's own U-Net backbone and adds only the temporal axis, isolating the temporal contribution as a controlled ablation (Section 5.3). Neither A nor B's question was available in LFE since it had no time axis at all.
+
+   The detection head is also different by default: LFE finds persons via local peak detection (Peaks variant) or a proposal network (PPN variant); Architectures A and B default to DROW-style per-beam 4-class logits plus 2D vote-offset regression — the same head used by every cutout baseline, making accuracy numbers directly comparable without a bridging step. The heatmap head (Section 5.5) is the point of contact with LFE's own approach.
+
+2. **PeTra** — Guerrero-Higueras et al., Frontiers in Neurorobotics, 2019, DOI: 10.3389/fnbot.2018.00085. Projects raw 2-D LIDAR returns into a 256×256 binary occupancy grid and segments leg positions with a full U-Net — also full-scan, also no cutout. Differs in task framing (binary occupancy-grid segmentation + a separate tracker, vs. per-beam multi-class detection + vote regression directly on the polar scan) and is markedly slower (≈300 ms/scan reported vs. single-digit-to-low-double-digit ms for the cutout baselines).
+   > "the occupancy map is defined as a 256 × 256 matrix, with a resolution of about 2 cm." — Section on input representation.
+
+3. **TCN + 2-D LIDAR precedent (different task)** — Luo, Poslad, Bodanese, IEEE IoT Journal, 2020, DOI: 10.1109/JIOT.2020.2984544. Applies a TCN to **already-extracted trajectories** to classify 15 activity types — TCN-after-detection, not TCN-for-detection. Evidence that TCNs are a known, working tool in this sensor domain, but doesn't address detection itself the way Architecture B does. Cited as precedent, not as a competing baseline.
+
+No paper found in this search combines full-scan (no-cutout), raw input, a multi-frame temporal window, the beam-classification-plus-vote-regression detection head used by DROW/DR-SPAAM/this project, **and** an exclusively non-recursive architecture. That combination — not any one piece alone — is the actual novelty claim to make.
+
+### 7.3 Adjacent 3-D LiDAR literature (context, not a fair baseline)
+
+Full-scan, no-cutout CNNs are the *standard*, not the exception, in 3-D LiDAR object detection — range-image-based detectors (e.g. Sun et al., *RSN: Range Sparse Net*, CVPR 2021; *Fully Convolutional One-Stage 3D Object Detection on LiDAR Range Images*, 2022) run ordinary 2-D convolutions over the whole range image. Useful context for why "full-scan CNN" is a reasonable thing to try, but these papers are 3-D, multi-object, autonomous-driving-scale, and not a fair comparison row for this project's 2-D, person-only, robot-scale setting.
+
+---
+
+## 8. Evaluation Plan & Comparison Tables
+
+All numbers below either come from this repo's own pipeline (`utils/train.py`'s `evaluate_auc`, `evaluate.py --bench`) run on the same hardware, or are clearly marked as literature-reported numbers from a different setup. **Do not mix the two when drawing conclusions.**
+
+### 8.1 Accuracy (Average Precision / AUC, person class, at 0.5 m matching radius)
+
+| Architecture | Type | DROW | FROG | JRDB |
+|---|---|---|---|---|
+| AlgorithmicDetector | rule-based (no learning) | TBD | TBD | TBD |
+| DrowDetector | cutout, fixed sum | published weights¹ | TBD | TBD |
+| DrSpaamDetector | cutout, auto-regressive attn | published weights¹ | TBD | TBD |
+| Li2FormerDetector | cutout, temporal transformer | train once² | train once² | train once² |
+| LFEPeaksDetector / LFEPPNDetector | full-scan, single-frame (ONNX) | n/a³ | published weights¹ | n/a³ |
+| **Architecture A** — SpaceTimeCNNDetector | full-scan, raw, joint CNN | train once² | train once² | train once² |
+| **Architecture B** — FullScanTCNDetector | full-scan, raw, time-then-space TCN+CNN | train once² | train once² | train once² |
+| **Architecture C** — TemporalUNetDetector | full-scan, raw, 1D U-Net+time | train once² | train once² | train once² |
+
+¹ DROW, DR-SPAAM, and LFE all have published/bundled weights in this repo already (`evaluate.py --drow --drspaam --lfe-peaks --lfe-ppn`) — use them directly, no training needed.
+² Li2Former and all three proposed architectures have no published weights — train once each (not per-dataset-repeatedly) and evaluate the resulting checkpoint everywhere applicable.
+³ LFE was trained on FROG's 720 beams; running it on DROW (450) or JRDB (541) needs zero-padding and is expected to degrade — worth one row of "degraded cross-dataset" numbers if time allows, but not a primary comparison.
+
+### 8.2 Efficiency (ms / frame, single scan, same hardware for every row)
+
+| Architecture | ms/frame (CPU) | ms/frame (GPU, if available) |
+|---|---|---|
+| AlgorithmicDetector | TBD | n/a |
+| DrowDetector | TBD | TBD |
+| DrSpaamDetector | TBD | TBD |
+| Li2FormerDetector | TBD | TBD |
+| LFEPeaksDetector / LFEPPNDetector | TBD | TBD |
+| Architecture A — SpaceTimeCNNDetector | TBD | TBD |
+| Architecture B — FullScanTCNDetector | TBD | TBD |
+| Architecture C — TemporalUNetDetector | TBD | TBD |
+
+### 8.3 Reference: published numbers from the literature (context only, not for the tables above)
+
+From the FROG paper's own internal comparison (Table 4, person AP @ 0.5 m, on an Intel i9-9900X + TITAN RTX):
+
+| Detector | AP | ms/frame |
+|---|---|---|
+| LFE-Peaks | 64.9 | 1.76 |
+| LFE-PPN | 66.5 | 1.49 |
+| DROW3 | 73.6 | 13.08 |
+| DR-SPAAM (T=5) | 75.3 | 13.99 |
+
+From the DROW and DR-SPAAM papers (DROW test set, person class):
+
+| Detector | AP |
+|---|---|
+| DROW | 0.619 |
+| DR-SPAAM | 0.696 (paper), 0.720+ (RA-L 2022 release) |
+
+Li2Former paper: 0.764 AP on DROW, 0.814 AP on JRDB (per-paper, not independently re-verified). Li2Former-A (official repo benchmark): 66.9 FPS (≈14.95 ms) on DROW, 57.0 FPS (≈17.54 ms) on JRDB.
+
+### 8.4 Filling in the TBD cells
+
+Weights strategy: published weights are used directly for DROW, DR-SPAAM, LFE-Peaks, LFE-PPN (all already bundled). Li2Former, Architecture A, B and C have no published weights — each needs exactly **one** training run (not a retrain per dataset); recommended default is training on **FROG** (densest annotations, no sparse-label noise — Section 3.1 — already cached locally), then evaluating that checkpoint cross-dataset the same way LFE already is. JRDB requires manual registration (Section "Notes" in the README) — confirm it's actually downloaded in the target environment before planning around it; if not, that column stays `n/a`. AlgorithmicDetector needs no training at all.
+
+What's missing is orchestration, not new capability: `evaluate_auc()` (accuracy) and `evaluate.py --bench` (efficiency) already exist and cover every row. A small script (not yet written) would: (1) train the 3 models that need it once each; (2) run every applicable (detector × dataset) evaluation, skipping inapplicable combinations (e.g. LFE on non-FROG); (3) cache results per (detector, dataset) pair so an interrupted run resumes; and (4) fill the TBD cells in Sections 8.1–8.2 by matching row/column labels. Each training/eval call should run in its own subprocess, following the pattern already used by `train_all.py`'s `_run_in_subprocess`, to avoid cross-call memory compounding.
+
+---
+
+## 9. Reference Quotes
+
+A reference collection of direct quotes, for citing in an eventual writeup without re-fetching sources.
+
+**On the cutout's limitations (motivating this research):**
+> "DROW... obtaining state of the art detection results" but uses a fixed-size cutout with "zero cross-beam communication: the CNN processes each 48-beam window in complete isolation." — Section 3.1 above, summarizing Beyer et al. 2016/2018.
+
+**On DR-SPAAM's design intent:**
+> DR-SPAAM "addresses the sparsity problem of 2D LiDAR points by fusing multiple scans... using an alternative forward looking strategy that is more computationally efficient" than backward-looking fusion requiring explicit scan alignment. — paraphrased from Jia, Hermans, Leibe (IROS 2020), via secondary summary; verify exact wording against arXiv:2004.14079 before quoting in a final writeup.
+
+**On the FROG dataset's motivation (also this project's training data):**
+> "[We] propose a benchmark based on the FROG dataset, and analyze a collection of state-of-the-art people detectors." — Amodeo et al., arXiv:2306.08531 abstract.
+
+**On LFE's full-scan, no-cutout design — the closest prior art:**
+> LFE-Peaks and LFE-PPN use "a 1-D U-Net FCN... applied directly to the normalised raw scan vector rather than cutout windows" and are "single-scan only: no odometry, no temporal history." — Section 3.4 above.
+
+**On PeTra's full-scan occupancy-grid design:**
+> "the occupancy map is defined as a 256 × 256 matrix, with a resolution of about 2 cm." — Guerrero-Higueras et al., *Frontiers in Neurorobotics* (2019), Section on input representation.
+> "PeTra spends ≈0.3 s on calculating a location estimate... LD [Leg Detector baseline] spends ≈0.1 s" — same paper, on inference cost.
+
+**On TCNs vs. recurrent models generally (motivating Architecture B):**
+> Bai, Kolter, and Koltun's 2018 evaluation is the paper that established "TCN" as a name for causal dilated convolutional networks and showed they "convincingly outperform" canonical recurrent architectures (LSTM, GRU) "across a diverse range of tasks and datasets, while demonstrating longer effective memory." (Standard characterization of arXiv:1803.01271 — verify exact wording against the paper before quoting verbatim in a submitted paper.)
+
+> The quote above is flagged "verify before quoting" because it was reconstructed from training-knowledge / search-engine summary rather than a directly fetched primary-source passage — re-fetch the primary source before using it as a verbatim quote in a submitted paper.

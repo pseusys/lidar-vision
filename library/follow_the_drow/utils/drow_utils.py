@@ -1,0 +1,452 @@
+"""
+This file is totally based on research papaer about DROW.
+Here the link to the paper can be found:
+https://arxiv.org/abs/1603.02636
+The utility functions present here can be found in paper's GitHub:
+https://github.com/VisualComputingInstitute/DROW/blob/master/v2/utils/__init__.py
+"""
+
+from collections import defaultdict
+
+from scipy.ndimage import maximum_filter
+from scipy.spatial.distance import cdist
+from scipy.optimize import linear_sum_assignment
+
+from numpy import zeros, arctan, arctan2, square, add, sin, cos, logical_not, concatenate, linspace, sum, mean, argmin, argsort, array, where, full_like, arange, clip, unique, radians, float32, int64, uint32, nan, c_, r_
+from numpy.typing import NDArray
+
+from cv2 import GaussianBlur
+
+laser_measures = 450
+laser_increment = radians(0.5)
+laser_FoV = (laser_measures - 1) * laser_increment
+laser_minimum = -laser_FoV * 0.5
+laser_maximum = laser_FoV * 0.5
+
+
+def cutout(scans, odoms, number, win_sz=1.66, thresh_dist=1, nsamp=48, UNK=29.99, laserIncrement=laser_increment):
+    """
+    Build cutout features for all beams in a single vectorised pass.
+
+    Args:
+    - scans: (T, N) range scans; index -1 is the current time.
+    - odoms: sequence of T odometry dicts with an 'xya' field.
+    - number: number of beams (N_beams) to process.
+
+    Returns: (number, T, nsamp) float32 array.
+    """
+    T, N = scans.shape
+    out = zeros((number, T, nsamp), float32)
+
+    # Per-beam depth from the current scan and angular half-width in beam indices.
+    z  = scans[-1, :number].astype(float32)           # (number,)
+    hw = arctan(0.5 * win_sz / z) / laserIncrement    # (number,)
+
+    ibeam  = arange(number, dtype=float32)             # (number,)
+    t_samp = linspace(0.0, 1.0, nsamp, dtype=float32)  # (nsamp,) interpolation knots
+
+    for t in range(T):
+        # Rotation-only odometry correction (same design choice as original DROW).
+        odom_a = float(odoms[t]["xya"][2] - odoms[-1]["xya"][2])
+        shift  = odom_a / laserIncrement
+
+        # Window [start, end] for every beam simultaneously.       (number,)
+        start = (ibeam - hw - shift).round().astype(int)
+        end   = (ibeam + hw - shift).round().astype(int)
+
+        # Linear interpolation — matches cv2.INTER_LINEAR used in the original
+        # DROW reference implementation (github.com/VisualComputingInstitute/DROW).
+        frac    = start[:, None] + (end - start)[:, None] * t_samp[None, :]  # (number, nsamp)
+        idx_lo  = frac.astype(int)                     # floor
+        idx_hi  = idx_lo + 1
+        alpha   = (frac - idx_lo).astype(float32)      # fractional weight for hi
+
+        scan_t  = scans[t].astype(float32)
+        lo_oob  = (idx_lo < 0) | (idx_lo >= N)
+        hi_oob  = (idx_hi < 0) | (idx_hi >= N)
+        lo_val  = scan_t[clip(idx_lo, 0, N - 1)]
+        hi_val  = scan_t[clip(idx_hi, 0, N - 1)]
+
+        windows = lo_val * (1.0 - alpha) + hi_val * alpha      # bilinear
+
+        # OOB handling: one valid neighbour → use it; both OOB → UNK.
+        windows[lo_oob & ~hi_oob] = hi_val[lo_oob & ~hi_oob]
+        windows[~lo_oob & hi_oob] = lo_val[~lo_oob & hi_oob]
+        windows[lo_oob & hi_oob]  = UNK
+
+        # Clip to depth tunnel and centre around each beam's own range.
+        z_col         = z[:, None]
+        windows       = clip(windows, z_col - thresh_dist, z_col + thresh_dist)
+        windows      -= z_col
+
+        out[:, t, :] = windows
+
+    return out
+
+
+# Convert it to flat `x`, `y`, `probs` arrays and an extra `frame` array,
+# which is the index they had in the first place.
+def _deep2flat(dets):
+    all_x, all_y, all_p, all_frames = [], [], [], []
+    for i, ds in enumerate(dets):
+        for (x, y, p) in ds:
+            all_x.append(x)
+            all_y.append(y)
+            all_p.append(p)
+            all_frames.append(i)
+    return array(all_x), array(all_y), array(all_p), array(all_frames)
+
+
+def _prec_rec_2d(det_scores, det_coords, det_frames, gt_coords, gt_frames, gt_radii):
+    """ Computes full precision-recall curves at all possible thresholds.
+
+    Arguments:
+    - `det_scores` (D,) array containing the scores of the D detections.
+    - `det_coords` (D,2) array containing the (x,y) coordinates of the D detections.
+    - `det_frames` (D,) array containing the frame number of each of the D detections.
+    - `gt_coords` (L,2) array containing the (x,y) coordinates of the L labels (ground-truth detections).
+    - `gt_frames` (L,) array containing the frame number of each of the L labels.
+    - `gt_radii` (L,) array containing the radius at which each of the L labels should consider detection associations.
+                      This will typically just be an np.full_like(gt_frames, 0.5) or similar,
+                      but could vary when mixing classes, for example.
+
+    Returns: (recs, precs, threshs)
+    - `threshs`: (D,) array of sorted thresholds (scores), from higher to lower.
+    - `recs`: (D,) array of recall scores corresponding to the thresholds.
+    - `precs`: (D,) array of precision scores corresponding to the thresholds.
+    """
+    # This means that all reported detection frames which are not in ground-truth frames
+    # will be counted as false-positives.
+    frames = unique(r_[det_frames, gt_frames])
+
+    det_accepted_idxs = defaultdict(list)
+    tps = zeros(len(frames), dtype=uint32)
+    fps = zeros(len(frames), dtype=uint32)
+    fns = array([sum(gt_frames == f) for f in frames], dtype=uint32)
+
+    precs = full_like(det_scores, nan)
+    recs = full_like(det_scores, nan)
+    threshs = full_like(det_scores, nan)
+
+    indices = argsort(det_scores, kind='mergesort')  # mergesort for determinism.
+    for i, idx in enumerate(reversed(indices)):
+        frame = det_frames[idx]
+        iframe = where(frames == frame)[0][0]  # Can only be a single one.
+
+        # Accept this detection
+        dets_idxs = det_accepted_idxs[frame]
+        dets_idxs.append(idx)
+        threshs[i] = det_scores[idx]
+
+        dets = det_coords[dets_idxs]
+
+        gts_mask = gt_frames == frame
+        gts = gt_coords[gts_mask]
+        radii = gt_radii[gts_mask]
+
+        if len(gts) == 0:  # No GT, but there is a detection.
+            fps[iframe] += 1
+        else:              # There is GT and detection in this frame.
+            not_in_radius = radii[:, None] < cdist(gts, dets)  # -> ngts x ndets, True (=1) if too far, False (=0) if may match.
+            igt, idet = linear_sum_assignment(not_in_radius)
+
+            tps[iframe] = sum(logical_not(not_in_radius[igt, idet]))  # Could match within radius
+            fps[iframe] = len(dets) - tps[iframe]  # NB: dets is only the so-far accepted.
+            fns[iframe] = len(gts) - tps[iframe]
+
+        tp, fp, fn = sum(tps), sum(fps), sum(fns)
+        precs[i] = tp/(fp+tp) if fp+tp > 0 else nan
+        recs[i] = tp/(fn+tp) if fn+tp > 0 else nan
+
+    return recs, precs, threshs
+
+
+# Same but slightly different for the ground-truth.
+def _deep2flat_gt(gts, radius):
+    all_x, all_y, all_r, all_frames = [], [], [], []
+    for i, gt in enumerate(gts):
+        for (r, phi) in gt:
+            x, y = project_cartesian_from_polar(r, phi)
+            all_x.append(x)
+            all_y.append(y)
+            all_r.append(radius)
+            all_frames.append(i)
+    return array(all_x), array(all_y), array(all_r), array(all_frames)
+
+
+def laser_angles(N):
+    return linspace(laser_minimum, laser_maximum, N)
+
+
+def project_cartesian_from_polar(r, phi):
+    """
+    Convert polar coordinates to project's Cartesian coordinate system.
+    
+    Project coordinate system:
+    - x: left (negative) to right (positive)
+    - y: back (negative) to forward (positive)  
+    - phi=0: forward (positive y), increasing counterclockwise
+    
+    Returns: (x, y)
+    """
+    return r * -sin(phi), r * cos(phi)
+
+
+
+def standard_cartesian_to_project_cartesian(x, y):
+    """
+    Convert standard math Cartesian coordinates to project's coordinate system.
+    
+    Standard math: x = r*cos(phi), y = r*sin(phi) with phi=0 along positive x.
+    Project: x = r*(-sin(phi)), y = r*cos(phi) with phi=0 along positive y.
+    
+    This is equivalent to rotating 90° counterclockwise: (x, y) -> (-y, x)
+    
+    Returns: (x_proj, y_proj)
+    """
+    return -y, x
+
+
+def _win2global(r, phi, dx, dy):
+    y = r + dy
+    dphi = arctan2(dx, y)  # dx first is correct due to problem geometry dx -> y axis and vice versa.
+    return y / cos(dphi), phi + dphi
+
+
+def prepare_prec_rec_softmax(scans, pred_offs):
+    angles = laser_angles(scans.shape[-1])[None,:]
+    return project_cartesian_from_polar(*_win2global(scans, angles, pred_offs[:,:,0], pred_offs[:,:,1]))
+
+
+def _vote_avg(vx, vy, p):
+    return mean(vx), mean(vy), mean(p, axis=0)
+
+
+def _agnostic_weighted_vote_avg(vx, vy, p):
+    weights = sum(p[:,1:], axis=1)
+    norm = 1.0 / sum(weights)
+    return norm * sum(weights*vx), norm * sum(weights*vy), norm * sum(weights[:,None]*p, axis=0)
+
+
+def votes_to_detections(xs, ys, probas, weighted_avg=False, min_thresh=1e-5, bin_size=0.1, blur_win=21, blur_sigma=2.0, x_min=-15.0, x_max=15.0, y_min=-5.0, y_max=15.0, vote_collect_radius=0.3, retgrid=False, class_weights=None):
+    '''
+    Convert a list of votes to a list of detections based on Non-Max suppression.
+
+    ` `vote_combiner` the combination function for the votes per detection.
+    - `bin_size` the bin size (in meters) used for the grid where votes are cast.
+    - `blur_win` the window size (in bins) used to blur the voting grid.
+    - `blur_sigma` the sigma used to compute the Gaussian in the blur window.
+    - `x_min` the left limit for the voting grid, in meters.
+    - `x_max` the right limit for the voting grid, in meters.
+    - `y_min` the bottom limit for the voting grid in meters.
+    - `y_max` the top limit for the voting grid in meters.
+    - `vote_collect_radius` the radius use during the collection of votes assigned
+      to each detection.
+
+    Returns a list of tuples (x,y,probs) where `probs` has the same layout as
+    `probas`.
+    '''
+    if class_weights is not None:
+        probas = array(probas)  # Make a copy.
+        probas[:, :, 1:] *= class_weights
+    vote_combiner = _agnostic_weighted_vote_avg if weighted_avg is True else _vote_avg
+    x_range = int((x_max-x_min)/bin_size)
+    y_range = int((y_max-y_min)/bin_size)
+    grid = zeros((x_range, y_range, probas.shape[2]), float32)
+
+    vote_collect_radius_sq = vote_collect_radius * vote_collect_radius
+
+    # Update x/y max to correspond to the end of the last bin.
+    x_max = x_min + x_range*bin_size
+    y_max = y_min + y_range*bin_size
+
+    # Where we collect the outputs.
+    all_dets = []
+    all_grids = []
+
+    for iscan, (x, y, probs) in enumerate(zip(xs, ys, probas)):
+        # Clear the grid, for each scan its own.
+        grid.fill(0)
+        all_dets.append([])
+
+        # Filter out all the super-weak votes, as they wouldn't contribute much anyways
+        # but waste time.
+        voters_idxs = where(sum(probs[:,1:], axis=-1) > min_thresh)[0]
+
+        # No voters, early bail
+        if not len(voters_idxs):
+            if retgrid:
+                all_grids.append(array(grid))  # Be sure to make a copy.
+            continue
+
+        x = x[voters_idxs]
+        y = y[voters_idxs]
+        probs = probs[voters_idxs]
+
+        # Convert x/y to grid-cells.
+        x_idx: NDArray[int64] = int64((x-x_min)/bin_size)  # type: ignore
+        y_idx: NDArray[int64] = int64((y-y_min)/bin_size)  # type: ignore
+
+        # Discard data outside of the window.
+        mask = (0 <= x_idx) & (x_idx < x_range) & (0 <= y_idx) & (y_idx < y_range)
+        x_idx = x_idx[mask]
+        x = x[mask]
+        y_idx = y_idx[mask]
+        y = y[mask]
+        probs = probs[mask]
+
+        # Vote into the grid, including the agnostic vote as sum of class-votes.
+        b_array = concatenate([sum(probs[:,1:], axis=-1, keepdims=True), probs[:,1:]], axis=-1)
+        add.at(grid, (x_idx, y_idx), b_array)
+
+        # Find the maxima (NMS) only in the "common" voting grid.
+        grid_all = grid[:,:,0]
+        if blur_win is not None and blur_sigma is not None:
+            grid_all = GaussianBlur(grid_all, (blur_win,blur_win), blur_sigma)
+        max_grid = maximum_filter(grid_all, size=3)
+        maxima = (grid_all == max_grid) & (grid_all > 0)
+        m_x, m_y = where(maxima)
+
+        if len(m_x) == 0:
+            if retgrid:
+                all_grids.append(array(grid))  # Be sure to make a copy.
+            continue
+
+        # Back from grid-bins to real-world locations.
+        m_x = m_x*bin_size + x_min + bin_size/2
+        m_y = m_y*bin_size + y_min + bin_size/2
+
+        # For each vote, get which maximum/detection it contributed to.
+        # Shape of `center_dist` (ndets, voters) and outer is (voters)
+        center_dist = square(x - m_x[:,None]) + square(y - m_y[:,None])
+        det_voters = argmin(center_dist, axis=0)
+
+        # Generate the final detections by average over their voters.
+        for ipeak in range(len(m_x)):
+            my_voter_idxs = where(det_voters == ipeak)[0]
+            my_voter_idxs = my_voter_idxs[center_dist[ipeak, my_voter_idxs] < vote_collect_radius_sq]
+            all_dets[-1].append(vote_combiner(x[my_voter_idxs], y[my_voter_idxs], probs[my_voter_idxs,:]))
+
+        if retgrid:
+            all_grids.append(array(grid))  # Be sure to make a copy.
+
+    if retgrid:
+        return all_dets, all_grids
+    return all_dets
+
+
+def _process_detections(det_x, det_y, det_p, det_f, wcs, was, wps, eval_r):
+    # list(...) forces concatenation of the per-frame GT lists even when one
+    # class is a numpy array (e.g. FROG's det_wp) and another a plain Python
+    # list (FROG's always-empty det_wc/det_wa) — "+" between an array and a
+    # list/array performs elementwise addition instead, which raises (or
+    # silently miscomputes) whenever the per-class point counts differ.
+    allgts = [list(wc) + list(wa) + list(wp) for wc, wa, wp in zip(wcs, was, wps)]
+    gts_x, gts_y, gts_r, gts_f = _deep2flat_gt(allgts, radius=eval_r)
+    wd_r, wd_p, wd_t = _prec_rec_2d(sum(det_p[:,1:], axis=1), c_[det_x, det_y], det_f, c_[gts_x, gts_y], gts_f, gts_r)
+    gts_x, gts_y, gts_r, gts_f = _deep2flat_gt(wcs, radius=eval_r)
+    wc_r, wc_p, wc_t = _prec_rec_2d(det_p[:,1], c_[det_x, det_y], det_f, c_[gts_x, gts_y], gts_f, gts_r)
+    gts_x, gts_y, gts_r, gts_f = _deep2flat_gt(was, radius=eval_r)
+    wa_r, wa_p, wa_t = _prec_rec_2d(det_p[:,2], c_[det_x, det_y], det_f, c_[gts_x, gts_y], gts_f, gts_r)
+    gts_x, gts_y, gts_r, gts_f = _deep2flat_gt(wps, radius=eval_r)
+    wp_r, wp_p, wp_t = _prec_rec_2d(det_p[:,3], c_[det_x, det_y], det_f, c_[gts_x, gts_y], gts_f, gts_r)
+
+    return [wd_r, wd_p, wd_t], [wc_r, wc_p, wc_t], [wa_r, wa_p, wa_t], [wp_r, wp_p, wp_t]
+
+
+def comp_prec_rec_softmax(scans, wcs, was, wps, pred_conf, pred_offs, eval_r=0.5, **v2d_kw):
+    x, y = prepare_prec_rec_softmax(scans, pred_offs)
+    detections = votes_to_detections(x, y, pred_conf, **v2d_kw)
+    det_x, det_y, det_p, det_f = _deep2flat(detections)
+    return _process_detections(det_x, det_y, det_p, det_f, wcs, was, wps, eval_r)
+
+
+def aligned_raw_scan(scans_hist, odoms_hist, beam_spacing=laser_increment):
+    """
+    Stack T raw range scans with rotation-only odometry alignment.
+
+    Each historical scan is fractionally shifted along the beam axis by the
+    robot's yaw change between that frame and the current frame.  All T frames
+    and all N beams are processed in a single set of vectorised NumPy operations
+    — no Python-level loop over T or N.
+
+    This applies the same rotation correction as cutout() — odom_a / increment
+    — to the full 1-D scan rather than a 48-beam window.  Translation is not
+    corrected (same design choice as original DROW).
+
+    When odoms_hist contains all-zero xya fields (e.g. FROG without an odom
+    file, or any stationary-robot recording) the shifts are all zero and the
+    output is identical to raw_scan().
+
+    Parameters
+    ----------
+    scans_hist  : array-like (T, N)   raw range scans; index -1 = current
+    odoms_hist  : structured ndarray (T,) from dataset.get_scan(); field "xya"
+                  is a (3,) array of (x, y, theta) in world-frame coordinates
+    beam_spacing: float  angular spacing between adjacent beams in radians
+                  (default: laser_increment = π/360 ≈ 0.5° for DROW)
+
+    Returns
+    -------
+    r : ndarray (T, N, 1) float32  rotation-corrected, linearly interpolated
+    """
+    scans = array(scans_hist, dtype=float32)                    # (T, N)
+    T, N = scans.shape
+
+    # Delta-yaw per frame: how far the robot has rotated between frame t and now.
+    # One vectorised subtract — no loop over T.
+    theta  = odoms_hist["xya"][:, 2].astype(float32)           # (T,)
+    shifts = (theta - theta[-1]) / float(beam_spacing)          # (T,)
+
+    # Fractional source indices.  aligned_t[i] = scan_t[i + shift_t]:
+    # positive shift_t means the robot turned CCW between frame t and now,
+    # so beam i in the current frame corresponds to a beam further right in
+    # the historical scan (same direction convention as cutout()).
+    beam_idx = arange(N, dtype=float32)                         # (N,)
+    src_idx  = beam_idx[None, :] + shifts[:, None]              # (T, N) broadcast
+    src_idx  = clip(src_idx, 0.0, float(N - 1))
+
+    # Vectorised linear interpolation across all (T, N) simultaneously.
+    src_f   = src_idx.astype('int32')                           # floor index
+    src_c   = clip(src_f + 1, 0, N - 1)                        # ceil index
+    frac    = (src_idx - src_f).astype(float32)                 # fractional part
+    t_idx   = arange(T, dtype='int32')[:, None]                 # (T, 1) for gather
+
+    aligned = (scans[t_idx, src_f] * (1.0 - frac)
+              + scans[t_idx, src_c] * frac)                     # (T, N)
+
+    return aligned[:, :, None]                                   # (T, N, 1)
+
+
+def raw_scan(scans_hist):
+    """
+    Stack a temporal window of *raw, unaligned* range scans — no odometry
+    rotation correction, no Cartesian conversion.  Each beam's angle is fixed
+    and implicit in its index, so the only channel is the raw distance.
+
+    This is a deliberate departure from the odometry-aligned (r, x, y)
+    representation used by earlier full-scan detectors in this project (and
+    from DROW/DR-SPAAM, which also rotate historical scans into the current
+    frame before feature extraction): no odometry input is needed at all, and
+    the T-frame window becomes a trivial rotating buffer at inference time —
+    evict the oldest scan, append the newest (see LiveDataset.push_measure(),
+    which already does exactly this via a fixed-size collections.deque).
+
+    Trade-off: the network gets no explicit signal compensating for the
+    robot's own rotation between frames, so it must learn to tolerate (or
+    exploit) that ego-motion implicitly from the raw beam stream, rather than
+    seeing temporally-aligned beams. Whether that costs accuracy relative to
+    the aligned (r, x, y) representation is an open empirical question —
+    see RESEARCH.md.
+
+    Parameters
+    ----------
+    scans_hist : array-like (T, N)  raw range scans; index -1 = current scan
+
+    Returns
+    -------
+    r : ndarray (T, N, 1) float32
+        Channel 0: r — raw range measurement (metres), unaligned.
+    """
+    scans = array(scans_hist, dtype=float32)   # (T, N)
+    return scans[:, :, None]                   # (T, N, 1)
