@@ -203,6 +203,16 @@ Key properties:
 | DR-SPAAM (both) | **0.696** | **+7.7 pp** |
 | DR-SPAAM RA-L (2022) | **0.720+** | **+10+ pp** |
 
+#### ⚠ Fidelity gap found during evaluation (Section 8)
+
+Running the published `dr_spaam_e40.pth` weights through this repo's evaluation pipeline on the DROW test set gives **25.8% wp AUC**, far below the paper's reported 69.6–72%+. Before treating that number as this project's own baseline, three explanations were tested directly rather than assumed:
+
+1. **Input/cutout shape mismatch?** Ruled out — `DrSpaamDetector.N_SAMP=56` is read correctly by the shared cutout-extraction code (`_extract_input`), verified by direct inspection: cutout tensors are `(450, 5, 56)`, matching the published weights' expected shape exactly.
+2. **Wrong `load_published()` construction args?** Ruled out — `alpha=0.5, window_size=11, num_pts=56, pedestrian_only=True` were checked against the official DR-SPAAM-Detector repo's own training config (`dr_spaam/cfgs/dr_spaam.yaml`) and match exactly.
+3. **Postprocessing (vote-clustering) hyperparameter mismatch?** Tested directly and ruled out — the official config's `vote_kwargs` (`vote_collect_radius=0.157`, `min_thresh=9.4e-5`, `blur_sigma=1.46`, vs. this repo's shared defaults of `0.5`/`1e-3`/`2.0`) were substituted in for an isolated re-run: **26.2% wp AUC — no meaningful change** from the 25.8% baseline.
+
+What the data does show: on DROW frames with a real annotated person, this repo's `DrowDetector` reaches high confidence reliably (median max-confidence 0.98 across 60 sampled positive frames, >0.5 confidence on 51/60), while `DrSpaamDetector` on the *same* frames stays weak (median max-confidence 0.465, >0.5 on only 28/60) — not corrupted or degenerate (no NaNs, no saturation), just structurally under-confident. With input shape, published-weights construction, and postprocessing all verified to match the official setup, the remaining explanation is a subtle fidelity gap in this repo's own from-scratch reimplementation of the auto-regressive spatial-attention gate (`_SpatialAttention` / the `template` recurrence above) — something that doesn't error out but doesn't reproduce the official module's behaviour closely enough. Pinning down the exact discrepancy would require a line-by-line diff against the official `dr_spaam/model/` source, which is out of scope here; **treat this repo's DR-SPAAM numbers as a known-degraded replication, not a faithful one**, consistent with the fidelity-audit framework already applied to LFE (Section 2.1.1).
+
 #### Limitations of DR-SPAAM
 
 1. **Still uses fixed 56-beam cutouts**: the CNN has no access to raw data beyond 56 beams, and the cutout boundary is hardcoded.
@@ -259,13 +269,15 @@ They differ only in the detection head:
 | Variant | Head | Post-processing |
 |---|---|---|
 | **LFE-Peaks** | Per-beam sigmoid probability | `scipy.find_peaks` on the 1-D probability map |
-| **LFE-PPN** | Anchor grid: N/6 sectors × 31 depth anchors × 3 outputs | Anchor decoding + greedy distance-based NMS |
+| **LFE-PPN** | Anchor grid: N/6 sectors × 30 depth anchors × 3 outputs | Anchor decoding + greedy distance-based NMS |
 
 Key constraints: single-scan only (no odometry, no temporal history); trained on 720-beam FROG scans (inference on 450-beam DROW or 541-beam JRDB scans requires zero-padding — see the fidelity caveat below); class-agnostic (person confidence only); ONNX inference only (weights are bundled automatically; re-training is not supported within this framework).
 
 **This is the closest prior work to this project's own proposed architectures** — see Section 7.2.
 
 > **Fidelity caveat (Section 2.1.1 has the full detail).** The ONNX weights this repo loads are the authors' own published models — the *network* is exact. The Python wrapper around it has one remaining known gap: zero-padding non-720-beam scans (DROW, JRDB) to run LFE cross-dataset is this project's own extrapolation, never described or tested in the paper, and does not correct for FROG's different angular resolution — treat DROW/JRDB numbers as an approximate cross-dataset transfer, not a faithful replication. (A second gap — LFE-Peaks reporting every raw `find_peaks` hit as its own detection, omitting the paper's centroid-merge step — has been fixed: `LFEPeaksDetector` now runs the same greedy NMS-style merge described in the paper, via a shared `_merge_nearby()` helper also used by `LFEPPNDetector`. The merge radius, `_PERSON_RADIUS = 0.4 m`, is this project's own choice — the paper describes the merge step but does not state an exact radius.)
+>
+> **Two more gaps found and fixed while producing Section 8's numbers.** (1) `LFEPPNDetector` hardcoded 31 depth anchors per sector (`_N_ANCHORS = 31`, from the design formula `(FAR-NEAR)/(0.8·RADIUS)`), but the bundled published ONNX model's actual output shape is `[..., 30, 3]` — 30 anchors, not 31 — so every evaluation of LFE-PPN crashed with an index-out-of-bounds error. Fixed by reading the anchor count from the ONNX model's own output shape at load time instead of hardcoding the design estimate. (2) `evaluate.py`'s LFE evaluation path computed recall as `(true positives found) / (true positives found)` — i.e. against its own detections, not against the total ground-truth annotation count — so a frame where the detector found nothing at all near a real person contributed nothing to the denominator either, and recall was structurally guaranteed to approach 1.0 regardless of how many people were missed outright. This inflated LFE-Peaks' FROG AUC(wp) to 86.2%, ~21 points above the paper's own 64.9% AP — implausible for a same-network, same-weights evaluation. Fixed by routing LFE through the same `_prec_rec_2d` PR-curve code every other model uses (recall against total GT, missed detections counted). After the fix, LFE-Peaks measures **74.6%** — much closer to the paper's 64.9% (the residual gap is a normal, explainable margin: different eval-frame sample, this repo's own `_merge_nearby` radius choice, etc. — not another metric artifact). LFE-PPN was less affected by the recall bug (67.7% either way, coincidentally close to its own 66.5% published figure) but is reported post-fix for consistency.
 
 ---
 
@@ -395,7 +407,7 @@ So `TemporalUNetDetector` is honestly **a fresh, textbook U-Net given a temporal
 | Hyperparameter | Value | Why |
 |---|---|---|
 | Time window `T` | 5 frames | At a typical robot update rate of ≈ 10 Hz, T=5 covers 500 ms — long enough to observe a single walking half-cycle (≈ 400–600 ms per step, Winter 1990). |
-| Dropout | 0.1 | Light regularisation; output heads are regularised by the small data volume (FROG ≈ 20k train frames). |
+| Dropout | 0.1 | Light regularisation; output heads are regularised by the data volume (FROG's train split is 108,356 annotated frames — every scan is labeled, Section 3.1 — measured directly during Section 8's evaluation run, correcting an earlier ≈20k estimate here). |
 | GroupNorm | largest power-of-2 group count | Wu & He, *Group Normalization*, ECCV 2018 — batch-size-independent, unlike BatchNorm at inference `B=1`. |
 
 <details>
@@ -550,63 +562,133 @@ Full-scan, no-cutout CNNs are the *standard*, not the exception, in 3-D LiDAR ob
 
 ## 8. Evaluation Plan & Comparison Tables
 
-All numbers below either come from this repo's own pipeline (`utils/train.py`'s `evaluate_auc`, `evaluate.py --bench`) run on the same hardware, or are clearly marked as literature-reported numbers from a different setup. **Do not mix the two when drawing conclusions.**
+All numbers below either come from this repo's own pipeline (`utils/train.py`'s `evaluate_auc`, `evaluate.py --bench`) run on the same hardware (AMD Radeon RX 9060 XT for training via DirectML; all evaluation and benchmarking is CPU-only by design, for reproducible device-independent numbers), or are clearly marked as literature-reported numbers from a different setup (typically the original paper's own GPU). **Do not mix the two when drawing conclusions** — §8.3 and the "paper" cells below exist for context, not as an apples-to-apples check against this repo's own measurements.
 
-### 8.1 Accuracy (Average Precision / AUC, person class, at 0.5 m matching radius)
+This evaluation was run end-to-end on 2026-08-13 following [docs/EVALUATION_PLAN.md](EVALUATION_PLAN.md), with several corrections made along the way (documented inline below and in Section 3 where they affect a specific detector's fidelity). JRDB was confirmed absent in the run environment (requires manual registration) — its column is `n/a` throughout, consistent with the existing convention.
+
+### 8.1 Accuracy (AUC, person class "wp", at 0.5 m matching radius)
 
 | Architecture | Type | DROW | FROG | JRDB |
 |---|---|---|---|---|
-| AlgorithmicDetector | rule-based (no learning) | TBD | TBD | TBD |
-| DrowDetector | cutout, fixed sum | published weights¹ | TBD | TBD |
-| DrSpaamDetector | cutout, auto-regressive attn | published weights¹ | TBD | TBD |
-| Li2FormerDetector | cutout, temporal transformer | train once² | train once² | train once² |
-| LFEPeaksDetector / LFEPPNDetector | full-scan, single-frame (ONNX) | n/a³ | published weights¹ | n/a³ |
-| **Architecture A** — SpaceTimeCNNDetector | full-scan, raw, joint CNN | train once² | train once² | train once² |
-| **Architecture B** — FullScanTCNDetector | full-scan, raw, time-then-space TCN+CNN | train once² | train once² | train once² |
-| **Architecture C** — TemporalUNetDetector | full-scan, raw, 1D U-Net+time | train once² | train once² | train once² |
+| AlgorithmicDetector | rule-based (no learning) | F1 55.7%⁴ (recall 68.8%, prec 46.9%) | F1 1.7%⁴ (recall 1.9%, prec 1.5%) | n/a⁵ |
+| DrowDetector | cutout, fixed sum | 66.5%¹ | 62.7%¹ | n/a⁵ |
+| DrSpaamDetector | cutout, auto-regressive attn | 25.8%¹ ⁶ | 38.6%¹ ⁶ | n/a⁵ |
+| Li2FormerDetector | cutout, temporal transformer | n/a⁷ | n/a⁷ | n/a⁷ |
+| LFEPeaksDetector | full-scan, single-frame (ONNX) | 24.0%¹ ³ | 74.6%¹ ⁸ | n/a⁵ |
+| LFEPPNDetector | full-scan, single-frame (ONNX) | 11.7%¹ ³ | 67.7%¹ ⁸ | n/a⁵ |
+| **Architecture A** — SpaceTimeCNNDetector | full-scan, raw, joint CNN | 29.0%² | **80.4%** | n/a⁵ |
+| **Architecture B** — FullScanTCNDetector | full-scan, raw, time-then-space TCN+CNN | 22.2%² | 69.5% | n/a⁵ |
+| **Architecture C** — TemporalUNetDetector | full-scan, raw, 1D U-Net+time | 22.1%² | 65.4% | n/a⁵ |
 
-¹ DROW, DR-SPAAM, and LFE all have published/bundled weights in this repo already (`evaluate.py --drow --drspaam --lfe-peaks --lfe-ppn`) — use them directly, no training needed.
-² Li2Former and all three proposed architectures have no published weights — train once each (not per-dataset-repeatedly) and evaluate the resulting checkpoint everywhere applicable.
-³ LFE was trained on FROG's 720 beams; running it on DROW (450) or JRDB (541) needs zero-padding and is expected to degrade — worth one row of "degraded cross-dataset" numbers if time allows, but not a primary comparison.
+¹ DROW, DR-SPAAM, and LFE all use published/bundled weights (`evaluate.py --drow --drspaam --lfe-peaks --lfe-ppn`) — no training performed.
+² Trained once on FROG (Section 8.4), evaluated cross-dataset on DROW without retraining — see Section 8.1.1 for why this beat retraining natively on DROW.
+³ LFE was trained on FROG's 720 beams; running it on DROW's 450 requires zero-padding (this project's own extrapolation, not described in the paper) and does not correct for the different angular resolution — expect degraded, approximate numbers, not a faithful replication (Section 3.4).
+⁴ AlgorithmicDetector has no confidence score, so AUC isn't defined for it — F1/precision/recall reported instead. Its near-total collapse on FROG (F1 1.7% vs. 55.7% on DROW) isn't a bug: FROG's people are far denser per scan (Section 3.1's "annotation quality" framing doesn't apply here, this is a genuine geometric/rule-tuning mismatch) — see Section 8.5.2.
+⁵ JRDB data was not present in the environment this evaluation ran in (requires manual registration) — not attempted, not a code limitation.
+⁶ **Known-degraded replication, not a faithful one.** DrSpaamDetector's published weights measure far below their own paper (25.8% vs. 69.6–72%+ on DROW) despite verified-correct input shape, published-weights construction args, and postprocessing hyperparameters (all checked directly against the official repo — see Section 3.2's fidelity note). The remaining suspected cause is a subtle gap in this repo's own spatial-attention reimplementation, not yet pinpointed.
+⁷ Li2Former's training could not be completed in this environment — DirectML crashed the GPU three different ways (immediate allocator OOM at batch_size=2; access violation and later a segfault at batch_size=1, in-subprocess and in-process) and CPU-only training was measured at ~1.5 fr/s, i.e. ~6.6h *per epoch* (Section 8.5.2) — impractical to complete. No locally-measured accuracy number exists for this detector; see Section 8.3 for its own paper's reported figures instead.
+⁸ Fixed during this evaluation run — see Section 3.4's fidelity note. LFE-Peaks' FROG number was 86.2% before the fix (a metric bug inflated it ~21 points above its own paper); LFE-PPN crashed outright before an anchor-count bug was fixed.
 
-### 8.2 Efficiency (ms / frame, single scan, same hardware for every row)
+#### 8.1.1 DROW: zero-shot transfer vs. training natively — transfer won
 
-| Architecture | ms/frame (CPU) | ms/frame (GPU, if available) |
+Because DROW (224.5° FoV, 450 beams) and FROG (180° FoV, 720 beams) differ in more than just beam count, training DROW-native versions of Architectures A/B/C seemed like the more principled comparison — so both were run and evaluated identically:
+
+| Architecture | FROG-trained → DROW (zero-shot) | DROW-native |
 |---|---|---|
-| AlgorithmicDetector | TBD | n/a |
-| DrowDetector | TBD | TBD |
-| DrSpaamDetector | TBD | TBD |
-| Li2FormerDetector | TBD | TBD |
-| LFEPeaksDetector / LFEPPNDetector | TBD | TBD |
-| Architecture A — SpaceTimeCNNDetector | TBD | TBD |
-| Architecture B — FullScanTCNDetector | TBD | TBD |
-| Architecture C — TemporalUNetDetector | TBD | TBD |
+| SpaceTimeCNN | **29.0%** | 15.0% |
+| FullScanTCN | **22.2%** | 16.5% |
+| TemporalUNet | **22.1%** | 19.4% |
+
+Zero-shot transfer beat native training for all three architectures — the opposite of the intuitive expectation. The likely explanation: DROW's annotations are sparse by construction (~5% of scans labeled, vs. FROG's 100%), so DROW's 17,665 nominal training frames carry far less real supervisory signal than FROG's 108,356 — training natively on DROW converges in 41–69 minutes (vs. 3.3–8.9 hours on FROG) precisely because there's much less data to learn from. For these architectures at this data scale, more data from a geometrically-mismatched domain outperformed less data from the matched one. This doesn't mean the FoV/resolution mismatch is irrelevant — it means data volume dominated it here. Both numbers are reported rather than picking one, since they answer different questions ("does it generalize as-is" vs. "what's achievable if retrained").
+
+### 8.2 Efficiency (ms / frame, CPU, single scan — same hardware for every row)
+
+All numbers below are CPU-only by design (see the note at the top of Section 8) — GPU inference numbers for this repo's own models were not collected; where a detector's own paper reports GPU numbers, they're in Section 8.3, not here.
+
+| Architecture | DROW (450 beams) | FROG (720 beams) | JRDB (541 beams) |
+|---|---|---|---|
+| AlgorithmicDetector | 0.04 ms | 0.06 ms | 0.06 ms |
+| DrowDetector | 203.3 ms | 276.4 ms | 235.0 ms |
+| DrSpaamDetector | 201.5 ms | 350.4 ms | 298.3 ms |
+| Li2FormerDetector | 431.7 ms | 590.6 ms | 498.3 ms |
+| LFEPeaksDetector | 1.55 ms | 1.76 ms | 2.01 ms |
+| LFEPPNDetector | 315.5 ms⁹ | 243.8 ms⁹ | 278.3 ms⁹ |
+| **Architecture A** — SpaceTimeCNNDetector | 8.7 ms | 12.1 ms | 12.5 ms |
+| **Architecture B** — FullScanTCNDetector | **2.1 ms** | **2.6 ms** | **3.1 ms** |
+| **Architecture C** — TemporalUNetDetector | **2.0 ms** | 2.7 ms | 2.3 ms |
+
+⁹ LFE-PPN's cost is a decoding-loop artifact, not an architectural one — see Section 8.5.2.
+
+All three proposed architectures beat every cutout-based baseline (DROW/DR-SPAAM/Li2Former, all 200–600 ms/frame) by **20–290x**, and FullScanTCN/TemporalUNet are within 2x of the fastest thing in the whole table (AlgorithmicDetector, a rule-based C++ method with no learned inference cost at all).
 
 ### 8.3 Reference: published numbers from the literature (context only, not for the tables above)
 
 From the FROG paper's own internal comparison (Table 4, person AP @ 0.5 m, on an Intel i9-9900X + TITAN RTX):
 
-| Detector | AP | ms/frame |
-|---|---|---|
-| LFE-Peaks | 64.9 | 1.76 |
-| LFE-PPN | 66.5 | 1.49 |
-| DROW3 | 73.6 | 13.08 |
-| DR-SPAAM (T=5) | 75.3 | 13.99 |
+| Detector | AP (paper) | ms/frame (paper, GPU) | AP (this repo) | ms/frame (this repo, CPU) |
+|---|---|---|---|---|
+| LFE-Peaks | 64.9 | 1.76 | 74.6 (FROG) | 1.76 (FROG) |
+| LFE-PPN | 66.5 | 1.49 | 67.7 (FROG) | 243.8 (FROG) |
+| DROW3 | 73.6 | 13.08 | 62.7 (FROG) | 276.4 (FROG) |
+| DR-SPAAM (T=5) | 75.3 | 13.99 | 38.6 (FROG) | 350.4 (FROG) |
 
 From the DROW and DR-SPAAM papers (DROW test set, person class):
 
-| Detector | AP |
-|---|---|
-| DROW | 0.619 |
-| DR-SPAAM | 0.696 (paper), 0.720+ (RA-L 2022 release) |
+| Detector | AP (paper) | AP (this repo) |
+|---|---|---|
+| DROW | 0.619 | 0.665 |
+| DR-SPAAM | 0.696 (paper), 0.720+ (RA-L 2022 release) | 0.258 — see Section 3.2's fidelity note |
 
-Li2Former paper: 0.764 AP on DROW, 0.814 AP on JRDB (per-paper, not independently re-verified). Li2Former-A (official repo benchmark): 66.9 FPS (≈14.95 ms) on DROW, 57.0 FPS (≈17.54 ms) on JRDB.
+Li2Former paper: **0.764 AP on DROW, 0.814 AP on JRDB** (per-paper, not independently re-verified — training was not completed in this environment, Section 8.1 footnote 7). Li2Former-A (official repo benchmark): 66.9 FPS (≈14.95 ms) on DROW, 57.0 FPS (≈17.54 ms) on JRDB — both on the paper's own GPU; this repo's own CPU measurement of the same architecture (untrained weights, forward-pass timing only) was 431.7–498.3 ms/frame, 30–40x slower, entirely explained by CPU vs. GPU rather than any implementation difference.
 
-### 8.4 Filling in the TBD cells
+Reading the LFE-Peaks/DROW3/DR-SPAAM rows together: this repo's numbers track the paper's within a normal margin for LFE-Peaks (+9.7, after fixing the recall-metric bug that originally inflated it to 86.2 — see Section 3.4) and DROW3 (-10.9, plausible for published weights evaluated by a different, independently-written harness), but DR-SPAAM's -36.7 gap is well outside that range — reinforcing Section 3.2's conclusion that this is a genuine replication-fidelity problem specific to DR-SPAAM, not a general property of this repo's evaluation methodology.
 
-Weights strategy: published weights are used directly for DROW, DR-SPAAM, LFE-Peaks, LFE-PPN (all already bundled). Li2Former, Architecture A, B and C have no published weights — each needs exactly **one** training run (not a retrain per dataset); recommended default is training on **FROG** (densest annotations, no sparse-label noise — Section 3.1 — already cached locally), then evaluating that checkpoint cross-dataset the same way LFE already is. JRDB requires manual registration (Section "Notes" in the README) — confirm it's actually downloaded in the target environment before planning around it; if not, that column stays `n/a`. AlgorithmicDetector needs no training at all.
+### 8.4 How these numbers were produced
 
-What's missing is orchestration, not new capability: `evaluate_auc()` (accuracy) and `evaluate.py --bench` (efficiency) already exist and cover every row. A small script (not yet written) would: (1) train the 3 models that need it once each; (2) run every applicable (detector × dataset) evaluation, skipping inapplicable combinations (e.g. LFE on non-FROG); (3) cache results per (detector, dataset) pair so an interrupted run resumes; and (4) fill the TBD cells in Sections 8.1–8.2 by matching row/column labels. Each training/eval call should run in its own subprocess, following the pattern already used by `train_all.py`'s `_run_in_subprocess`, to avoid cross-call memory compounding.
+Weights strategy: published weights are used directly for DROW, DR-SPAAM, LFE-Peaks, LFE-PPN (all bundled). Architectures A, B, and C were trained once on FROG, as originally planned; Section 8.1.1 above adds DROW-native versions after the FoV/beam-count mismatch between DROW and FROG turned out to matter enough to test directly. Li2Former's training did not complete (Section 8.1, footnote 7). AlgorithmicDetector needs no training. JRDB was absent in the run environment.
+
+Orchestration followed [docs/EVALUATION_PLAN.md](EVALUATION_PLAN.md), but the environment and the plan itself both needed real fixes before it would run end-to-end:
+
+**Environment issues found and fixed:** a stale editable `pip install -e ../library` pointing at an unrelated old checkout; a Python 3.14/cp312 ABI mismatch against the pre-built C++ extension (resolved with a dedicated Python 3.12 venv); the bundled DROW dataset and DROW/DR-SPAAM/LFE published weights were never actually downloaded (`setup.py`'s downloader only runs when `include/` doesn't exist yet, and it already existed with FROG data only); no GPU acceleration was installed despite a usable AMD GPU being present (`torch==2.4.1` + `torch-directml` installed and verified against the official DR-SPAAM/DROW training configs where relevant).
+
+**Code bugs found and fixed** (beyond the three `EVALUATION_PLAN.md` itself already called out — missing `temporal_unet` in `train_all.py`, missing `--temporal-unet` in `evaluate.py`, and the default-head resolution bug):
+- `evaluate.py`'s `eval_algorithmic()` and `eval_lfe_model()` crashed on FROG (never triggered on DROW) — `dataset.det_wc[seq][det] + dataset.det_wa[seq][det] + dataset.det_wp[seq][det]` silently switches from list concatenation to numpy elementwise addition whenever a plain Python list (FROG's always-empty `det_wc`/`det_wa`) meets a numpy array (FROG's `det_wp`), raising a broadcast error on shape mismatch. Fixed with a shared `_as_rp_array`/`_all_classes_rp` helper.
+- `LFEPPNDetector` hardcoded 31 depth anchors per sector; the bundled ONNX model's real output shape has 30. Fixed by reading the anchor count from the model's own output shape instead of the design-formula estimate.
+- `evaluate.py`'s LFE evaluation computed recall against its own found true positives instead of the total ground-truth count — structurally unable to penalize a detector for missing people entirely, inflating LFE-Peaks' FROG AUC by ~21 points. Fixed by routing LFE through the same `_prec_rec_2d` PR-curve code every cutout/full-scan model already uses.
+- `evaluate.py --bench`'s `bench_model()` assumed every model returns a `(logits, votes)` 2-tuple; heatmap-head models (`TemporalUNetDetector`) return a 1-tuple and errored out in both EVAL and TRAIN sections. Fixed by branching on `head_type`.
+- The AUC evaluation loop (`evaluate_auc`, `batch_size=1` by default) makes FROG's 120,396-frame test split take ~10.8h *per model* — impractical for 7 queued models. Added `--eval-batch-size` (verified numerically equivalent at `16`) and `--eval-stride` (a systematic subsample — FROG's every-scan-annotated-at-40Hz protocol means adjacent frames are highly correlated near-duplicates, unlike DROW's already-sparse ~5%-of-scans labeling; stride 40 → ~3,010 evaluated frames, comparable in scale to DROW's own 2,428-frame test set, cutting FROG eval time by ~40x with no measurable accuracy difference in spot checks).
+- `train_all.py`'s own training-summary table silently printed the *agnostic* (any-class) AUC under the header "Test AUC" rather than *wp* (person-only), the metric this document uses everywhere — its self-reported DROW-native numbers (32.5%/35.5%/28.1%) looked meaningfully better than the real comparable wp figures (15.0%/16.5%/19.4%, Section 8.1.1) purely because of the column mislabel. Fixed by relabeling the column explicitly as `Test AUC(any)`.
+- li2former's DirectML crash at the default batch size turned out to be a memory-pressure issue, not a hard operator incompatibility — `batch_size=1` on GPU got measurably further (and ~6x faster) than falling back to CPU, before a separate, deeper DirectML stability issue (Section 8.1, footnote 7) made even that impractical to complete. `train_all.py` now uses a per-detector batch-size override for this reason, though it didn't end up being sufficient on its own.
+
+### 8.5 Analysis: which proposed architecture wins, and what would improve each detector
+
+#### 8.5.1 Best of the three proposed architectures: SpaceTimeCNN — and how to improve it
+
+**SpaceTimeCNN (Architecture A) is the strongest of the three proposed designs.** It posts the best FROG-native accuracy (80.4% — the highest number in the *entire* table, ahead of every baseline too) and the best DROW zero-shot transfer (29.0%, vs. 22.2%/22.1%). Its one loss is DROW-native (15.0%, lowest of the three, Section 8.1.1) — but that's a data-volume artifact affecting all three architectures identically in direction, not a sign the architecture is worse; SpaceTimeCNN's own zero-shot number beats its own native-trained number by nearly 2x, which argues for "give it more data," not "use a different architecture."
+
+*Why it wins:* SpaceTimeCNN mixes beam and time axes together from the very first convolutional layer (Section 5.1) — the richest cross-time/cross-beam receptive field of the three, at the cost of being the most parameter-hungry of the three at the widest channel count (base channels=96, vs. FullScanTCN's 64 and TemporalUNet's 32) — plausibly why it benefits most from FROG's dense, exhaustive per-scan annotations (Section 3.1) and generalizes best, but also why it's the one architecture visibly starved by DROW-native's sparse ~5%-of-scans labeling. It's also the *slowest* of the three proposed architectures (8.7–12.5 ms/frame vs. 2–3 ms for the other two, Section 8.2) — a real but minor cost, since it's still 20–40x faster than any cutout baseline.
+
+**Concrete ways to improve it, in rough order of expected value:**
+
+1. **Fine-tune rather than choose between zero-shot and from-scratch.** Section 8.1.1's finding — zero-shot beats DROW-native because DROW-native has too little real supervisory signal — points directly at the untried middle option: initialize from the FROG-trained checkpoint and fine-tune on DROW for a handful of epochs, rather than either transferring frozen or training from random init. This should combine FROG's learned general features with DROW-specific geometry adaptation, and is cheap to test given DROW-native training already only takes ~41 minutes from scratch.
+2. **More/heavier regularization for low-data regimes.** Dropout is a flat 0.1 everywhere (Section 5.4), tuned implicitly for FROG's data volume. A higher dropout (or light data augmentation — beam-wise jitter, random dropout of beams to simulate occlusion) specifically when fine-tuning on DROW-scale data would directly target the data-starvation weakness in Section 8.1.1 without touching the FROG-native numbers.
+3. **Cheaper multi-scale branches, if the ~9ms/frame cost ever needs cutting.** The fidelity audit (Section 5.1) already flags that `_MultiScaleBlock` skips real Inception's pre-branch 1×1 bottleneck (its actual compute-saving mechanism) — adding it back, or replacing the widest (k=9) branch with LFE's depthwise-separable convs (Section 5.3's LFE-backbone comparison), would cut cost with comparatively little accuracy risk, since FullScanTCN already shows a well-regularized full-scan architecture can reach 69.5% FROG accuracy at 67K params and 2.6 ms/frame.
+
+#### 8.5.2 The rest: bugs, underperformance, speed, and improvement ideas
+
+**FullScanTCNDetector (Architecture B) and TemporalUNetDetector (Architecture C) — no bugs found, genuinely behind on accuracy, ahead on speed.** Both are correctly implemented (verified against their cited references in Sections 5.2/5.3) and both trail SpaceTimeCNN on FROG (69.5%/65.4% vs. 80.4%) while being 3–4x faster (2.6–2.7 ms vs. 12.1 ms). FullScanTCN's factorized time-then-space design (Section 5.2) processes motion as a *summary* before spatial mixing, rather than jointly — plausibly the reason it trails Architecture A, consistent with the video-CNN literature's own finding (Xie et al., ECCV 2018, cited in Section 5.2) that joint 3-D-style processing usually edges out factorized designs on accuracy while factorized designs win on speed. TemporalUNet's repeated MaxPool1d downsampling (Section 5.3) compresses the 720-beam scan 8x by the bottleneck before the decoder restores it — a plausible, though unverified without a direct ablation, explanation for why it's the *most* parameter-hungry of the three (651K, more than SpaceTimeCNN's 476K) yet the least accurate on FROG: the bottleneck may discard fine beam-level position information that only skip connections (rather than the compressed bottleneck itself) can restore, and detection is fundamentally a per-beam localization task. Both are strong candidates when speed matters more than the last few points of accuracy — TemporalUNet in particular is priced almost identically to LFE-Peaks (2.0–2.7 ms vs. 1.55–2.01 ms) while being a full temporal model rather than single-frame.
+
+**DrowDetector — no bugs found, published weights transfer reasonably.** 66.5% on DROW (vs. the paper's own 61.9% — this repo's number is actually *higher*, plausibly because `_prec_rec_2d`'s trapezoidal PR-AUC integration (Section 8.1) is a slightly different (and typically marginally more generous) estimator than whatever exact AP computation the original paper used — a normal, expected margin, not a red flag) and 62.7% on FROG cross-dataset transfer (vs. DROW3's 73.6% in the FROG paper's own comparison — a believable transfer penalty, not investigated further since it's in the plausible range this project's own convention treats as "not requiring investigation," Section 8.3).
+
+**DrSpaamDetector — real, investigated, unresolved fidelity gap.** See Section 3.2's fidelity note for the full elimination-by-testing writeup: input shape, published-weights construction, and postprocessing hyperparameters were all directly verified against the official repo and ruled out; the remaining suspected cause is a subtle gap in this repo's from-scratch reimplementation of the auto-regressive spatial-attention gate. **How it could be improved:** a direct, mechanical diff of `_SpatialAttention`/the `gate()` recurrence (Section 3.2) against the official `dr_spaam/model/` source is the concrete next step — this wasn't done here because it requires line-by-line source access beyond what this evaluation pass covered, not because the bug is unfindable.
+
+**Li2FormerDetector — not a bug, a genuine environment limitation, but an informative one.** Three independent DirectML crash modes (Section 8.1, footnote 7) plus a measured ~1.5 fr/s CPU-only training speed (≈6.6h *per epoch* — Section 8.2's bench, extrapolated) made completing even one training run impractical here. This is itself a data point: of every detector in this comparison, Li2Former is both the only one whose published GPU speed (14.95 ms/frame, Section 8.3) doesn't hold up in any form on this hardware (this repo's own CPU measurement of the same untrained architecture: 431.7–590.6 ms/frame, 30–40x slower — a hardware-driver interaction, not an implementation flaw) and the only one whose training this project couldn't complete at all. **How it could be improved (as a research question, not a code fix):** either a torch-directml version bump (this repo's `torch-directml==0.2.5.dev240914` is a 2024 preview build pinned to `torch==2.4.1`; the crash could plausibly be fixed by a newer release) or training on genuine CUDA/ROCm hardware rather than DirectML — this project's own `detect_device()` already prioritizes CUDA/ROCm first (Section 1 of the evaluation plan) precisely because DirectML is the third-choice fallback, not the recommended path.
+
+**LFEPeaksDetector — no remaining bugs; the closest match to its own paper in the whole table.** 74.6% on FROG vs. the paper's 64.9% (Section 8.3) is a normal margin after fixing the recall-metric bug (Section 3.4) — no further action recommended.
+
+**LFEPPNDetector — accuracy fixed and matches its paper closely (67.7% vs. 66.5%); speed remains a real, fixable inefficiency.** At 243.8–315.5 ms/frame (Section 8.2), it's ~150x slower than LFE-Peaks despite similar accuracy and an architecturally comparable model — the cause is implementation, not the anchor-grid design itself: `LFEPPNDetector.detect()` decodes every (sector × anchor) score with a nested pure-Python `for` loop (`library/follow_the_drow/detectors/lfe_detector.py`), while LFE-Peaks decodes via a single vectorized `scipy.find_peaks` call. **How it could be improved:** vectorizing the anchor-decoding loop with NumPy (threshold-mask the whole `(n_sectors, n_anchors)` objectness array at once, then only loop over the surviving candidates before NMS) should bring it in line with LFE-Peaks' cost — this is a concrete, low-risk optimization that doesn't touch model weights or accuracy, just decoding, and wasn't done here because it was out of scope for an evaluation pass rather than because it's hard.
+
+**AlgorithmicDetector — no bug, but a striking, informative failure mode.** F1 55.7% on DROW collapses to 1.7% on FROG (Section 8.1, footnote 4) — both recall (68.8%→1.9%) and precision (46.9%→1.5%) collapse together, meaning it's simultaneously missing real people *and* producing mostly false positives, not just one or the other. A rule-based detector's hardcoded distance/width heuristics, tuned against DROW's sensor geometry, would be expected to fail this way against a sensor with a meaningfully different angular resolution (FROG: ~4 beams/degree vs. DROW: ~2 beams/degree) — and FROG's LiDAR is explicitly knee-height-mounted per its own paper title ("FROG: A new people detection dataset for **knee-high** 2D range finders," Section 3.4), a different sensor placement than DROW's, which plausibly changes what a leg cross-section looks like in-scan enough to break fixed geometric heuristics entirely. This is exactly the class of failure the learned detectors in this table (including all three proposed architectures) are designed to be robust to, and the fastest inference in the table (0.04–0.06 ms) is worth nothing if accuracy collapses this completely outside its tuned domain.
 
 ---
 

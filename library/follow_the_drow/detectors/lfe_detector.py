@@ -228,9 +228,13 @@ class LFEPPNDetector:
     DEFAULT_WEIGHTS = _LFE_PPN_PATH
 
     # Anchor parameters matching the FROG training configuration
-    _SECTOR_STRIDE = 6     # one anchor sector every 6 beams
-    _N_ANCHORS     = 31    # range anchors per sector: (FAR-NEAR)/(0.8*RADIUS)
-    _DEPTH_SPACING = (_SCAN_FAR - _SCAN_NEAR) / (_N_ANCHORS - 1)
+    _SECTOR_STRIDE       = 6     # one anchor sector every 6 beams
+    _N_ANCHORS_FALLBACK  = 31    # design estimate: (FAR-NEAR)/(0.8*RADIUS) — only
+                                  # used if the ONNX model's output shape isn't
+                                  # static; the bundled published model actually
+                                  # has 30, not 31 (confirmed via its output
+                                  # shape ['unk','unk', 30, 3]) — trust the model
+                                  # over the formula.
 
     def __init__(
         self,
@@ -244,9 +248,14 @@ class LFEPPNDetector:
         self._score_thresh = score_thresh
         self._nms_radius   = nms_radius
 
+        out_shape   = self._session.get_outputs()[0].shape
+        n_anchors   = out_shape[2] if isinstance(out_shape[2], int) else self._N_ANCHORS_FALLBACK
+        self._n_anchors     = n_anchors
+        self._depth_spacing = (_SCAN_FAR - _SCAN_NEAR) / (n_anchors - 1)
+
         # Pre-compute anchor depths
         self._anchor_depths = np.linspace(
-            _SCAN_NEAR, _SCAN_FAR, self._N_ANCHORS, dtype=np.float32
+            _SCAN_NEAR, _SCAN_FAR, self._n_anchors, dtype=np.float32
         )
 
     @staticmethod
@@ -297,14 +306,14 @@ class LFEPPNDetector:
         # Decode all anchors above threshold
         detections = []
         for s in range(n_sectors):
-            for m in range(self._N_ANCHORS):
+            for m in range(self._n_anchors):
                 score = float(objectness[s, m])
                 if score < self._score_thresh:
                     continue
                 anchor_d   = float(self._anchor_depths[m])
                 final_d    = anchor_d + float(d_offset[s, m])
                 # Arc offset normalised by depth spacing; convert to angle offset
-                phi_offset = (float(l_offset[s, m]) * self._DEPTH_SPACING
+                phi_offset = (float(l_offset[s, m]) * self._depth_spacing
                               / max(anchor_d, 0.1))
                 final_phi  = float(sector_angles[s]) + phi_offset
 

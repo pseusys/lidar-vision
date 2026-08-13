@@ -25,7 +25,9 @@ report/*
 runs
 utils/plots
 checkpoints
+checkpoints_drow
 utils/*.pth
+results
 
 *.py[cod]
 *.egg-info

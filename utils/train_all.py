@@ -88,6 +88,50 @@ def _eval_worker(det, ckpt_path, dataset, train_split, test_split,
         result_queue.put(("error", str(exc)))
 
 
+def _train_in_process(args):
+    """Run train_model() directly, no subprocess.
+
+    li2former's training crashes with an access violation (Windows exit code
+    3221225477) when run inside a multiprocessing.Process on this machine,
+    even at batch_size=1 where the identical call succeeds when run directly
+    — this looks like a torch-directml / Windows-spawn interaction bug, not
+    a memory issue (memory pressure is what the subprocess isolation exists
+    to avoid for the other three models). li2former runs last in
+    _ALL_DETECTORS, so running it in-process here doesn't reintroduce the
+    cross-model memory compounding the subprocess isolation was added for.
+    """
+    try:
+        return ("ok", train_model(args))
+    except Exception as exc:
+        return ("error", str(exc))
+
+
+def _eval_in_process(det, ckpt_path, dataset, train_split, test_split,
+                     batch_size, force_cpu):
+    """In-process counterpart to _eval_worker(), for the same reason as
+    _train_in_process() — see its docstring."""
+    try:
+        test_args = _default_args(
+            dataset=dataset, train_split=train_split, val_split=test_split,
+        )
+        _, test_ds, cfg = _setup_datasets(test_args)
+        if test_ds is None:
+            return ("error", f"no data for split '{test_split}'")
+        dev = "cpu" if force_cpu else detect_device()[0]
+        model_args = _default_args(detector=det, force_cpu=force_cpu)
+        net = _build_model(model_args).to(dev)
+        load_checkpoint(ckpt_path, net)
+        aucs = evaluate_auc(net, test_ds, cfg, device=dev, batch_size=batch_size)
+        return ("ok", aucs)
+    except Exception as exc:
+        return ("error", str(exc))
+
+
+# Detectors whose subprocess isolation must be bypassed — see
+# _train_in_process()'s docstring.
+_RUN_IN_PROCESS = {"li2former"}
+
+
 def _run_in_subprocess(target, args):
     """Run target(*args, result_queue) in a child process; return (status, payload).
 
@@ -106,7 +150,7 @@ def _run_in_subprocess(target, args):
                       "(crashed or was killed, likely OOM) before reporting a result")
 
 # Canonical training order (DROW and DR-SPAAM use published weights, not trained;
-# Li2Former has no published weights — auto-skipped if no local checkpoint)
+# every detector below has no published weights and is trained from scratch)
 _ALL_DETECTORS = [
     "spacetime_cnn",
     "fullscan_tcn",
@@ -114,9 +158,15 @@ _ALL_DETECTORS = [
     "li2former",
 ]
 
-# Detectors that are skipped by default when no local checkpoint exists
-# (no published weights available; train individually with train.py first)
-_NO_PUBLISHED_WEIGHTS = {"li2former"}
+# li2former's attention ops crash the DirectML device outright at the default
+# batch size ("DML allocator out of memory" -> "The GPU device instance has
+# been suspended") — this is a memory-pressure issue, not a hard operator
+# incompatibility: batch_size=1 trains fine on DirectML (with some ops
+# falling back to CPU per-op, same as temporal_unet's unsupported ops).
+# CPU-only training was measured at ~1.5 fr/s (days per epoch at full scale)
+# vs. ~8.6 fr/s on DirectML at batch_size=1 — GPU-with-small-batch, not CPU,
+# is the right fallback here.
+_BATCH_SIZE_OVERRIDES = {"li2former": 1}
 
 
 def _parse() -> argparse.Namespace:
@@ -183,17 +233,6 @@ def main():
         print(f"  [{todo.index(det)+1}/{len(todo)}]  {det}")
         print(f"{'='*60}\n")
 
-        # Auto-skip detectors that have no published weights if no local
-        # checkpoint exists.  Train individually first:
-        #   python train.py --detector li2former
-        ckpt_path = cli.out_dir / f"{det}.pth"
-        if det in _NO_PUBLISHED_WEIGHTS and not ckpt_path.exists():
-            print(f"  [SKIP] {det} — no published weights and no local checkpoint found.")
-            print(f"         Train from scratch first:")
-            print(f"           python train.py --detector {det} --dataset {cli.dataset}")
-            summaries.append((det, None, None, None))
-            continue
-
         args = _default_args(
             detector=det,
             dataset=cli.dataset,
@@ -206,14 +245,17 @@ def main():
             dropout=cli.dropout,
             lr_schedule=cli.lr_schedule,
             subsample=cli.subsample,
-            batch_size=cli.batch_size,
+            batch_size=_BATCH_SIZE_OVERRIDES.get(det, cli.batch_size),
             auc_every=cli.auc_every,
             frame_cache=cli.frame_cache,
             out=cli.out_dir / f"{det}.pth",
         )
 
         t0 = time.perf_counter()
-        status, payload = _run_in_subprocess(_train_worker, (args,))
+        if det in _RUN_IN_PROCESS:
+            status, payload = _train_in_process(args)
+        else:
+            status, payload = _run_in_subprocess(_train_worker, (args,))
         if status == "error":
             print(f"\n  [ERROR] {det} failed: {payload}\n")
             summaries.append((det, None, None, None))
@@ -260,10 +302,16 @@ def main():
                     test_aucs[det] = None
                     continue
 
-                status, payload = _run_in_subprocess(_eval_worker, (
-                    det, ckpt, cli.dataset, cli.train_split, test_split,
-                    cli.batch_size, False,
-                ))
+                if det in _RUN_IN_PROCESS:
+                    status, payload = _eval_in_process(
+                        det, ckpt, cli.dataset, cli.train_split, test_split,
+                        cli.batch_size, False,
+                    )
+                else:
+                    status, payload = _run_in_subprocess(_eval_worker, (
+                        det, ckpt, cli.dataset, cli.train_split, test_split,
+                        cli.batch_size, False,
+                    ))
                 if status == "error":
                     print(f"  [{det}] eval failed: {payload}")
                     test_aucs[det] = None
@@ -281,16 +329,22 @@ def main():
     print(f"\n\n{'='*60}")
     print("  SUMMARY")
     print(f"{'='*60}")
-    hdr = f"  {'Model':<28}  {'Val loss':>9}  {'Val AUC':>8}  {'Test AUC':>9}  {'Time':>8}"
+    # NB: this table reports the 'agnostic' (any-class) AUC, not 'wp'
+    # (person-only) — the metric every table in docs/RESEARCH.md uses. The
+    # two can diverge substantially on DROW (which has wc/wa/wp as distinct
+    # classes, unlike FROG's person-only annotations) — don't compare this
+    # column's numbers directly against RESEARCH.md's tables; re-run
+    # evaluate.py for the wp figure instead.
+    hdr = f"  {'Model':<28}  {'Val loss':>9}  {'Val AUC(any)':>12}  {'Test AUC(any)':>13}  {'Time':>8}"
     print(hdr)
-    print(f"  {'-'*28}  {'-'*9}  {'-'*8}  {'-'*9}  {'-'*8}")
+    print(f"  {'-'*28}  {'-'*9}  {'-'*12}  {'-'*13}  {'-'*8}")
     for det, vl, best_auc, elapsed in summaries:
         t_str  = f"{elapsed/60:.1f} min" if elapsed is not None else "  FAILED"
         va_str = f"{best_auc:.1%}"       if best_auc is not None   else "    n/a"
         v_str  = _fmt(vl)                if vl is not None         else "  FAILED"
         ta     = test_aucs.get(det)
         ta_str = f"{ta['agnostic']:.1%}" if ta is not None         else "    n/a"
-        print(f"  {det:<28}  {v_str:>9}  {va_str:>8}  {ta_str:>9}  {t_str:>8}")
+        print(f"  {det:<28}  {v_str:>9}  {va_str:>12}  {ta_str:>13}  {t_str:>8}")
     print()
 
 

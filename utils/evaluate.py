@@ -59,16 +59,44 @@ from follow_the_drow.detectors import (
 from follow_the_drow.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
     project_cartesian_from_polar, standard_cartesian_to_project_cartesian, cutout, raw_scan,
+    _prec_rec_2d,
 )
 from train import (
     _make_optimizer, _build_model, _default_args,
-    evaluate_auc, load_checkpoint,
+    evaluate_auc, load_checkpoint, _safe_auc,
 )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Dataset setup
 # ──────────────────────────────────────────────────────────────────────────────
+
+def _subsample_dataset(dataset, stride: int) -> None:
+    """Systematically thin every sequence to every `stride`-th detection
+    index, in place (det_id, det_wc/wa/wp, idet2iscan kept aligned).
+
+    Why a stride and not a smaller dataset to begin with: FROG annotates
+    every scan at 40 Hz (unlike DROW, where only ~5% of scans are labeled
+    to begin with), so consecutive FROG frames are highly temporally
+    correlated near-duplicates for AP purposes — evaluating all of them
+    has sharply diminishing statistical value per frame, it just multiplies
+    wall-clock time. A systematic stride decorrelates the evaluated sample
+    (rather than e.g. truncating to a contiguous prefix, which would just
+    narrow the time window covered) while cutting eval time by ~stride.
+    """
+    if stride <= 1:
+        return
+    for seq in range(len(dataset.det_id)):
+        n = len(dataset.det_id[seq])
+        keep = list(range(0, n, stride))
+        old_idet2iscan = dataset.idet2iscan[seq]
+        dataset.det_id[seq] = [dataset.det_id[seq][i] for i in keep]
+        dataset.det_wc[seq] = [dataset.det_wc[seq][i] for i in keep]
+        dataset.det_wa[seq] = [dataset.det_wa[seq][i] for i in keep]
+        dataset.det_wp[seq] = [dataset.det_wp[seq][i] for i in keep]
+        dataset.idet2iscan[seq] = {new_i: old_idet2iscan[old_i]
+                                    for new_i, old_i in enumerate(keep)}
+
 
 def _load_dataset(args):
     """Return (dataset, cfg)."""
@@ -108,6 +136,13 @@ def _load_dataset(args):
         )
     n_frames = sum(len(d) for d in ds.det_id)
     print(f"  {len(ds.scan_id)} sequence(s), {n_frames} annotated frames\n")
+
+    if getattr(args, "eval_stride", 1) > 1:
+        _subsample_dataset(ds, args.eval_stride)
+        n_kept = sum(len(d) for d in ds.det_id)
+        print(f"  Subsampled to every {args.eval_stride}-th frame: "
+              f"{n_kept} frames evaluated (of {n_frames})\n")
+
     return ds, cfg
 
 
@@ -178,6 +213,29 @@ def verify_dataset(dataset, cfg):
     print()
 
 
+def _as_rp_array(x) -> np.ndarray:
+    """Normalize one class's per-frame annotation list to an (N, 2) array.
+
+    Per-class annotation containers are inconsistently typed across
+    datasets (DROW: object-dtype arrays; FROG: plain Python lists, empty
+    `[]` for the classes it doesn't have). Concatenating them with `+`
+    silently switches from list concatenation to numpy elementwise
+    addition whenever a plain list meets a numpy array, and crashes on
+    shape mismatch — normalize first instead.
+    """
+    arr = np.asarray(x, dtype=float)
+    return arr.reshape(-1, 2) if arr.size else np.empty((0, 2))
+
+
+def _all_classes_rp(dataset, seq: int, det_idx: int) -> np.ndarray:
+    """Concatenate wc+wa+wp (r, phi) annotations for one frame, robustly."""
+    return np.concatenate([
+        _as_rp_array(dataset.det_wc[seq][det_idx]),
+        _as_rp_array(dataset.det_wa[seq][det_idx]),
+        _as_rp_array(dataset.det_wp[seq][det_idx]),
+    ], axis=0)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. Algorithmic detector evaluation
 # ──────────────────────────────────────────────────────────────────────────────
@@ -200,10 +258,9 @@ def eval_algorithmic(dataset, cfg, eval_r: float = 0.5) -> dict:
             if det_xy.size > 0:
                 det_xy = np.column_stack(standard_cartesian_to_project_cartesian(det_xy[:, 0], det_xy[:, 1]))
 
-            all_ann = (dataset.det_wc[seq][det]
-                       + dataset.det_wa[seq][det]
-                       + dataset.det_wp[seq][det])
-            gt_xy = np.array([project_cartesian_from_polar(r, p) for r, p in all_ann]) if all_ann else np.empty((0, 2))
+            all_ann = _all_classes_rp(dataset, seq, det)
+            gt_xy = (np.array([project_cartesian_from_polar(r, p) for r, p in all_ann])
+                     if len(all_ann) else np.empty((0, 2)))
 
             n_gt  = len(gt_xy)
             n_det = len(det_xy)
@@ -243,7 +300,8 @@ def eval_algorithmic(dataset, cfg, eval_r: float = 0.5) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def eval_nn_model(det_name: str, weights_path: Path,
-                  dataset, cfg, eval_r: float = 0.5) -> dict:
+                  dataset, cfg, eval_r: float = 0.5,
+                  batch_size: int = 16) -> dict:
     """Load checkpoint and compute AUC on CPU."""
     if det_name == "drspaam" and weights_path == DrSpaamDetector.DEFAULT_WEIGHTS:
         net = DrSpaamDetector.load_published()
@@ -252,8 +310,9 @@ def eval_nn_model(det_name: str, weights_path: Path,
         net  = _build_model(args)
         load_checkpoint(weights_path, net)
     net.eval()
-    print(f"Evaluating {det_name} on CPU ...")
-    aucs = evaluate_auc(net, dataset, cfg, eval_r=eval_r, device="cpu")
+    print(f"Evaluating {det_name} on CPU (eval batch_size={batch_size}) ...")
+    aucs = evaluate_auc(net, dataset, cfg, eval_r=eval_r, device="cpu",
+                         batch_size=batch_size)
     print(f"  Agnostic (any) : {aucs['agnostic']:.1%}")
     print(f"  Wheelchair(wc) : {aucs['wc']:.1%}")
     print(f"  Walker    (wa) : {aucs['wa']:.1%}")
@@ -273,86 +332,72 @@ def eval_lfe_model(
     Evaluate an LFE-style detector (raw scan input, ONNX) and compute AUC.
 
     LFE detectors operate on full raw scan vectors rather than cutouts, so
-    they bypass the standard evaluate_auc pipeline and use their own loop.
+    they bypass the standard evaluate_auc pipeline and use their own loop —
+    but they still route through the shared `_prec_rec_2d` PR-curve code
+    every other model uses, via the same per-frame (score, x, y) + GT
+    layout `_process_detections` builds. An earlier version of this function
+    computed recall as (found true positives) / (found true positives) —
+    i.e. against its own detections rather than against the total ground
+    truth — which silently ignored frames where the detector found nothing
+    at all near a real person, structurally inflating AUC for any detector
+    that fires sparingly. `_prec_rec_2d` (below) counts every GT annotation,
+    including ones with zero matching detections, as a false negative.
 
     Returns the same dict as eval_nn_model:
       {"agnostic": float, "wc": float, "wa": float, "wp": float}
     """
-    from scipy.spatial.distance import cdist
-    from sklearn.metrics import auc as sklearn_auc
-
     n_beams = dataset.scans[0].shape[1]
     angles  = cfg.angles_fn(n_beams)
 
-    # Collect all (confidence, detected_x, detected_y) and GT per frame
-    all_scores_wp:    List[float] = []
-    all_match_wp:     List[int]   = []
-    all_scores_any:   List[float] = []
-    all_match_any:    List[int]   = []
+    det_scores_wp,  det_xy_wp,  det_frame_wp  = [], [], []
+    det_scores_any, det_xy_any, det_frame_any = [], [], []
+    gt_xy_wp,  gt_frame_wp,  gt_r_wp  = [], [], []
+    gt_xy_any, gt_frame_any, gt_r_any = [], [], []
 
+    fid = 0
     for seq in range(len(dataset.det_id)):
         for det_idx in range(len(dataset.det_id[seq])):
             iscan = dataset.idet2iscan[seq][det_idx]
             scan  = dataset.scans[seq][iscan]
 
+            # Process this frame's GT even when detections is empty — a
+            # frame with a real person and zero detections is a miss
+            # (false negative), not a frame to skip.
             detections = detector.detect(scan, angles)
-            if not detections:
-                continue
+            for score, x, y in detections:
+                det_scores_wp.append(score);  det_xy_wp.append((x, y));  det_frame_wp.append(fid)
+                det_scores_any.append(score); det_xy_any.append((x, y)); det_frame_any.append(fid)
 
-            scores = np.array([d[0] for d in detections], dtype=np.float32)
-            det_xy = np.array([[d[1], d[2]] for d in detections], dtype=np.float32)
+            for r, p in _as_rp_array(dataset.det_wp[seq][det_idx]):
+                gx, gy = project_cartesian_from_polar(r, p)
+                gt_xy_wp.append((gx, gy)); gt_frame_wp.append(fid); gt_r_wp.append(eval_r)
 
-            gt_wp  = np.array(
-                [project_cartesian_from_polar(r, p)
-                 for r, p in dataset.det_wp[seq][det_idx]],
-                dtype=np.float32,
-            ) if dataset.det_wp[seq][det_idx] else np.empty((0, 2), np.float32)
+            for r, p in _all_classes_rp(dataset, seq, det_idx):
+                gx, gy = project_cartesian_from_polar(r, p)
+                gt_xy_any.append((gx, gy)); gt_frame_any.append(fid); gt_r_any.append(eval_r)
 
-            gt_any = np.array(
-                [project_cartesian_from_polar(r, p)
-                 for r, p in (dataset.det_wc[seq][det_idx]
-                              + dataset.det_wa[seq][det_idx]
-                              + dataset.det_wp[seq][det_idx])],
-                dtype=np.float32,
-            ) if (dataset.det_wc[seq][det_idx]
-                  + dataset.det_wa[seq][det_idx]
-                  + dataset.det_wp[seq][det_idx]) else np.empty((0, 2), np.float32)
+            fid += 1
 
-            for scores_list, gt, match_list in [
-                (all_scores_wp,  gt_wp,  all_match_wp),
-                (all_scores_any, gt_any, all_match_any),
-            ]:
-                if len(gt) == 0:
-                    for s in scores:
-                        scores_list.append(float(s))
-                        match_list.append(0)
-                    continue
-                dists   = cdist(det_xy, gt)
-                matched = np.min(dists, axis=1) < eval_r
-                for s, m in zip(scores, matched):
-                    scores_list.append(float(s))
-                    match_list.append(int(m))
-
-    def _auc_from_lists(scores, matches):
-        if not scores:
+    def _auc(det_scores, det_xy, det_frame, gt_xy, gt_frame, gt_r):
+        if not det_scores or not gt_xy:
             return float("nan")
-        arr_s = np.array(scores)
-        arr_m = np.array(matches, dtype=float)
-        order  = np.argsort(-arr_s)
-        arr_s, arr_m = arr_s[order], arr_m[order]
-        tp_cum = np.cumsum(arr_m)
-        prec   = tp_cum / (np.arange(len(arr_m)) + 1)
-        recall = tp_cum / max(arr_m.sum(), 1)
-        try:
-            return float(sklearn_auc(recall, prec))
-        except Exception:
-            return float("nan")
+        recs, precs, _ = _prec_rec_2d(
+            np.array(det_scores, dtype=np.float32),
+            np.array(det_xy, dtype=np.float32),
+            np.array(det_frame),
+            np.array(gt_xy, dtype=np.float32),
+            np.array(gt_frame),
+            np.array(gt_r, dtype=np.float32),
+        )
+        return _safe_auc(recs, precs)
 
     aucs = {
-        "agnostic": _auc_from_lists(all_scores_any, all_match_any),
+        "agnostic": _auc(det_scores_any, det_xy_any, det_frame_any,
+                          gt_xy_any, gt_frame_any, gt_r_any),
         "wc":       float("nan"),   # LFE is class-agnostic
         "wa":       float("nan"),
-        "wp":       _auc_from_lists(all_scores_wp,  all_match_wp),
+        "wp":       _auc(det_scores_wp, det_xy_wp, det_frame_wp,
+                          gt_xy_wp, gt_frame_wp, gt_r_wp),
     }
 
     print(f"Evaluating {det_name} (ONNX) on CPU ...")
@@ -419,27 +464,38 @@ def bench_model(model: torch.nn.Module, input_mode: str,
     opt = _make_optimizer(model.parameters(), lr=1e-3,
                           weight_decay=1e-4, using_dml=False)
 
+    # heatmap-head models (e.g. TemporalUNetDetector with head="heatmap")
+    # return a 1-tuple (heatmap,), not the (logits, vpred) 2-tuple every
+    # other head returns — branch on it instead of assuming 2 outputs.
+    _head_type = getattr(model, "head_type", "drow")
+
     model.eval()
     def run_eval():
         with torch.no_grad():
-            logits, _ = model(x)
-        _ = logits.reshape(-1)[0].item()
+            out = model(x)
+        _ = out[0].reshape(-1)[0].item()
 
     e_m, e_s = _time_fn(run_eval, warmup, iters)
 
     model.train()
     def run_train():
-        logits, vpred = model(x)
-        pos  = labels > 0
-        lv   = (F.mse_loss(vpred[pos], vote_tgts[pos])
-                if pos.any() else vpred.new_tensor(0.0))
-        if logits.shape[-1] == 1:
-            # Binary logit output (e.g. Li2Former) — use BCE
-            lc = F.binary_cross_entropy_with_logits(
-                logits.squeeze(-1), (labels > 0).float())
+        out = model(x)
+        if _head_type == "heatmap":
+            heatmap = out[0]
+            loss = F.binary_cross_entropy_with_logits(
+                heatmap.reshape(-1), (labels > 0).float())
         else:
-            lc = F.cross_entropy(logits, labels)
-        loss = lc + 0.02 * lv
+            logits, vpred = out
+            pos  = labels > 0
+            lv   = (F.mse_loss(vpred[pos], vote_tgts[pos])
+                    if pos.any() else vpred.new_tensor(0.0))
+            if logits.shape[-1] == 1:
+                # Binary logit output (e.g. Li2Former) — use BCE
+                lc = F.binary_cross_entropy_with_logits(
+                    logits.squeeze(-1), (labels > 0).float())
+            else:
+                lc = F.cross_entropy(logits, labels)
+            loss = lc + 0.02 * lv
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
@@ -584,6 +640,20 @@ def main():
                         help="Dataset split (default: test; DROW always uses test)")
     parser.add_argument("--eval-r",  type=float, default=0.5,
                         help="Detection radius for AUC / precision-recall (default: 0.5 m)")
+    parser.add_argument("--eval-stride", type=int, default=1,
+                        help="Evaluate every Nth annotated frame instead of all of "
+                             "them (systematic subsample, default: 1 = no "
+                             "subsampling). Recommended for FROG (every scan "
+                             "annotated at 40 Hz, so adjacent frames are highly "
+                             "correlated near-duplicates for AP purposes) — leave "
+                             "at 1 for DROW, which is already sparsely labeled "
+                             "(~5% of scans) in the source data.")
+    parser.add_argument("--eval-batch-size", type=int, default=16,
+                        help="Forward-pass batch size for the AUC evaluation loop "
+                             "(default: 16). evaluate_auc()'s own default is 1 "
+                             "(single-frame), which is fine for DROW's smaller test "
+                             "split but impractically slow on FROG's ~120k-frame "
+                             "test split (~3 fr/s at batch_size=1, ~11h/model).")
 
     # What to run
     parser.add_argument("--verify",  action="store_true",
@@ -670,7 +740,8 @@ def main():
             print(f"=== {det_name} ===\n")
             try:
                 nn_results[det_name] = eval_nn_model(
-                    det_name, weights_path, dataset, cfg, eval_r=args.eval_r)
+                    det_name, weights_path, dataset, cfg, eval_r=args.eval_r,
+                    batch_size=args.eval_batch_size)
             except Exception as exc:
                 print(f"  [ERROR] {exc}\n")
 
