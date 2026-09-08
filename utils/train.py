@@ -223,6 +223,7 @@ from follow_the_drow.utils.drow_utils import (
     project_cartesian_from_polar, _win2global,
     votes_to_detections, _deep2flat, _process_detections,
 )
+from follow_the_drow.utils.tracking import SimpleTracker, odom_xya_delta_to_tracker_frame
 
 
 # ---------------------------------------------------------------------------
@@ -231,14 +232,15 @@ from follow_the_drow.utils.drow_utils import (
 
 def _setup_datasets(args):
     """Load train and validation datasets; return (train_ds, val_ds, cfg)."""
+    _time_frame_size = getattr(args, "time_frame", 5)
     if args.dataset == "frog":
         from follow_the_drow.datasets import FROG_Dataset, frog_laser_angles
         print(f"Loading FROG train split ('{args.train_split}') …")
-        train_ds = FROG_Dataset(split=args.train_split)
+        train_ds = FROG_Dataset(split=args.train_split, time_frame_size=_time_frame_size)
         val_ds = None
         if args.val_split:
             print(f"Loading FROG val split ('{args.val_split}') …")
-            val_ds = FROG_Dataset(split=args.val_split)
+            val_ds = FROG_Dataset(split=args.val_split, time_frame_size=_time_frame_size)
         cfg = SimpleNamespace(
             name="frog",
             angles_fn=frog_laser_angles,
@@ -266,11 +268,11 @@ def _setup_datasets(args):
         from follow_the_drow.datasets import DROW_Dataset
         from follow_the_drow.utils.file_utils import DROW_TRAIN_SET, DROW_VALIDATION_SET
         print("Loading DROW train set …")
-        train_ds = DROW_Dataset(dataset=DROW_TRAIN_SET)
+        train_ds = DROW_Dataset(dataset=DROW_TRAIN_SET, time_frame_size=_time_frame_size)
         val_ds = None
         if args.val_split:
             print("Loading DROW val set …")
-            val_ds = DROW_Dataset(dataset=DROW_VALIDATION_SET)
+            val_ds = DROW_Dataset(dataset=DROW_VALIDATION_SET, time_frame_size=_time_frame_size)
         cfg = SimpleNamespace(
             name="drow",
             angles_fn=laser_angles,
@@ -326,6 +328,30 @@ def _build_model(args):
     if det == "temporal_unet":
         return TemporalUNetDetector(n_time=tf, unet_channels=uc, dropout=dr, head=hd)
     raise ValueError(f"'{det}' cannot be trained (algorithmic and LFE detectors are eval-only)")
+
+
+def _freeze_backbone(net) -> None:
+    """
+    Freeze every parameter except the final output head(s) (head_logits/
+    head_votes/head_heatmap), in place. Intended for --init-weights fine-
+    tuning: a full unfrozen fine-tune from FROG weights regressed *below*
+    zero-shot transfer (14.6% vs 26.7-28.0% wp-AUC), plausibly catastrophic
+    forgetting -- unfreezing the whole network lets a few epochs on DROW's
+    tiny (17.6k-frame) training set overwrite the more general local-shape
+    features FROG's much larger dataset taught it. Freezing everything but
+    the head keeps those features fixed and only re-fits the final
+    classification/regression mapping on top of them. See
+    docs/IDEAS_BACKLOG.md item 5.
+    """
+    n_frozen = n_trainable = 0
+    for name, p in net.named_parameters():
+        if name.startswith("head_"):
+            n_trainable += p.numel()
+            continue
+        p.requires_grad = False
+        n_frozen += p.numel()
+    print(f"  Backbone frozen: {n_frozen:,} params fixed, "
+          f"{n_trainable:,} params trainable (head only)\n")
 
 
 # ---------------------------------------------------------------------------
@@ -490,8 +516,71 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
 # Input extraction (detector-type aware)
 # ---------------------------------------------------------------------------
 
+def _local_normalize(r: np.ndarray, window: int = 21) -> np.ndarray:
+    """
+    Subtract a local (beam-neighbourhood) moving-average reference -- computed
+    once from the current frame, applied to every temporal slice -- from every
+    beam. Unlike _global_normalize()'s single whole-frame scalar, this varies
+    per beam, so it targets DR-SPAAM's actual per-beam centering property
+    (each cutout is normalized against its own local surroundings, not the
+    whole scan) while staying a single cheap elementwise/local-window pass
+    before the one full-scan conv forward pass -- not DR-SPAAM's expensive
+    independent per-beam network calls. Edge beams use a replicate-padded
+    window so the local mean stays well-defined at the FoV boundary. See
+    docs/IDEAS_BACKLOG.md item 5.
+    """
+    ref_frame = r[-1, :, 0]                          # (N,) current frame
+    n = ref_frame.shape[0]
+    half = window // 2
+    padded = np.pad(ref_frame, (half, half), mode="edge")
+    kernel = np.ones(window, dtype=np.float32) / window
+    local_mean = np.convolve(padded, kernel, mode="valid")  # (N,)
+    if local_mean.shape[0] != n:
+        # window is even: 'valid' length is n+1 -- drop the extra tap so the
+        # reference stays aligned one-to-one with ref_frame's own beams.
+        local_mean = local_mean[: n]
+    return r - local_mean[None, :, None]
+
+
+def _global_normalize(r: np.ndarray) -> np.ndarray:
+    """
+    Subtract a single whole-frame reference (the current frame's mean range)
+    from every beam of every temporal slice. The cheap, uniform counterpart
+    to per-beam local centering (DR-SPAAM's cutout() approach): removes "how
+    far away is this room on average" as a memorizable per-scene shortcut,
+    without touching per-beam relative shape or frame-to-frame differences
+    (the same constant is subtracted everywhere, so those are unaffected).
+    Diagnostic per docs/IDEAS_BACKLOG.md item 5: weaker than per-beam
+    centering by design (position is still untouched) -- run alongside it to
+    see how much of any gain is explained by scale/room-depth alone.
+    """
+    ref = r[-1].mean()
+    return r - ref
+
+
+def _diff_encode(r: np.ndarray) -> np.ndarray:
+    """
+    Replace a (T, N, 1) stack of raw/aligned frames with an explicit-motion
+    encoding of the same shape: the last T-1 slots become frame-to-frame
+    differences (diffs[t] = r[t+1] - r[t], how the scan changed moving from
+    frame t to t+1) and the final slot stays the raw current frame -- so the
+    network gets one absolute reference plus T-1 motion channels instead of
+    T repeated near-absolute snapshots. A static background nets to ~0 in
+    every diff channel; a moving person doesn't. Shape-preserving (still
+    (T, N, 1)), so no architecture change is needed to use it. See
+    docs/IDEAS_BACKLOG.md item 5.
+    """
+    if r.shape[0] < 2:
+        return r
+    diffs = r[1:] - r[:-1]           # (T-1, N, 1)
+    current = r[-1:]                  # (1, N, 1)
+    return np.concatenate([diffs, current], axis=0)  # (T, N, 1)
+
+
 def _extract_input(net, scan, scans_hist, odoms_hist, angles, cfg, device,
-                   align_scans: bool = True):
+                   align_scans: bool = True, zero_history: bool = False,
+                   diff_channels: bool = False, global_normalize: bool = False,
+                   local_normalize_window: int = 0):
     """
     Build the model input tensor from raw scan data.
 
@@ -502,16 +591,38 @@ def _extract_input(net, scan, scans_hist, odoms_hist, angles, cfg, device,
                               aligned_raw_scan(); falls back to raw_scan() if odoms
                               are zero (FROG without odom file).
                               With align_scans=False: raw_scan() — no odometry used.
+
+    zero_history: ablation flag — zero every historical frame (all but the
+    last/current one) before feature extraction, so the model only ever sees
+    real data from the current scan. Used to measure how much the temporal
+    window actually contributes vs. a single-frame-equivalent input, with the
+    architecture (T dimension, parameter count) held fixed.
+
+    diff_channels, global_normalize: raw_scan-mode only -- see _diff_encode()/
+    _global_normalize(). Both representation choices, not augmentations: must
+    be applied identically at train and eval time, unlike beam_shift_aug.
     """
+    if zero_history:
+        scans_hist = scans_hist.copy()
+        scans_hist[:-1] = 0.0
     if getattr(net, "INPUT_MODE", "cutout") == "raw_scan":
         if align_scans:
-            r = aligned_raw_scan(scans_hist, odoms_hist, cfg.laser_inc)
+            r = aligned_raw_scan(scans_hist, odoms_hist, cfg.laser_inc, angles=angles)
         else:
             r = raw_scan(scans_hist)
+        if diff_channels:
+            r = _diff_encode(r)
+        if global_normalize:
+            r = _global_normalize(r)
+        if local_normalize_window > 0:
+            r = _local_normalize(r, local_normalize_window)
         return torch.from_numpy(r.transpose(1, 0, 2)).to(device)  # (N_beams, T, 1)
     else:
-        nsamp = getattr(net, "N_SAMP", DrowDetector.N_SAMP)
+        nsamp       = getattr(net, "N_SAMP", DrowDetector.N_SAMP)
+        win_sz      = getattr(net, "WIN_SZ", 1.66)
+        thresh_dist = getattr(net, "THRESH_DIST", 1)
         cut = cutout(scans_hist, odoms_hist, len(scan),
+                     win_sz=win_sz, thresh_dist=thresh_dist,
                      nsamp=nsamp, laserIncrement=cfg.laser_inc)
         return torch.from_numpy(cut).to(device)                   # (N_beams, T, N_SAMP)
 
@@ -519,6 +630,48 @@ def _extract_input(net, scan, scans_hist, odoms_hist, angles, cfg, device,
 # ---------------------------------------------------------------------------
 # Cached frame dataset  (speeds up multi-epoch training by ~2–4×)
 # ---------------------------------------------------------------------------
+
+def _shift_beams(t: torch.Tensor, shift: int) -> torch.Tensor:
+    """
+    Shift a (N, ...) tensor along its beam axis by `shift` positions,
+    edge-clamping the revealed boundary (repeats the boundary value, same
+    convention DROW_Dataset.get_scan() already uses for its own out-of-range
+    clamping). new[i] = old[i - shift] -- content moves toward higher index
+    (physically "left") for shift > 0.
+
+    Applied post-hoc to make_targets()/aligned_raw_scan()/cutout()'s already-
+    computed outputs rather than to the raw scan+GT inputs: labels and vote
+    offsets are stored per beam-index slot, and vote_targets' (dx, dy) values
+    are already relative to whichever beam holds them, so relabeling which
+    slot holds which value is a self-contained permutation -- it doesn't need
+    to re-derive any angle-dependent geometry, and so can't reintroduce the
+    kind of sign bug aligned_raw_scan()'s own beam-index shift had.
+    """
+    if shift == 0:
+        return t
+    n = t.shape[0]
+    idx = torch.clamp(torch.arange(n, device=t.device) - shift, 0, n - 1)
+    return t[idx]
+
+
+def _jitter_range(x: torch.Tensor, scale_eps: float, offset_delta: float) -> torch.Tensor:
+    """
+    Multiplicative scale + additive offset jitter on the input tensor only --
+    training-time augmentation forcing robustness to small absolute range/
+    scale perturbations. Deliberately does NOT touch labels/vote_targets:
+    those encode a geometric relationship (where's the person relative to
+    this beam) that's still approximately valid under jitter this small
+    (scale_eps, offset_delta both meant to be small relative to
+    vote_collect_radius), the same way image-classification brightness/
+    contrast jitter perturbs pixels without relabeling the image. See
+    docs/IDEAS_BACKLOG.md item 5.
+    """
+    if scale_eps <= 0 and offset_delta <= 0:
+        return x
+    scale  = 1.0 + random.uniform(-scale_eps, scale_eps) if scale_eps > 0 else 1.0
+    offset = random.uniform(-offset_delta, offset_delta) if offset_delta > 0 else 0.0
+    return x * scale + offset
+
 
 class LidarFrameDataset(Dataset):
     """
@@ -538,6 +691,17 @@ class LidarFrameDataset(Dataset):
     ``cache=False`` to recompute every access instead and trade training
     time for that memory back on RAM-constrained machines.
 
+    beam_shift_aug (0 = off): training-only data augmentation. Every access
+    applies a *fresh* random beam-index roll (uniform in
+    [-beam_shift_aug, beam_shift_aug]) to the cached/freshly-built tensors,
+    so the same underlying frame lands at a different absolute beam index
+    each epoch -- intended to break the "this absolute beam index = this
+    room's doorway" shortcut a small, fixed-room-count training set makes
+    possible (see docs/IDEAS_BACKLOG.md item 5). Cheap: applied to the small
+    (N, ...) output tensors, after the cache lookup, so it doesn't defeat
+    caching the way augmenting the raw inputs before make_targets()/
+    aligned_raw_scan() would (those would need recomputing every epoch).
+
     Parameters
     ----------
     dataset     : DROW_Dataset or FROG_Dataset
@@ -546,12 +710,17 @@ class LidarFrameDataset(Dataset):
     vote_radius : positive-beam radius around GT (same as vote_collect_radius)
     nsamp       : number of cutout samples per beam (ignored for raw_scan)
     cache       : keep preprocessed frames in RAM across epochs (default: True)
+    beam_shift_aug : max random beam-index roll applied per access, 0 = off
     """
 
     def __init__(self, dataset, cfg, input_mode: str,
                  vote_radius: float, nsamp: int = 48, cache: bool = True,
                  head: str = "drow", heatmap_sigma: float = 2.0,
-                 align_scans: bool = True):
+                 align_scans: bool = True, zero_history: bool = False,
+                 dtime: int = 1, beam_shift_aug: int = 0,
+                 diff_channels: bool = False, global_normalize: bool = False,
+                 local_normalize_window: int = 0,
+                 range_jitter_scale: float = 0.0, range_jitter_offset: float = 0.0):
         self._dataset       = dataset
         self._cfg           = cfg
         self._input_mode    = input_mode
@@ -563,6 +732,23 @@ class LidarFrameDataset(Dataset):
         # Only apply alignment when consuming raw_scan format; cutout() has its own
         # built-in rotation correction and does not use this flag.
         self._align_scans   = align_scans and (input_mode == "raw_scan")
+        # Ablation: zero every historical frame so training only ever sees
+        # real data from the current scan — see _extract_input()'s docstring.
+        self._zero_history  = zero_history
+        # Stride (in raw scans) between the dataset.time_frame frames fetched
+        # per sample — see DROW_Dataset.get_scan()/FROG_Dataset.get_scan().
+        # dtime=1 (default): consecutive frames, the original behaviour.
+        self._dtime          = dtime
+        self._beam_shift_aug = beam_shift_aug
+        # Representation choices, not augmentations -- must match at eval
+        # time (see evaluate_auc()'s own diff_channels/global_normalize params).
+        self._diff_channels  = diff_channels
+        self._global_normalize = global_normalize
+        self._local_normalize_window = local_normalize_window
+        # Training-only augmentation (like beam_shift_aug): applied fresh per
+        # access in _augment(), to x only, never at eval time.
+        self._range_jitter_scale  = range_jitter_scale
+        self._range_jitter_offset = range_jitter_offset
         self._angles        = cfg.angles_fn(dataset.scans[0].shape[1])
         self.indices      = [
             (seq, det_idx)
@@ -576,13 +762,16 @@ class LidarFrameDataset(Dataset):
 
     def __getitem__(self, idx: int):
         if self._cache_enabled and idx in self._cache:
-            return self._cache[idx]
+            return self._augment(self._cache[idx])
 
         seq, det_idx = self.indices[idx]
         ds    = self._dataset
         iscan = ds.idet2iscan[seq][det_idx]
         scan  = ds.scans[seq][iscan]
-        scans_hist, odoms_hist = ds.get_scan(seq, iscan, ds.time_frame)
+        scans_hist, odoms_hist = ds.get_scan(seq, iscan, ds.time_frame, dtime=self._dtime)
+        if self._zero_history:
+            scans_hist = scans_hist.copy()
+            scans_hist[:-1] = 0.0
 
         gt_per_class = {
             1: ds.det_wc[seq][det_idx],
@@ -594,9 +783,15 @@ class LidarFrameDataset(Dataset):
 
         if self._input_mode == "raw_scan":
             if self._align_scans:
-                arr = aligned_raw_scan(scans_hist, odoms_hist, self._cfg.laser_inc)
+                arr = aligned_raw_scan(scans_hist, odoms_hist, self._cfg.laser_inc, angles=self._angles)
             else:
                 arr = raw_scan(scans_hist)
+            if self._diff_channels:
+                arr = _diff_encode(arr)
+            if self._global_normalize:
+                arr = _global_normalize(arr)
+            if self._local_normalize_window > 0:
+                arr = _local_normalize(arr, self._local_normalize_window)
             x = torch.from_numpy(
                 np.asarray(arr, dtype=np.float32).transpose(1, 0, 2))  # (N,T,1)
         else:
@@ -611,6 +806,22 @@ class LidarFrameDataset(Dataset):
             result = result + (torch.from_numpy(hm),)
         if self._cache_enabled:
             self._cache[idx] = result
+        return self._augment(result)
+
+    def _augment(self, result: tuple) -> tuple:
+        """Apply fresh random training-only augmentation to an (already
+        cached-or-not) result tuple: a beam-index roll (see beam_shift_aug)
+        applied to every tensor, then range scale/offset jitter (see
+        _jitter_range) applied to x only -- labels/vote_targets stay the
+        clean geometric ground truth."""
+        if self._beam_shift_aug > 0:
+            shift = random.randint(-self._beam_shift_aug, self._beam_shift_aug)
+            if shift != 0:
+                result = tuple(_shift_beams(t, shift) for t in result)
+        if self._range_jitter_scale > 0 or self._range_jitter_offset > 0:
+            x, *rest = result
+            x = _jitter_range(x, self._range_jitter_scale, self._range_jitter_offset)
+            result = (x, *rest)
         return result
 
 
@@ -734,7 +945,11 @@ def _safe_auc(recs, precs):
 
 def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
                  v2d_conf: dict = None, device: str = "cpu",
-                 batch_size: int = 1, align_scans: bool = True):
+                 batch_size: int = 1, align_scans: bool = True,
+                 zero_history: bool = False, dtime: int = 1,
+                 diff_channels: bool = False, global_normalize: bool = False,
+                 local_normalize_window: int = 0,
+                 return_curves: bool = False, tracker_kwargs: dict = None):
     """
     Run full inference on every annotated frame and compute per-class AUC.
 
@@ -811,14 +1026,24 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
                     all_wcs.append(wc_i); all_was.append(wa_i); all_wps.append(wp_i)
             buf_x.clear(); buf_meta.clear()
 
+        # Some published checkpoints (e.g. DR-SPAAM's dr_spaam_e40.pth) were
+        # trained with a longer temporal window than dataset.time_frame — the
+        # network's own num_scans (when present) takes precedence so the
+        # auto-regressive template gets the refinement depth it expects.
+        _time_frame = getattr(net, "num_scans", dataset.time_frame)
+
         for seq, det_idx in all_pairs:
             iscan = dataset.idet2iscan[seq][det_idx]
             scan  = dataset.scans[seq][iscan]
-            scans_hist, odoms_hist = dataset.get_scan(seq, iscan, dataset.time_frame)
+            scans_hist, odoms_hist = dataset.get_scan(seq, iscan, _time_frame, dtime=dtime)
 
             buf_x.append(_extract_input(net, scan, scans_hist, odoms_hist,
                                         _angles, cfg, device,
-                                        align_scans=align_scans))
+                                        align_scans=align_scans,
+                                        zero_history=zero_history,
+                                        diff_channels=diff_channels,
+                                        global_normalize=global_normalize,
+                                        local_normalize_window=local_normalize_window))
             buf_meta.append((scan,
                              dataset.det_wc[seq][det_idx],
                              dataset.det_wa[seq][det_idx],
@@ -875,21 +1100,86 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
         detections = votes_to_detections(x_arr, y_arr, p_arr, **v2d_conf)
         det_x, det_y, det_p, det_f = _deep2flat(detections)
 
+    if tracker_kwargs is not None:
+        # Late-fusion temporal tracker over this model's own per-frame "wp"
+        # (person) detections — a post-hoc, no-retraining filter, run in
+        # frame order with the tracker reset at sequence boundaries. Only
+        # the wp confidence column is tracked (FROG, the dataset this was
+        # built for, has no wc/wa annotations anyway); other columns are
+        # zeroed. See library/follow_the_drow/utils/tracking.py.
+        by_frame: dict = {}
+        for i in range(len(det_f)):
+            by_frame.setdefault(int(det_f[i]), []).append(
+                (float(det_p[i, 3]), float(det_x[i]), float(det_y[i])))
+
+        new_x, new_y, new_p, new_f = [], [], [], []
+        tracker, prev_seq = None, object()
+        prev_theta, prev_wx, prev_wy = 0.0, 0.0, 0.0
+        for frame_idx, (seq, det_idx) in enumerate(all_pairs):
+            iscan = dataset.idet2iscan[seq][det_idx]
+            wxya = dataset.odoms[seq][iscan]["xya"]
+            theta, wx, wy = float(wxya[2]), float(wxya[0]), float(wxya[1])
+            if seq != prev_seq:
+                tracker, prev_seq = SimpleTracker(**tracker_kwargs), seq
+                prev_theta, prev_wx, prev_wy = theta, wx, wy
+            # Real per-frame heading/translation delta where odometry exists
+            # (DROW); naturally 0.0 on FROG (confirmed all-zero — Section
+            # 8.6) with no special-casing needed, matching its "assume
+            # static sensor" fallback exactly.
+            ego_dtheta = theta - prev_theta
+            ego_dxy = odom_xya_delta_to_tracker_frame(wx - prev_wx, wy - prev_wy, theta)
+            prev_theta, prev_wx, prev_wy = theta, wx, wy
+            for score, x, y in tracker.step(by_frame.get(frame_idx, []), ego_dtheta, ego_dxy):
+                new_x.append(x); new_y.append(y); new_f.append(frame_idx)
+                new_p.append([0.0, 0.0, 0.0, score])
+        det_x = np.array(new_x, dtype=np.float32)
+        det_y = np.array(new_y, dtype=np.float32)
+        det_f = np.array(new_f, dtype=np.int64)
+        det_p = np.array(new_p, dtype=np.float32) if new_p else np.zeros((0, 4), dtype=np.float32)
+
     wd, wc, wa, wp = _process_detections(
         det_x, det_y, det_p, det_f,
         all_wcs, all_was, all_wps, eval_r,
     )
-    return {
+    result = {
         "agnostic": _safe_auc(*wd[:2]),
         "wc":       _safe_auc(*wc[:2]),
         "wa":       _safe_auc(*wa[:2]),
         "wp":       _safe_auc(*wp[:2]),
     }
+    if return_curves:
+        # (recall, precision, threshold) arrays for the "wp" (person) class —
+        # for error-breakdown analysis (TP/FP/FN at a chosen operating point)
+        # rather than just the integrated AUC. See utils/error_breakdown.py.
+        result["wp_curve"] = wp
+    return result
 
 
 # ---------------------------------------------------------------------------
 # Checkpoint helpers
 # ---------------------------------------------------------------------------
+
+def _arch_metadata(net) -> dict:
+    """
+    Extract architecture-capacity hyperparameters directly from a model
+    instance, for checkpoints saved via the generic save_checkpoint() path
+    (train_model()) — which historically saved none of this — rather than
+    each class's own save_weights() method (which does). Without it, a
+    custom-capacity run (--channels, --n-spatial-stages, etc., e.g. the
+    overfitting-reduction experiments) can't be re-evaluated later without
+    shape-mismatching against _default_args()'s hardcoded sizes.
+    """
+    meta = {}
+    for attr in ("n_time", "channels", "n_spatial_stages", "unet_channels"):
+        if hasattr(net, attr):
+            meta[attr] = getattr(net, attr)
+    # FullScanTCNDetector doesn't keep tcn_channels/backbone_channels as
+    # plain attributes — derive them the same way its own save_weights() does.
+    if hasattr(net, "temporal_tcn") and hasattr(net, "backbone"):
+        meta["tcn_channels"] = net.temporal_tcn[0].conv.out_channels
+        meta["backbone_channels"] = net.backbone.conv4.out_channels
+    return meta
+
 
 def save_checkpoint(path: Path, net, optimizer, epoch: int,
                     detector_name: str, dataset_name: str):
@@ -899,6 +1189,7 @@ def save_checkpoint(path: Path, net, optimizer, epoch: int,
         "optimizer": optimizer.state_dict(),
         "epoch":     epoch,
         "dataset":   dataset_name,
+        **_arch_metadata(net),
     }, path)
     print(f"  Checkpoint saved -> {path}")
 
@@ -945,6 +1236,13 @@ def _default_args(**overrides) -> SimpleNamespace:
         weight_decay=1e-4,
         dropout=0.5,
         time_frame=5,
+        dtime=1,
+        beam_shift_aug=0,
+        diff_channels=False,
+        global_normalize=False,
+        local_normalize_window=0,
+        range_jitter_scale=0.0,
+        range_jitter_offset=0.0,
         vote_radius=0.6,
         vote_weight=0.02,
         subsample=1.0,
@@ -958,6 +1256,7 @@ def _default_args(**overrides) -> SimpleNamespace:
         unet_channels=32,
         # alignment
         align_scans=True,
+        zero_history=False,
         # regularisation / scheduling
         patience=5,
         lr_schedule="plateau",
@@ -1042,9 +1341,13 @@ def train_model(args) -> dict:
     train_ds, val_ds, cfg = _setup_datasets(args)
 
     net = _build_model(args).to(device)
-    optimizer = _make_optimizer(net.parameters(), lr=args.lr,
-                                weight_decay=args.weight_decay,
-                                using_dml=using_dml)
+    if getattr(args, "init_weights", None):
+        load_checkpoint(args.init_weights, net)   # weights only — fresh optimizer/epoch
+    if getattr(args, "freeze_backbone", False):
+        _freeze_backbone(net)
+    optimizer = _make_optimizer(
+        (p for p in net.parameters() if p.requires_grad),
+        lr=args.lr, weight_decay=args.weight_decay, using_dml=using_dml)
 
     start_epoch = 0
     if args.resume:
@@ -1061,14 +1364,32 @@ def train_model(args) -> dict:
                               "heatmap" if args.detector == "temporal_unet" else "drow")
     _heatmap_sigma  = getattr(args, "heatmap_sigma", 2.0)
     _align_scans    = getattr(args, "align_scans", True)
+    _zero_history   = getattr(args, "zero_history", False)
+    _dtime          = getattr(args, "dtime", 1)
+    _beam_shift_aug = getattr(args, "beam_shift_aug", 0)
+    _diff_channels  = getattr(args, "diff_channels", False)
+    _global_normalize = getattr(args, "global_normalize", False)
+    _local_normalize_window = getattr(args, "local_normalize_window", 0)
+    _range_jitter_scale  = getattr(args, "range_jitter_scale", 0.0)
+    _range_jitter_offset = getattr(args, "range_jitter_offset", 0.0)
     train_frame_ds = LidarFrameDataset(
         train_ds, cfg, _input_mode, args.vote_radius, _nsamp,
         cache=_frame_cache, head=_head, heatmap_sigma=_heatmap_sigma,
-        align_scans=_align_scans)
+        align_scans=_align_scans, zero_history=_zero_history, dtime=_dtime,
+        beam_shift_aug=_beam_shift_aug, diff_channels=_diff_channels,
+        global_normalize=_global_normalize,
+        local_normalize_window=_local_normalize_window,
+        range_jitter_scale=_range_jitter_scale,
+        range_jitter_offset=_range_jitter_offset)
     val_frame_ds = (LidarFrameDataset(
         val_ds, cfg, _input_mode, args.vote_radius, _nsamp,
         cache=_frame_cache, head=_head, heatmap_sigma=_heatmap_sigma,
-        align_scans=_align_scans)
+        align_scans=_align_scans, zero_history=_zero_history, dtime=_dtime,
+        beam_shift_aug=0,  # never augment validation
+        diff_channels=_diff_channels, global_normalize=_global_normalize,
+        local_normalize_window=_local_normalize_window,
+        range_jitter_scale=0.0, range_jitter_offset=0.0)  # never augment validation
+        # the three representation flags above must match train
         if val_ds is not None else None)
 
     n_params = sum(p.numel() for p in net.parameters())
@@ -1178,7 +1499,10 @@ def train_model(args) -> dict:
             auc_ds = val_ds or train_ds
             aucs = evaluate_auc(net, auc_ds, cfg, eval_r=args.eval_r,
                                 device=device, batch_size=args.batch_size,
-                                align_scans=_align_scans)
+                                align_scans=_align_scans, zero_history=_zero_history,
+                                diff_channels=_diff_channels,
+                                global_normalize=_global_normalize,
+                                local_normalize_window=_local_normalize_window)
             history["auc_epochs"].append(epoch)
             history["val_auc_agnostic"].append(aucs["agnostic"])
             history["val_auc_wc"].append(aucs["wc"])
@@ -1203,7 +1527,9 @@ def train_model(args) -> dict:
             print("Computing final AUC on val set …")
             aucs = evaluate_auc(net, val_ds, cfg, eval_r=args.eval_r,
                                 device=device, batch_size=args.batch_size,
-                                align_scans=_align_scans)
+                                align_scans=_align_scans, diff_channels=_diff_channels,
+                                global_normalize=_global_normalize,
+                                local_normalize_window=_local_normalize_window)
             history["auc_epochs"].append(final_epoch)
             history["val_auc_agnostic"].append(aucs["agnostic"])
             history["val_auc_wc"].append(aucs["wc"])
@@ -1364,6 +1690,47 @@ def main():
                         help="Dropout for all models (default: 0.5)")
     parser.add_argument("--time-frame",  type=int,   default=5,
                         help="Number of scans in the temporal window (default: 5)")
+    parser.add_argument("--dtime",       type=int,   default=1,
+                        help="Stride (in raw scans) between the --time-frame scans "
+                             "fetched per sample (default: 1 = consecutive frames). "
+                             "E.g. on FROG (40Hz), --time-frame 10 --dtime 20 spans "
+                             "the last ~4.5s at 500ms spacing instead of the default "
+                             "~125ms window. See DROW_Dataset/FROG_Dataset.get_scan().")
+    parser.add_argument("--beam-shift-aug", type=int, default=0,
+                        help="Training-only data augmentation: max random beam-index "
+                             "roll applied per training sample (default: 0 = off). "
+                             "See LidarFrameDataset's beam_shift_aug docstring.")
+    parser.add_argument("--diff-channels", action="store_true", default=False,
+                        help="raw_scan mode only: replace T-1 of the T temporal "
+                             "slots with frame-to-frame differences (current frame "
+                             "kept raw) -- see _diff_encode(). A representation "
+                             "choice, not an augmentation: applied identically at "
+                             "train and eval time (evaluate.py --eval-diff-channels "
+                             "must match).")
+    parser.add_argument("--global-normalize", action="store_true", default=False,
+                        help="raw_scan mode only: subtract the current frame's mean "
+                             "range from every beam of every temporal slice -- see "
+                             "_global_normalize(). A representation choice, not an "
+                             "augmentation: applied identically at train and eval "
+                             "time (evaluate.py --eval-global-normalize must match).")
+    parser.add_argument("--local-normalize-window", type=int, default=0,
+                        help="raw_scan mode only: subtract a local beam-neighbourhood "
+                             "moving-average (window size in beams, 0 = off) from "
+                             "every beam of every temporal slice -- see "
+                             "_local_normalize(). The DR-SPAAM-inspired per-beam "
+                             "centering idea, without DR-SPAAM's expensive per-beam "
+                             "architecture. A representation choice, not an "
+                             "augmentation: applied identically at train and eval "
+                             "time (evaluate.py --eval-local-normalize-window must "
+                             "match).")
+    parser.add_argument("--range-jitter-scale", type=float, default=0.0,
+                        help="Training-only augmentation: multiplicative range jitter, "
+                             "fraction (0 = off, e.g. 0.1 = *[0.9, 1.1] per sample). "
+                             "See _jitter_range(). Applied to x only, never at eval.")
+    parser.add_argument("--range-jitter-offset", type=float, default=0.0,
+                        help="Training-only augmentation: additive range jitter in "
+                             "metres (0 = off, e.g. 0.1 = +[-0.1, 0.1]m per sample). "
+                             "See _jitter_range(). Applied to x only, never at eval.")
     parser.add_argument("--vote-radius", type=float, default=0.6)
     parser.add_argument("--vote-weight", type=float, default=0.02)
     parser.add_argument("--subsample",   type=float, default=1.0,
@@ -1401,6 +1768,12 @@ def main():
     parser.add_argument("--no-align-scans", dest="align_scans", action="store_false",
                         help="Disable odometry alignment (use raw, unaligned scans). "
                              "Reproduces the original unaligned baseline.")
+    parser.add_argument("--zero-history", action="store_true", default=False,
+                        help="Ablation: zero every historical frame in the T-frame "
+                             "window (all but the current/last one) before feature "
+                             "extraction, for both training and evaluation. Measures "
+                             "how much the temporal window actually contributes vs. "
+                             "a single-frame-equivalent input, architecture unchanged.")
     # Detection head (full-scan models only)
     parser.add_argument("--head", choices=["drow", "heatmap"], default=None,
                         help="Detection head for full-scan models (default: 'drow' "
@@ -1426,6 +1799,16 @@ def main():
     parser.add_argument("--out",    type=Path, default=Path("weights_trained.pth"))
     parser.add_argument("--resume", type=Path, default=None,
                         help="Resume from checkpoint")
+    parser.add_argument("--init-weights", type=Path, default=None,
+                        help="Initialise model weights from a checkpoint (e.g. a "
+                             "FROG-trained model) without touching optimizer state "
+                             "or epoch numbering — for fine-tuning on a new dataset "
+                             "with a fresh optimizer/LR, unlike --resume.")
+    parser.add_argument("--freeze-backbone", action="store_true", default=False,
+                        help="With --init-weights: freeze every parameter except the "
+                             "final output head, so fine-tuning only re-fits the last "
+                             "layer(s) instead of the whole network -- see "
+                             "_freeze_backbone().")
     parser.add_argument("--weights",type=Path, default=None,
                         help="Load weights (eval-only mode)")
     # Evaluation
@@ -1480,7 +1863,10 @@ def main():
         print("=== Evaluation ===")
         aucs = evaluate_auc(net, eval_ds, cfg, eval_r=args.eval_r, device=device,
                             batch_size=args.batch_size,
-                            align_scans=getattr(args, "align_scans", True))
+                            align_scans=getattr(args, "align_scans", True),
+                            diff_channels=getattr(args, "diff_channels", False),
+                            global_normalize=getattr(args, "global_normalize", False),
+                            local_normalize_window=getattr(args, "local_normalize_window", 0))
         print(f"  Agnostic (any) : {aucs['agnostic']:.1%}")
         print(f"  Wheelchair(wc) : {aucs['wc']:.1%}")
         print(f"  Walker    (wa) : {aucs['wa']:.1%}")

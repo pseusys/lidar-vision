@@ -43,12 +43,13 @@ return unbroken temporal windows.
 
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
+import re
 import shutil
 import ssl
 import urllib.request
 
 import numpy as np
-from numpy import array, concatenate, tile
+from numpy import array
 
 from ..utils.file_utils import FROG_DATA_PATH
 from ..utils.generic_utils import Logging
@@ -75,6 +76,20 @@ _SPLIT_TO_WHICH: Dict[Optional[str], str] = {
     "val":   "train_val",
     None:    "test",
 }
+
+# The FROG authors publish real per-session odometry as separate files named
+# after each individual recording's start time (frog_<HH-MM>_odom.npz), same
+# data/ directory as the .h5 files -- NOT one-per-.h5-file, since
+# frog_11-36_12-43_train_val.h5 itself bundles two sessions (11:36 and
+# 12:43) into one file. _SESSION_TOKEN_RE pulls those HH-MM tokens out of an
+# .h5 filename, in the order they appear (which matches chronological order
+# for every known filename), to build the matching odom filename(s).
+_SESSION_TOKEN_RE = re.compile(r"\d{2}-\d{2}")
+
+
+def _session_odom_filenames(h5_filename: str) -> List[str]:
+    tokens = _SESSION_TOKEN_RE.findall(h5_filename)
+    return [f"frog_{t}_odom.npz" for t in tokens]
 
 
 def _ssl_open(url: str):
@@ -132,7 +147,7 @@ def _download_file(url: str, dest: Path) -> None:
                     mb_total = total / 1e6
                     print(f"\r    {pct:3d}%  {mb_done:.1f} / {mb_total:.1f} MB",
                           end="", flush=True)
-    print(f"\r  Saved → {dest}" + " " * 30)
+    print(f"\r  Saved -> {dest}" + " " * 30)
 
 
 def frog_laser_angles(n: int = 720) -> np.ndarray:
@@ -148,7 +163,7 @@ def frog_laser_angles(n: int = 720) -> np.ndarray:
       beam 359 →  0    (forward,     0°)
       beam 719 → +π/2 - π/720  (leftmost, ≈ +89.75°)
     """
-    return np.linspace(-np.pi / 2, np.pi / 2, n, endpoint=False)
+    return np.linspace(-np.pi / 2, np.pi / 2, n, endpoint=False, dtype=np.float32)
 
 
 class FROG_Dataset(Logging):
@@ -220,7 +235,8 @@ class FROG_Dataset(Logging):
                     f"or set 'datapath' to the directory containing your .h5 files."
                 )
 
-        seq_data = [self._load_h5(f, split=split) for f in h5_files]
+        seq_data = [session for f in h5_files
+                   for session in self._load_h5(f, split=split)]
         n_seq = len(seq_data)
 
         # np.array([ndarray, ...], dtype=object) unpacks into inner dimensions
@@ -247,7 +263,7 @@ class FROG_Dataset(Logging):
         ]
 
         self._print(
-            f"FROG dataset loaded: {len(h5_files)} sequence(s), "
+            f"FROG dataset loaded: {n_seq} sequence(s) from {len(h5_files)} file(s), "
             f"split='{split}', time_frame={time_frame_size}"
         )
 
@@ -256,29 +272,24 @@ class FROG_Dataset(Logging):
     # ------------------------------------------------------------------
 
     def get_scan(
-        self, sequence_id: int, scan_id: int, time_window: int
+        self, sequence_id: int, scan_id: int, time_window: int, dtime: int = 1
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
-        Return a (scans, odoms) window ending at *scan_id*.
+        Return a (scans, odoms) window of `time_window` frames ending at
+        scan_id, spaced `dtime` raw scans apart (dtime=1: consecutive frames,
+        the original behaviour).
 
-        If there is not enough history the beginning is padded with copies of
-        the first scan / odometry entry (same behaviour as DROW_Dataset).
+        dtime > 1 spreads the same number of frames over more real time —
+        e.g. dtime=40 on FROG's 40Hz data spans ~4s instead of ~125ms, closer
+        to the ~500ms "half gait cycle" the T=5 window was originally sized
+        for at DROW's ~10Hz rate (see docs/RESEARCH.md Section 5.4/8.1.1).
+
+        If there is not enough history, indices are clamped to 0, which
+        repeats the earliest available scan/odom (same effect the old
+        pad-with-first-scan logic had, generalised via fancy indexing).
         """
-        start_time = scan_id - time_window + 1
-        if start_time < 0:
-            pad = abs(start_time)
-            scans = concatenate([
-                tile(self.scans[sequence_id][0], (pad, 1)),
-                self.scans[sequence_id][: scan_id + 1],
-            ])
-            odoms = concatenate([
-                np.repeat(self.odoms[sequence_id][:1], pad, axis=0),
-                self.odoms[sequence_id][: scan_id + 1],
-            ])
-        else:
-            scans = self.scans[sequence_id][start_time: scan_id + 1]
-            odoms = self.odoms[sequence_id][start_time: scan_id + 1]
-        return scans, odoms
+        idx = np.clip(scan_id - dtime * np.arange(time_window - 1, -1, -1), 0, scan_id)
+        return self.scans[sequence_id][idx], self.odoms[sequence_id][idx]
 
     # ------------------------------------------------------------------
     # Internal loaders
@@ -286,9 +297,38 @@ class FROG_Dataset(Logging):
 
     @classmethod
     def _load_h5(
-        cls, path: Path, split: Optional[str]
-    ) -> Tuple:
-        """Load one HDF5 file and return its data as a 8-tuple."""
+        cls, path: Path, split: Optional[str], session_gap_s: float = 300.0
+    ) -> List[Tuple]:
+        """
+        Load one HDF5 file and return a list of per-*session* 8-tuples (not
+        always exactly one).
+
+        Some FROG files bundle more than one physical recording -- found
+        empirically (not assumed) from the real timestamps in
+        frog_11-36_12-43_train_val.h5, whose name already says as much: two
+        of the six sessions in the paper's own Table 1 (starting 11:36 and
+        12:43) are concatenated into one file, with a ~24.6-hour real gap
+        between them (plus 61 much smaller sub-90s recording pauses that are
+        *not* session boundaries, just brief pauses within one session).
+        get_scan()'s temporal window has no way to know about a boundary
+        like that -- it will happily pull "history" from before a session
+        break into a window for an annotated frame shortly after it, feeding
+        the network raw scans that jump between two unrelated recordings
+        (different rooms, possibly different days), independent of whatever
+        odometry correction is or isn't applied on top. Splitting at gaps
+        this large into separate *sequences* (mirroring DROW's own
+        multi-sequence structure) fixes this the same way get_scan()'s
+        existing clamp-at-sequence-start already protects the very start of
+        a recording: a window can never reach past a sequence boundary.
+
+        session_gap_s=300s (5 min) is chosen to cleanly isolate only the one
+        genuine ~24.6-hour session boundary actually found in this dataset,
+        well above the largest ordinary within-session pause (~90s) --
+        those smaller pauses are left as ordinary (if temporally sparse)
+        in-sequence frames; see aligned_raw_scan()'s odometry-side handling
+        of small gaps (odometry_estimation.integrate_trajectory's max_dt)
+        for that separate, narrower concern.
+        """
         try:
             import h5py
         except ImportError as exc:
@@ -318,31 +358,68 @@ class FROG_Dataset(Logging):
         scans = np.where(np.isfinite(scans), scans, 10.0)
 
         N = len(scans)
-        scan_id = np.arange(N, dtype=np.uint32)
 
-        # Per-scan annotation lists → converted to (r, phi) for project_cartesian_from_polar compat.
+        # Per-scan annotation lists -> converted to (r, phi) for project_cartesian_from_polar compat.
         wp_per_scan = cls._build_wp_per_scan(circles, circle_idx, circle_num, N)
 
-        # Only expose scans that pass the split filter as "detection frames"
-        det_id  = np.where(det_mask)[0].astype(np.uint32)
-        det_wp  = [wp_per_scan[int(i)] for i in det_id]
-        det_wc  = [[] for _ in det_id]   # FROG has no wheelchair class
-        det_wa  = [[] for _ in det_id]   # FROG has no walker class
+        # Split into sessions at any gap exceeding session_gap_s -- see
+        # docstring. bounds are [start, end) index ranges into the full N
+        # arrays above; a file with no large gap yields exactly one session
+        # spanning the whole file (the common case, unchanged behaviour).
+        gap_idx = np.where(np.diff(timestamps) > session_gap_s)[0]
+        starts = [0] + [int(i) + 1 for i in gap_idx]
+        ends = [int(i) + 1 for i in gap_idx] + [N]
+        n_sessions = len(starts)
 
-        # Odometry
-        odom_path = path.with_name(path.stem + "_odom.npz")
-        odoms = cls._load_or_fake_odom(odom_path, timestamps)
+        # Real per-session odometry (see _session_odom_filenames()) is
+        # preferred when present on disk; it's published by the FROG
+        # authors per individual recording, matching 1:1 with the sessions
+        # just split out above (both derived from the same underlying
+        # per-session structure -- verified independently: the real files'
+        # own timestamp gap between sessions matches this file's detected
+        # scan-timestamp gap to within 3 seconds). Falls back to the
+        # existing single shared-file convention (this project's own
+        # estimated pseudo-odometry, or fake/zero) per session when the
+        # matching real file isn't there, or when the token count parsed
+        # from the filename doesn't line up with the sessions actually
+        # found (an unexpected filename shape -- safer to fall back for
+        # every session than guess a wrong pairing).
+        real_odom_names = _session_odom_filenames(path.name)
+        use_real_per_session = len(real_odom_names) == n_sessions
+        shared_odom_path = path.with_name(path.stem + "_odom.npz")
 
-        return (
-            scan_id,
-            timestamps.astype(np.float32),
-            scans,
-            det_id,
-            array(det_wc, dtype=object),
-            array(det_wa, dtype=object),
-            array(det_wp, dtype=object),
-            odoms,
-        )
+        sessions = []
+        for session_i, (start, end) in enumerate(zip(starts, ends)):
+            n_s = end - start
+            scan_id_s = np.arange(n_s, dtype=np.uint32)
+            timestamps_s = timestamps[start:end]
+            scans_s = scans[start:end]
+            det_mask_s = det_mask[start:end]
+            wp_per_scan_s = wp_per_scan[start:end]
+
+            det_id_s = np.where(det_mask_s)[0].astype(np.uint32)
+            det_wp_s = [wp_per_scan_s[int(i)] for i in det_id_s]
+            det_wc_s = [[] for _ in det_id_s]   # FROG has no wheelchair class
+            det_wa_s = [[] for _ in det_id_s]   # FROG has no walker class
+
+            odom_path = shared_odom_path
+            if use_real_per_session:
+                candidate = path.with_name(real_odom_names[session_i])
+                if candidate.exists():
+                    odom_path = candidate
+            odoms_s = cls._load_or_fake_odom(odom_path, timestamps_s)
+
+            sessions.append((
+                scan_id_s,
+                timestamps_s.astype(np.float32),
+                scans_s,
+                det_id_s,
+                array(det_wc_s, dtype=object),
+                array(det_wa_s, dtype=object),
+                array(det_wp_s, dtype=object),
+                odoms_s,
+            ))
+        return sessions
 
     @staticmethod
     def _build_wp_per_scan(
@@ -467,6 +544,22 @@ class FROG_Dataset(Logging):
             dest = datapath / fname
             if dest.exists():
                 print(f"  Already present: {dest}")
-                continue
-            url = f"{_BASE_URL}/{fname}"
-            _download_file(url, dest)
+            else:
+                url = f"{_BASE_URL}/{fname}"
+                _download_file(url, dest)
+
+            # Real per-session odometry, published separately from the scan
+            # data (see _session_odom_filenames()'s docstring) -- best
+            # effort: without it, FROG_Dataset still works, just falling
+            # back to estimated/zero odometry (see _load_or_fake_odom()).
+            for odom_fname in _session_odom_filenames(fname):
+                odom_dest = datapath / odom_fname
+                if odom_dest.exists():
+                    print(f"  Already present: {odom_dest}")
+                    continue
+                try:
+                    _download_file(f"{_BASE_URL}/{odom_fname}", odom_dest)
+                except Exception as exc:
+                    print(f"  [WARN] Could not download {odom_fname}: {exc}\n"
+                          f"        FROG_Dataset will fall back to estimated/"
+                          f"zero odometry for the affected session(s).")

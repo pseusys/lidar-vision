@@ -33,6 +33,7 @@ Usage
 import argparse
 import sys
 import time
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
@@ -61,6 +62,7 @@ from follow_the_drow.utils.drow_utils import (
     project_cartesian_from_polar, standard_cartesian_to_project_cartesian, cutout, raw_scan,
     _prec_rec_2d,
 )
+from follow_the_drow.utils.tracking import SimpleTracker
 from train import (
     _make_optimizer, _build_model, _default_args,
     evaluate_auc, load_checkpoint, _safe_auc,
@@ -100,10 +102,16 @@ def _subsample_dataset(dataset, stride: int) -> None:
 
 def _load_dataset(args):
     """Return (dataset, cfg)."""
+    # Only relevant when evaluating a checkpoint trained with a non-default
+    # --time-frame (e.g. the DROW long-stride experiments, Section 8) — the
+    # dataset's own window size, not the model's, is what evaluate_auc()'s
+    # get_scan() calls actually use (see train.py's evaluate_auc()). Default
+    # 5 matches every existing checkpoint, so omitting this flag is a no-op.
+    time_frame_size = getattr(args, "eval_time_frame", 5)
     if args.dataset == "frog":
         from follow_the_drow.datasets import FROG_Dataset, frog_laser_angles
         print(f"Loading FROG dataset (split='{args.split}') ...")
-        ds = FROG_Dataset(split=args.split)
+        ds = FROG_Dataset(split=args.split, time_frame_size=time_frame_size)
         cfg = SimpleNamespace(
             name="frog",
             angles_fn=frog_laser_angles,
@@ -126,7 +134,7 @@ def _load_dataset(args):
     else:
         from follow_the_drow.datasets import DROW_Dataset
         print("Loading DROW test set ...")
-        ds = DROW_Dataset()
+        ds = DROW_Dataset(time_frame_size=time_frame_size)
         cfg = SimpleNamespace(
             name="drow",
             angles_fn=laser_angles,
@@ -301,18 +309,43 @@ def eval_algorithmic(dataset, cfg, eval_r: float = 0.5) -> dict:
 
 def eval_nn_model(det_name: str, weights_path: Path,
                   dataset, cfg, eval_r: float = 0.5,
-                  batch_size: int = 16) -> dict:
+                  batch_size: int = 16, dtime: int = 1,
+                  diff_channels: bool = False, global_normalize: bool = False,
+                  local_normalize_window: int = 0,
+                  return_curves: bool = False,
+                  tracker_kwargs: Optional[dict] = None,
+                  v2d_conf: Optional[dict] = None) -> dict:
     """Load checkpoint and compute AUC on CPU."""
     if det_name == "drspaam" and weights_path == DrSpaamDetector.DEFAULT_WEIGHTS:
         net = DrSpaamDetector.load_published()
     else:
-        args = _default_args(detector=det_name, dataset=cfg.name)
+        # Full-scan architectures save their own capacity hyperparameters
+        # (channels, n_spatial_stages, ...) in the checkpoint — read them
+        # back rather than always building at _default_args()'s hardcoded
+        # sizes, or a checkpoint saved with reduced capacity (e.g. the
+        # overfitting-reduction experiments) would shape-mismatch on load.
+        raw_ckpt = torch.load(weights_path, map_location="cpu")
+        arch_keys = ("channels", "n_spatial_stages", "tcn_channels",
+                    "backbone_channels", "unet_channels")
+        overrides = {k: raw_ckpt[k] for k in arch_keys if k in raw_ckpt}
+        if "n_time" in raw_ckpt:
+            overrides["time_frame"] = raw_ckpt["n_time"]  # checkpoint key -> _default_args field name
+        args = _default_args(detector=det_name, dataset=cfg.name, **overrides)
         net  = _build_model(args)
-        load_checkpoint(weights_path, net)
+        net.load_state_dict(raw_ckpt["model"])
+        print(f"  Loaded checkpoint from {weights_path}  (epoch {raw_ckpt.get('epoch', 0)}, "
+              f"arch overrides: {overrides or 'none'})")
     net.eval()
-    print(f"Evaluating {det_name} on CPU (eval batch_size={batch_size}) ...")
+    print(f"Evaluating {det_name} on CPU (eval batch_size={batch_size}, dtime={dtime}, "
+          f"diff_channels={diff_channels}, global_normalize={global_normalize}, "
+          f"local_normalize_window={local_normalize_window}, "
+          f"tracker={'on' if tracker_kwargs is not None else 'off'}) ...")
     aucs = evaluate_auc(net, dataset, cfg, eval_r=eval_r, device="cpu",
-                         batch_size=batch_size)
+                         batch_size=batch_size, dtime=dtime,
+                         diff_channels=diff_channels, global_normalize=global_normalize,
+                         local_normalize_window=local_normalize_window,
+                         return_curves=return_curves, tracker_kwargs=tracker_kwargs,
+                         v2d_conf=v2d_conf)
     print(f"  Agnostic (any) : {aucs['agnostic']:.1%}")
     print(f"  Wheelchair(wc) : {aucs['wc']:.1%}")
     print(f"  Walker    (wa) : {aucs['wa']:.1%}")
@@ -321,12 +354,99 @@ def eval_nn_model(det_name: str, weights_path: Path,
     return aucs
 
 
+def _temporal_consensus_filter(detections, seq_id, cache_by_seq,
+                               window: int = 5, min_agree: Optional[int] = None,
+                               radius: float = 0.3, decay: float = 0.7,
+                               weighting: str = "exp"):
+    """
+    Late-fusion temporal filter over a detector's own raw per-frame outputs —
+    no retraining, works with any detector that returns (score, x, y) tuples.
+
+    Keeps a rolling per-sequence cache of the last `window` frames' detections
+    (deque, so it correctly resets at sequence boundaries via `cache_by_seq`).
+    For each detection in the current frame, greedily nearest-neighbor matches
+    it against each cached frame's own detections within `radius` (metres).
+    If it was seen in at least `min_agree` of the last `window` frames
+    (default: all of them), it survives; detections seen in fewer frames are
+    dropped entirely — a single-frame flicker doesn't get reported at all.
+
+    Score = time-weighted average of the matched per-frame scores, most
+    recent frame weighted highest. age=0 is the current frame, age=1 is one
+    frame back, etc. Two weighting shapes:
+      "exp"    : weight(age) = decay**age — front-loaded (most of the
+                 discount happens in the first step or two, then flattens);
+                 the standard EMA/track-confirmation choice, and the only one
+                 that admits a cheap O(1)-memory recursive update if this
+                 ever moves from an eval-time pilot into the live ROS node.
+      "linear" : weight(age) = window - age — discount spreads evenly across
+                 the window; one fewer hyperparameter (no decay constant).
+    A frame where the detection wasn't matched contributes no weight (it's
+    simply absent from the average, not treated as a zero score) — matching
+    this project's convention elsewhere of only ever comparing real
+    observations.
+
+    This is a pilot for testing whether a static "object" can be told apart
+    from a "person" using persistence across several *independent* per-frame
+    detections, as an alternative/complement to early-fusing raw scans before
+    the network (what SpaceTimeCNN/FullScanTCN/TemporalUNet do).
+
+    Note: matching is greedy nearest-neighbor per cached frame, not a proper
+    multi-object tracker — fine for sparse single/few-person frames, may
+    mismatch identities when several people are close together.
+
+    Parameters
+    ----------
+    detections    : list[(score, x, y)] — current frame's raw detections
+    seq_id        : sequence index, used as the cache key (resets across sequences)
+    cache_by_seq  : dict[int, deque] — caller-owned, persists across calls
+    window        : how many of the most recent frames (current included) to require agreement over
+    min_agree     : minimum number of those frames a detection must appear in (default: window, i.e. all)
+    radius        : match radius in metres
+    decay         : "exp" weighting's per-frame decay in (0, 1] — 1.0 = plain mean, lower = more recency-biased
+    weighting     : "exp" or "linear" — see above
+
+    Returns: list[(score, x, y)] — filtered/rescored detections for this frame
+    """
+    assert weighting in ("exp", "linear"), f"weighting must be 'exp' or 'linear', got {weighting!r}"
+    if min_agree is None:
+        min_agree = window
+
+    def _weight(age: int) -> float:
+        return decay ** age if weighting == "exp" else max(window - age, 0)
+
+    cache = cache_by_seq.setdefault(seq_id, deque(maxlen=window))
+    cache.append(detections)
+
+    out = []
+    for score, x, y in detections:
+        matched = []  # (weight, score) pairs
+        for age, frame_dets in enumerate(reversed(cache)):  # age 0 = current frame
+            best_score, best_d = None, radius
+            for s2, x2, y2 in frame_dets:
+                d = ((x - x2) ** 2 + (y - y2) ** 2) ** 0.5
+                if d < best_d:
+                    best_d, best_score = d, s2
+            if best_score is not None:
+                matched.append((_weight(age), best_score))
+        if len(matched) >= min_agree:
+            wsum = sum(w for w, _ in matched)
+            out.append((float(sum(w * s for w, s in matched) / wsum), x, y))
+    return out
+
+
 def eval_lfe_model(
     det_name:    str,
     detector,
     dataset,
     cfg,
     eval_r:      float = 0.5,
+    consensus_window:   int = 1,
+    consensus_min_agree: Optional[int] = None,
+    consensus_radius:   float = 0.3,
+    consensus_decay:    float = 0.7,
+    consensus_weighting: str = "exp",
+    return_curves:      bool = False,
+    tracker_kwargs:     Optional[dict] = None,
 ) -> dict:
     """
     Evaluate an LFE-style detector (raw scan input, ONNX) and compute AUC.
@@ -354,6 +474,8 @@ def eval_lfe_model(
     gt_xy_wp,  gt_frame_wp,  gt_r_wp  = [], [], []
     gt_xy_any, gt_frame_any, gt_r_any = [], [], []
 
+    cache_by_seq: dict = {}
+    trackers_by_seq: dict = {}
     fid = 0
     for seq in range(len(dataset.det_id)):
         for det_idx in range(len(dataset.det_id[seq])):
@@ -364,6 +486,15 @@ def eval_lfe_model(
             # frame with a real person and zero detections is a miss
             # (false negative), not a frame to skip.
             detections = detector.detect(scan, angles)
+            if tracker_kwargs is not None:
+                tracker = trackers_by_seq.setdefault(seq, SimpleTracker(**tracker_kwargs))
+                detections = tracker.step(detections)
+            elif consensus_window > 1:
+                detections = _temporal_consensus_filter(
+                    detections, seq, cache_by_seq,
+                    window=consensus_window, min_agree=consensus_min_agree,
+                    radius=consensus_radius, decay=consensus_decay,
+                    weighting=consensus_weighting)
             for score, x, y in detections:
                 det_scores_wp.append(score);  det_xy_wp.append((x, y));  det_frame_wp.append(fid)
                 det_scores_any.append(score); det_xy_any.append((x, y)); det_frame_any.append(fid)
@@ -378,10 +509,10 @@ def eval_lfe_model(
 
             fid += 1
 
-    def _auc(det_scores, det_xy, det_frame, gt_xy, gt_frame, gt_r):
+    def _curve(det_scores, det_xy, det_frame, gt_xy, gt_frame, gt_r):
         if not det_scores or not gt_xy:
-            return float("nan")
-        recs, precs, _ = _prec_rec_2d(
+            return None
+        return _prec_rec_2d(
             np.array(det_scores, dtype=np.float32),
             np.array(det_xy, dtype=np.float32),
             np.array(det_frame),
@@ -389,16 +520,23 @@ def eval_lfe_model(
             np.array(gt_frame),
             np.array(gt_r, dtype=np.float32),
         )
-        return _safe_auc(recs, precs)
+
+    def _auc(curve):
+        return _safe_auc(curve[0], curve[1]) if curve is not None else float("nan")
+
+    wp_curve  = _curve(det_scores_wp,  det_xy_wp,  det_frame_wp,
+                       gt_xy_wp, gt_frame_wp, gt_r_wp)
+    any_curve = _curve(det_scores_any, det_xy_any, det_frame_any,
+                       gt_xy_any, gt_frame_any, gt_r_any)
 
     aucs = {
-        "agnostic": _auc(det_scores_any, det_xy_any, det_frame_any,
-                          gt_xy_any, gt_frame_any, gt_r_any),
+        "agnostic": _auc(any_curve),
         "wc":       float("nan"),   # LFE is class-agnostic
         "wa":       float("nan"),
-        "wp":       _auc(det_scores_wp, det_xy_wp, det_frame_wp,
-                          gt_xy_wp, gt_frame_wp, gt_r_wp),
+        "wp":       _auc(wp_curve),
     }
+    if return_curves:
+        aucs["wp_curve"] = wp_curve
 
     print(f"Evaluating {det_name} (ONNX) on CPU ...")
     print(f"  Agnostic (any) : {aucs['agnostic']:.1%}")
@@ -654,6 +792,87 @@ def main():
                              "(single-frame), which is fine for DROW's smaller test "
                              "split but impractically slow on FROG's ~120k-frame "
                              "test split (~3 fr/s at batch_size=1, ~11h/model).")
+    parser.add_argument("--eval-dtime", type=int, default=1,
+                        help="Stride (in raw scans) between the T frames in each "
+                             "detector's temporal window (default: 1 = consecutive "
+                             "frames, the original behaviour). E.g. on FROG (40 Hz) "
+                             "--eval-dtime 40 spreads a 5-frame window over the last "
+                             "4 seconds instead of the last 125 ms — passed straight "
+                             "to dataset.get_scan(), no retraining required to test "
+                             "on an existing checkpoint (out-of-distribution for it, "
+                             "but a cheap first signal). Applies to --spacetime-cnn/"
+                             "--fullscan-tcn/--temporal-unet/--drow/--drspaam/--li2former.")
+    parser.add_argument("--eval-time-frame", type=int, default=5,
+                        help="Number of scans in the temporal window the dataset "
+                             "builds via get_scan() (default: 5, matching every "
+                             "existing checkpoint). Set to match --time-frame T used "
+                             "when *training* the checkpoint being evaluated (e.g. "
+                             "the DROW long-stride experiments used --time-frame 10) "
+                             "— evaluate_auc() reads dataset.time_frame, not the "
+                             "model's own n_time attribute, for window size.")
+    parser.add_argument("--eval-diff-channels", action="store_true", default=False,
+                        help="Must match --diff-channels used when *training* the "
+                             "checkpoint being evaluated (default: False) — a "
+                             "representation choice, not an augmentation, so eval "
+                             "has to reproduce it exactly. Applies to --spacetime-cnn/"
+                             "--fullscan-tcn/--temporal-unet.")
+    parser.add_argument("--eval-global-normalize", action="store_true", default=False,
+                        help="Must match --global-normalize used when *training* the "
+                             "checkpoint being evaluated (default: False) — a "
+                             "representation choice, not an augmentation. Applies to "
+                             "--spacetime-cnn/--fullscan-tcn/--temporal-unet.")
+    parser.add_argument("--eval-local-normalize-window", type=int, default=0,
+                        help="Must match --local-normalize-window used when *training* "
+                             "the checkpoint being evaluated (default: 0 = off) — a "
+                             "representation choice, not an augmentation. Applies to "
+                             "--spacetime-cnn/--fullscan-tcn/--temporal-unet.")
+    parser.add_argument("--consensus-window", type=int, default=1,
+                        help="LFE only: late-fusion temporal consensus over the last "
+                             "N frames' own detections (default: 1 = off, i.e. normal "
+                             "single-frame behaviour). A detection must be seen within "
+                             "--consensus-radius in --consensus-min-agree (default: "
+                             "all N) of the last N frames to be reported; its score "
+                             "becomes the mean of the matched per-frame scores. No "
+                             "retraining needed — post-processes the detector's own "
+                             "raw per-frame output. See _temporal_consensus_filter().")
+    parser.add_argument("--consensus-min-agree", type=int, default=None,
+                        help="Minimum number of the last --consensus-window frames a "
+                             "detection must appear in to survive (default: all of them).")
+    parser.add_argument("--consensus-radius", type=float, default=0.3,
+                        help="Match radius in metres for --consensus-window (default: 0.3).")
+    parser.add_argument("--consensus-decay", type=float, default=0.7,
+                        help="Per-frame recency weight decay for --consensus-window's "
+                             "score when --consensus-weighting=exp (default: 0.7 — "
+                             "weight(age)=decay**age, age=0 is the current frame). "
+                             "1.0 = plain mean of matched scores; lower = more "
+                             "recency-biased. Ignored when --consensus-weighting=linear.")
+    parser.add_argument("--consensus-weighting", choices=["exp", "linear"], default="exp",
+                        help="Shape of --consensus-window's recency weighting (default: "
+                             "exp). 'exp': weight(age)=decay**age — front-loaded discount, "
+                             "and the only shape with a cheap O(1)-memory recursive update "
+                             "for a live deployment. 'linear': weight(age)=window-age — "
+                             "discount spreads evenly, no decay constant to pick.")
+    parser.add_argument("--tracker", action="store_true",
+                        help="LFE only: use the SimpleTracker (constant-velocity, "
+                             "Hungarian-matched, predict/confirm/coast) instead of "
+                             "--consensus-window's static-position averaging. Takes "
+                             "precedence over --consensus-window if both are given. "
+                             "See library/follow_the_drow/utils/tracking.py.")
+    parser.add_argument("--tracker-radius", type=float, default=0.5,
+                        help="SimpleTracker match gate in metres (default: 0.5).")
+    parser.add_argument("--tracker-min-hits", type=int, default=3,
+                        help="SimpleTracker: real matches needed before a track is "
+                             "reported at all (default: 3) — false-positive suppression.")
+    parser.add_argument("--tracker-max-age", type=int, default=3,
+                        help="SimpleTracker: consecutive missed frames a confirmed track "
+                             "survives, coasting on its predicted position, before being "
+                             "dropped (default: 3) — false-negative recovery window.")
+    parser.add_argument("--tracker-vel-alpha", type=float, default=0.5,
+                        help="SimpleTracker velocity-estimate smoothing in (0,1] "
+                             "(default: 0.5).")
+    parser.add_argument("--tracker-coast-decay", type=float, default=0.8,
+                        help="SimpleTracker: per-miss score decay while coasting "
+                             "(default: 0.8; 1.0 = no decay).")
 
     # What to run
     parser.add_argument("--verify",  action="store_true",
@@ -735,13 +954,25 @@ def main():
         print("=== AlgorithmicDetector ===\n")
         algo_stats = eval_algorithmic(dataset, cfg, eval_r=args.eval_r)
 
+        _tracker_kwargs = dict(
+            match_radius=args.tracker_radius,
+            min_hits=args.tracker_min_hits,
+            max_age=args.tracker_max_age,
+            vel_alpha=args.tracker_vel_alpha,
+            coast_decay=args.tracker_coast_decay,
+        ) if args.tracker else None
+
         # 3. NN models (cutout / full-scan, PyTorch)
         for det_name, weights_path in nn_weights.items():
             print(f"=== {det_name} ===\n")
             try:
                 nn_results[det_name] = eval_nn_model(
                     det_name, weights_path, dataset, cfg, eval_r=args.eval_r,
-                    batch_size=args.eval_batch_size)
+                    batch_size=args.eval_batch_size, dtime=args.eval_dtime,
+                    diff_channels=args.eval_diff_channels,
+                    global_normalize=args.eval_global_normalize,
+                    local_normalize_window=args.eval_local_normalize_window,
+                    tracker_kwargs=_tracker_kwargs)
             except Exception as exc:
                 print(f"  [ERROR] {exc}\n")
 
@@ -751,7 +982,13 @@ def main():
             try:
                 detector = cls(onnx_path=onnx_path)
                 nn_results[det_name] = eval_lfe_model(
-                    det_name, detector, dataset, cfg, eval_r=args.eval_r)
+                    det_name, detector, dataset, cfg, eval_r=args.eval_r,
+                    consensus_window=args.consensus_window,
+                    consensus_min_agree=args.consensus_min_agree,
+                    consensus_radius=args.consensus_radius,
+                    consensus_decay=args.consensus_decay,
+                    consensus_weighting=args.consensus_weighting,
+                    tracker_kwargs=_tracker_kwargs)
             except Exception as exc:
                 print(f"  [ERROR] {exc}\n")
 

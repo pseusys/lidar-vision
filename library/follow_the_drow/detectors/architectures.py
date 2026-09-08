@@ -141,6 +141,12 @@ class DrSpaamDetector(nn.Module):
     N_SAMP     = 56       # published weights use 56-pt cutouts (RA-L 2022)
     BEAM_BATCH = True     # train.py: pass (B, N, T, S), not flattened (B*N, T, S)
     DEFAULT_WEIGHTS = _DRSPAAM_WEIGHTS_PATH
+    # cutout_kwargs from the official dr_spaam.yaml — narrower and shallower
+    # than DROW's own defaults (window_width=1.66, window_depth=1.0):
+    # official DR-SPAAM published weights (dr_spaam_e40.pth) were trained
+    # with window_width=1.0, window_depth=0.5.
+    WIN_SZ      = 1.0
+    THRESH_DIST = 0.5
 
     def __init__(self, dropout: float = 0.5, num_scans: int = 5,
                  num_pts: int = 56, alpha: float = 0.5,
@@ -331,11 +337,15 @@ class DrSpaamDetector(nn.Module):
         Load the official DR-SPAAM published weights (dr_spaam_e40.pth).
 
         Downloaded at pip-install time via setup.py; bundled as DEFAULT_WEIGHTS.
-        Published weights: num_pts=56, pedestrian_only=True, window_size=11.
+        Published weights: num_pts=56, pedestrian_only=True, window_size=11,
+        num_scans=10 — per the official repo's dr_spaam/cfgs/dr_spaam.yaml
+        (network: "cutout_spatial", epochs: 40, matching the "e40" checkpoint
+        name; DrowDetector's own drow5.yaml uses num_scans=5, which is a
+        different config for a different network type).
         """
         weights = path or cls.DEFAULT_WEIGHTS
         model   = cls(num_pts=56, pedestrian_only=True,
-                      window_size=11, alpha=0.5)
+                      window_size=11, alpha=0.5, num_scans=10)
         ckpt    = torch.load(weights, map_location=map_location)
         model.load_state_dict(ckpt["model_state"])   # official checkpoint key
         return model

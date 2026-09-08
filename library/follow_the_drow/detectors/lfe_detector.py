@@ -56,16 +56,55 @@ def _normalize_scan(scan: np.ndarray) -> np.ndarray:
     return (1.0 - clipped / _SCAN_FAR).astype(np.float32)
 
 
-def _pad_to_trained(scan: np.ndarray) -> np.ndarray:
-    """Zero-pad a shorter scan to _TRAINED_N_BEAMS if necessary."""
-    n = len(scan)
-    if n == _TRAINED_N_BEAMS:
-        return scan
-    if n > _TRAINED_N_BEAMS:
-        return scan[:_TRAINED_N_BEAMS]
-    padded = np.zeros(_TRAINED_N_BEAMS, dtype=scan.dtype)
-    padded[:n] = scan
-    return padded
+# LFE's trained angular convention: 720 beams, -90 deg to +90 deg, endpoint
+# excluded (matches follow_the_drow.datasets.frog_dataset.frog_laser_angles).
+# Defined locally rather than imported to avoid a detectors -> datasets
+# import for one formula.
+_TRAINED_ANGLES = np.linspace(-np.pi / 2, np.pi / 2, _TRAINED_N_BEAMS,
+                              endpoint=False, dtype=np.float64)
+
+
+def _resample_to_trained(scan: np.ndarray, angles: np.ndarray):
+    """
+    Resample a scan onto LFE's trained 720-beam, -90..+90 deg angular grid.
+
+    Cross-dataset transfer previously zero-padded a shorter scan (e.g.
+    DROW's 450 beams) into the first N of 720 slots and left the rest as
+    padding. That's wrong on two independent counts, found by inspection
+    and confirmed empirically (a padding-*value* fix alone barely moved
+    DROW's numbers):
+
+    1. The padded slots carried the wrong "no data" value (see the fixed
+       bug in git history / RESEARCH.md) -- a real but secondary issue.
+    2. More fundamentally, beam *index* correspondence is not beam *angle*
+       correspondence. DROW's 450 beams span +-112.25 deg at ~0.5 deg/beam
+       -- a wider FoV at coarser resolution than FROG's 720 beams at
+       +-90 deg / ~0.25 deg/beam. Copying DROW's beam i into slot i treats
+       "beam index" as if it meant the same real-world angle in both
+       datasets, which it doesn't -- e.g. DROW's beam at true angle +45 deg
+       lands in a slot the network was trained to associate with roughly
+       -11.5 deg. Every learned position-dependent behaviour (the sector
+       grid in particular) is then applied to content that's egregiously
+       misaligned with what was actually observed at that angle.
+
+    DROW's FoV fully contains FROG's (+-112.25 deg >= +-90 deg), so no
+    padding is needed at all for DROW -> FROG-grid transfer: every one of
+    the 720 target angles has a real DROW measurement to interpolate from.
+    (A dataset with a *narrower* FoV than FROG would still need to pad the
+    uncovered edge — none of DROW/FROG/JRDB do.)
+
+    Returns (resampled_scan, resampled_angles) -- resampled_angles is
+    always _TRAINED_ANGLES; returned alongside for a uniform call signature
+    with the pre-resampling code.
+    """
+    if len(scan) == _TRAINED_N_BEAMS and np.allclose(angles, _TRAINED_ANGLES, atol=1e-3):
+        return scan, angles
+    # np.interp requires ascending xp; DROW/FROG/JRDB angle arrays already
+    # are (linspace from min to max), but sort defensively rather than
+    # assume every future caller's angle convention agrees.
+    order = np.argsort(angles)
+    resampled = np.interp(_TRAINED_ANGLES, angles[order], scan[order])
+    return resampled.astype(scan.dtype), _TRAINED_ANGLES
 
 
 def _load_onnx(path: Path):
@@ -175,8 +214,7 @@ class LFEPeaksDetector:
         """
         from scipy.signal import find_peaks
 
-        n_orig = len(scan)
-        scan_p = _pad_to_trained(scan)
+        scan_p, angles_p = _resample_to_trained(scan, angles)
         norm   = _normalize_scan(scan_p)
 
         # ONNX models expect (batch, steps, channels) — Keras Conv1D layout
@@ -184,7 +222,8 @@ class LFEPeaksDetector:
         out = self._session.run(
             [self._output_name], {self._input_name: inp}
         )[0]                                        # (1, N, 1) or (1, N)
-        prob = out.squeeze()[:n_orig]               # (n_orig,)
+        prob = out.squeeze()                        # (_TRAINED_N_BEAMS,) — every
+        # position is real (resampled) data now, no crop needed
 
         peaks, _ = find_peaks(
             prob,
@@ -197,8 +236,8 @@ class LFEPeaksDetector:
         detections = []
         for pk in peaks:
             score = float(prob[pk])
-            r     = float(scan[pk])
-            phi   = float(angles[pk])
+            r     = float(scan_p[pk])
+            phi   = float(angles_p[pk])
             x     = r * -np.sin(phi)
             y     = r *  np.cos(phi)
             detections.append((score, x, y))
@@ -279,8 +318,7 @@ class LFEPPNDetector:
         -------
         list of (confidence, x, y) in robot-frame Cartesian coordinates
         """
-        n_orig = len(scan)
-        scan_p = _pad_to_trained(scan)
+        scan_p, angles_p = _resample_to_trained(scan, angles)
         norm   = _normalize_scan(scan_p)
 
         inp = norm.reshape(1, _TRAINED_N_BEAMS, 1)
@@ -293,11 +331,14 @@ class LFEPPNDetector:
 
         n_sectors = out.shape[0]
 
-        # Sector centre angles: take the middle beam of each sector
+        # Sector centre angles: take the middle beam of each sector. Every
+        # index is valid now (angles_p always has _TRAINED_N_BEAMS real
+        # entries, resampled — not the original, shorter-for-DROW array),
+        # so this no longer needs the defensive n_orig clip that used to
+        # collapse every out-of-range sector onto one repeated angle.
         sector_beam_indices = np.arange(n_sectors) * self._SECTOR_STRIDE + self._SECTOR_STRIDE // 2
-        sector_beam_indices = np.clip(sector_beam_indices, 0, n_orig - 1)
-        # Use angles from the original (un-padded) scan where available
-        sector_angles = angles[sector_beam_indices]
+        sector_beam_indices = np.clip(sector_beam_indices, 0, _TRAINED_N_BEAMS - 1)
+        sector_angles = angles_p[sector_beam_indices]
 
         objectness = self._sigmoid(out[:, :, 0])  # (N_sectors, M)
         d_offset   = out[:, :, 1]                  # distance offset

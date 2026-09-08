@@ -26,8 +26,17 @@ runs
 utils/plots
 checkpoints
 checkpoints_drow
+checkpoints_drow_ft
+checkpoints_frog_ablation
+checkpoints_frog_dtime
+checkpoints_smoketest
+checkpoints_drow_dtime
+checkpoints_drow_ft2
+checkpoints_drow_fixed
+checkpoints_frog_dtimesweep
 utils/*.pth
 results
+scratch_frog_weights
 
 *.py[cod]
 *.egg-info

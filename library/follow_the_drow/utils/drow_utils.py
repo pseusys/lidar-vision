@@ -74,10 +74,16 @@ def cutout(scans, odoms, number, win_sz=1.66, thresh_dist=1, nsamp=48, UNK=29.99
         windows[~lo_oob & hi_oob] = lo_val[~lo_oob & hi_oob]
         windows[lo_oob & hi_oob]  = UNK
 
-        # Clip to depth tunnel and centre around each beam's own range.
+        # Clip to depth tunnel, centre around each beam's own range, and
+        # normalise into [-1, 1] by the tunnel half-depth — matches the
+        # official DR-SPAAM-Detector's scans_to_cutout() ("centered" branch:
+        # ct = (ct - dists) / window_depth). A no-op when thresh_dist=1
+        # (DROW's own published weights), but required when thresh_dist!=1
+        # (e.g. DR-SPAAM's published weights use window_depth=0.5).
         z_col         = z[:, None]
         windows       = clip(windows, z_col - thresh_dist, z_col + thresh_dist)
         windows      -= z_col
+        windows      /= thresh_dist
 
         out[:, t, :] = windows
 
@@ -94,7 +100,11 @@ def _deep2flat(dets):
             all_y.append(y)
             all_p.append(p)
             all_frames.append(i)
-    return array(all_x), array(all_y), array(all_p), array(all_frames)
+    # An all-empty sweep (e.g. a threshold strict enough to keep zero
+    # detections) must still return a (0, 4) det_p, not array([]) (0,) —
+    # _process_detections's det_p[:, 1:] assumes 2 dimensions unconditionally.
+    p_arr = array(all_p) if all_p else zeros((0, 4), dtype=float32)
+    return array(all_x), array(all_y), p_arr, array(all_frames)
 
 
 def _prec_rec_2d(det_scores, det_coords, det_frames, gt_coords, gt_frames, gt_radii):
@@ -175,7 +185,13 @@ def _deep2flat_gt(gts, radius):
 
 
 def laser_angles(N):
-    return linspace(laser_minimum, laser_maximum, N)
+    # dtype=float32 matters at scale: linspace() defaults to float64, and
+    # every downstream Cartesian conversion built from these angles (e.g.
+    # evaluate_auc()'s vote-decoding step) silently promotes float32 scan
+    # data to float64 as a result -- invisible on DROW's ~2.4k-frame test
+    # set (~9MB) but a real 595MB allocation on FROG's ~108k-frame train
+    # split, found via an actual MemoryError there.
+    return linspace(laser_minimum, laser_maximum, N, dtype=float32)
 
 
 def project_cartesian_from_polar(r, phi):
@@ -361,34 +377,54 @@ def comp_prec_rec_softmax(scans, wcs, was, wps, pred_conf, pred_offs, eval_r=0.5
     return _process_detections(det_x, det_y, det_p, det_f, wcs, was, wps, eval_r)
 
 
-def aligned_raw_scan(scans_hist, odoms_hist, beam_spacing=laser_increment):
+def aligned_raw_scan(scans_hist, odoms_hist, beam_spacing=laser_increment, angles=None):
     """
-    Stack T raw range scans with rotation-only odometry alignment.
+    Stack T raw range scans with rotation- *and* translation-corrected
+    odometry alignment.
 
     Each historical scan is fractionally shifted along the beam axis by the
-    robot's yaw change between that frame and the current frame.  All T frames
-    and all N beams are processed in a single set of vectorised NumPy operations
-    — no Python-level loop over T or N.
+    robot's yaw change between that frame and the current frame (angular/
+    beam-index correction), then has each beam's *range* adjusted by the
+    robot's own translation since that frame, projected onto that beam's
+    current-frame viewing direction (a first-order/linear approximation —
+    valid when the translation is much smaller than the range itself, the
+    same style of correction the original DROW reference's cutout-level
+    `cos(odom_a)*odom_x + sin(odom_a)*odom_y` term uses, generalised here to
+    the full scan). All T frames and all N beams are processed in a single
+    set of vectorised NumPy operations — no Python-level loop over T or N.
 
-    This applies the same rotation correction as cutout() — odom_a / increment
-    — to the full 1-D scan rather than a 48-beam window.  Translation is not
-    corrected (same design choice as original DROW).
+    Earlier versions of this function corrected rotation only, on the
+    (reasonable at T=5/~100-500ms) assumption that translation is
+    negligible over such a short window — but that assumption breaks down
+    for wider real-time windows (e.g. --dtime > 1, spanning seconds): a
+    robot moving at any normal speed translates far enough over that span
+    to matter, and DROW *has* real odometry to correct for it, unlike FROG.
 
     When odoms_hist contains all-zero xya fields (e.g. FROG without an odom
-    file, or any stationary-robot recording) the shifts are all zero and the
-    output is identical to raw_scan().
+    file, or any stationary-robot recording) both corrections are zero and
+    the output is identical to raw_scan().
 
     Parameters
     ----------
     scans_hist  : array-like (T, N)   raw range scans; index -1 = current
     odoms_hist  : structured ndarray (T,) from dataset.get_scan(); field "xya"
-                  is a (3,) array of (x, y, theta) in world-frame coordinates
+                  is a (3,) array of (x, y, theta) in world-frame coordinates —
+                  verified empirically (not assumed) to be the standard
+                  robotics convention: x=forward/y=left at theta=0,
+                  theta CCW-positive (see library/follow_the_drow/utils/tracking.py's
+                  odom_xya_delta_to_tracker_frame(), which this mirrors).
     beam_spacing: float  angular spacing between adjacent beams in radians
                   (default: laser_increment = π/360 ≈ 0.5° for DROW)
+    angles      : (N,) float, optional — real per-beam angles (phi=0 forward,
+                  phi>0 left, same convention as project_cartesian_from_polar()
+                  elsewhere in this module). Defaults to a symmetric FoV
+                  derived from beam_spacing/N when not given (backward
+                  compatible with callers that don't pass it).
 
     Returns
     -------
-    r : ndarray (T, N, 1) float32  rotation-corrected, linearly interpolated
+    r : ndarray (T, N, 1) float32  rotation- and translation-corrected,
+        linearly interpolated
     """
     scans = array(scans_hist, dtype=float32)                    # (T, N)
     T, N = scans.shape
@@ -396,12 +432,18 @@ def aligned_raw_scan(scans_hist, odoms_hist, beam_spacing=laser_increment):
     # Delta-yaw per frame: how far the robot has rotated between frame t and now.
     # One vectorised subtract — no loop over T.
     theta  = odoms_hist["xya"][:, 2].astype(float32)           # (T,)
-    shifts = (theta - theta[-1]) / float(beam_spacing)          # (T,)
+    shifts = (theta[-1] - theta) / float(beam_spacing)          # (T,)
 
     # Fractional source indices.  aligned_t[i] = scan_t[i + shift_t]:
     # positive shift_t means the robot turned CCW between frame t and now,
-    # so beam i in the current frame corresponds to a beam further right in
-    # the historical scan (same direction convention as cutout()).
+    # so beam i in the current frame corresponds to a beam further LEFT in
+    # the historical scan i.e. a larger index (same direction convention as
+    # cutout(), which subtracts (theta_t - theta_now)/beam_spacing — the
+    # negation of this). Verified empirically: a static point recorded at
+    # beam 100 with the robot then turning 10 deg CCW/left must appear at
+    # beam ~90 (further right) in the "now"-aligned frame — a prior version
+    # of this line (theta - theta[-1], added rather than subtracted) put it
+    # at beam 110 instead, the physically wrong direction.
     beam_idx = arange(N, dtype=float32)                         # (N,)
     src_idx  = beam_idx[None, :] + shifts[:, None]              # (T, N) broadcast
     src_idx  = clip(src_idx, 0.0, float(N - 1))
@@ -414,6 +456,34 @@ def aligned_raw_scan(scans_hist, odoms_hist, beam_spacing=laser_increment):
 
     aligned = (scans[t_idx, src_f] * (1.0 - frac)
               + scans[t_idx, src_c] * frac)                     # (T, N)
+
+    # Translation correction: subtract the robot's own displacement,
+    # projected onto each beam's viewing direction, from that beam's range.
+    # Moving *toward* a point (positive projection) makes it appear closer.
+    if angles is None:
+        half_fov = (N - 1) * float(beam_spacing) / 2.0
+        angles = linspace(-half_fov, half_fov, N, dtype=float32)
+    # now - t (not t - now, unlike `shifts` above): this must match
+    # odom_xya_delta_to_tracker_frame()'s contract ("robot's own translation
+    # since the previous step") — mixing the two sign conventions was
+    # caught by an empirical check (a forward-moving robot must make a
+    # straight-ahead point read *closer*, not farther) before this landed.
+    dx_world = (odoms_hist["xya"][-1, 0] - odoms_hist["xya"][:, 0]).astype(float32)  # (T,)
+    dy_world = (odoms_hist["xya"][-1, 1] - odoms_hist["xya"][:, 1]).astype(float32)  # (T,)
+    theta_now = theta[-1]
+    # Rotate the world-frame displacement into the current heading's axes,
+    # then remap odometry's (forward, left) onto this module's (x=-r*sin(phi),
+    # y=r*cos(phi)) convention: forward -> y, left -> -x. Mirrors
+    # tracking.odom_xya_delta_to_tracker_frame() exactly (kept separate to
+    # avoid a utils<->utils import for one formula; verified identical).
+    local_fwd  =  cos(theta_now) * dx_world + sin(theta_now) * dy_world   # (T,)
+    local_left = -sin(theta_now) * dx_world + cos(theta_now) * dy_world  # (T,)
+    disp_x, disp_y = -local_left, local_fwd                              # (T,) each
+
+    sin_a = sin(array(angles, dtype=float32))                            # (N,)
+    cos_a = cos(array(angles, dtype=float32))                            # (N,)
+    range_correction = disp_x[:, None] * sin_a[None, :] - disp_y[:, None] * cos_a[None, :]  # (T, N)
+    aligned = clip(aligned + range_correction, 0.0, None)
 
     return aligned[:, :, None]                                   # (T, N, 1)
 

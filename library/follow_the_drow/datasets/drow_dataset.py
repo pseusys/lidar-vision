@@ -10,7 +10,7 @@ from json import loads
 from pathlib import Path
 from typing import Union, List, Dict, Tuple
 
-from numpy import genfromtxt, fromregex, where, array, full, array_equal, vectorize, concatenate, tile, repeat, float32, uint32
+from numpy import genfromtxt, fromregex, where, array, full, array_equal, vectorize, float32, uint32, arange, clip
 from numpy.typing import NDArray
 
 from ..utils.file_utils import DROW_DATA_PATH, DROW_TEST_SET
@@ -70,14 +70,22 @@ class DROW_Dataset(Logging):
     def _load_odom(fname: Union[Path, str]) -> NDArray:
         return genfromtxt(fname, delimiter=",", dtype=[("eq", uint32), ("t", float32), ("xya", float32, 3)])
 
-    def get_scan(self, sequence_id: int, scan_id: int, time_window: int) -> Tuple[NDArray, NDArray]:
-        start_time = scan_id - time_window + 1
-        if start_time < 0:
-            # Not enough history yet: pad the beginning with copies of the first scan/odom.
-            pad = abs(start_time)
-            scans = concatenate([tile(self.scans[sequence_id][0], (pad, 1)), self.scans[sequence_id][:scan_id+1]])
-            odoms = concatenate([repeat(self.odoms[sequence_id][:1], pad, axis=0), self.odoms[sequence_id][:scan_id+1]])
-        else:
-            scans = self.scans[sequence_id][start_time:scan_id+1]
-            odoms = self.odoms[sequence_id][start_time:scan_id+1]
-        return scans, odoms
+    def get_scan(self, sequence_id: int, scan_id: int, time_window: int, dtime: int = 1) -> Tuple[NDArray, NDArray]:
+        """
+        Return a (scans, odoms) window of `time_window` frames ending at
+        scan_id, spaced `dtime` raw scans apart (dtime=1: consecutive frames,
+        the original behaviour — e.g. a 0.5s window at DROW's ~10Hz rate).
+
+        dtime > 1 spreads the same number of frames over more real time —
+        e.g. dtime=40 on FROG's 40Hz data spans ~4s instead of ~125ms. This
+        mirrors the official DROW-v2 reference loader's own `dtime` stride
+        parameter (this port originally dropped it in favour of a fixed
+        contiguous window).
+
+        Indices before the start of the sequence are clamped to 0, which
+        repeats the earliest available scan/odom — same effect the old
+        pad-with-first-scan logic had, generalised to a strided window via
+        fancy indexing.
+        """
+        idx = clip(scan_id - dtime * arange(time_window - 1, -1, -1), 0, scan_id)
+        return self.scans[sequence_id][idx], self.odoms[sequence_id][idx]

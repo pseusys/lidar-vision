@@ -15,6 +15,7 @@ help:
 	echo "This is the available make command list:"
 	echo "    'make venv': create python virtual environment and install latest jupyter server libraries as well as follow_the_drow library, enable required params."
 	echo "    'make build-lib': build follow_the_drow C++ lib, install the lib if run as superuser."
+	echo "    'make test': run project-internals unit tests (tests/, pytest, CPU-only)."
 	echo "    'make redrow-detector-test': clear outputs and re-run all notebooks in 'compare' directory."
 	echo "    'make build-image': build required Docker image locally and test successful creation."
 	echo "    'make launch-docker-local': launch ROS pipeline in docker on local device, don't even ty to connect to any robot."
@@ -43,6 +44,11 @@ build-lib:
 .PHONY: build-lib
 
 
+
+test: venv
+	@ # Run project-internals unit tests (algorithms/geometry, no GPU or dataset needed)
+	pytest tests -v
+.PHONY: test
 
 redrow-detector-test: venv
 	@ # Run DROW detector test

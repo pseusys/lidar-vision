@@ -3,3 +3,4 @@
 tqdm
 pytorch-lightning>=2.0
 scikit-learn
+pytest
