@@ -1,0 +1,22 @@
+# actionlint configuration.
+# Docs: https://github.com/rhysd/actionlint/blob/main/docs/config.md
+#
+# The file is optional and actionlint works without it, so everything below has
+# a real effect — see "No config for a language nobody writes" in
+# memory/coding-guidelines.md.
+
+# Configuration variables this repository may reference as `vars.*`.
+# An empty list is not the same as omitting the key: omitting it disables the
+# check entirely, while an empty list makes any `vars.X` an error until it is
+# declared here, so a typo cannot silently expand to an empty string.
+config-variables: []
+
+# Extension points, left out because nothing needs them yet:
+#
+# self-hosted-runner:
+#   labels: [my-runner]      # declare a label here before using it in `runs-on`
+#
+# paths:
+#   .github/workflows/**/*.yaml:
+#     ignore:
+#       - 'regex matching the error to suppress, with the reason beside it'

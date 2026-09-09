@@ -3,7 +3,21 @@
 .DEFAULT_GOAL := help
 
 SHELL = /bin/bash
-PATH := venv/bin:$(PATH)
+
+# Ubuntu (this project's CI runner, and most Linux) only ships `python3`, so
+# prefer it there. On Windows, `python3` is a trap: it resolves to the
+# Microsoft Store's install stub, which `command -v` finds even though
+# running it does nothing useful — see memory/gotchas.md — so prefer bare
+# `python` there instead, and only fall back to `python3` if that's missing.
+ifeq ($(OS),Windows_NT)
+PYTHON := $(shell command -v python 2>/dev/null || command -v python3 2>/dev/null)
+VENV_BIN := venv/Scripts
+else
+PYTHON := $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
+VENV_BIN := venv/bin
+endif
+VENV_PYTHON := $(VENV_BIN)/python
+PATH := $(VENV_BIN):$(PATH)
 
 ROBAIR_IP=192.168.1.201
 CONTAINER_IP := $(shell hostname -I | awk '{print $$1}')
@@ -16,7 +30,6 @@ help:
 	echo "    'make venv': create python virtual environment and install latest jupyter server libraries as well as follow_the_drow library, enable required params."
 	echo "    'make build-lib': build follow_the_drow C++ lib, install the lib if run as superuser."
 	echo "    'make test': run project-internals unit tests (tests/, pytest, CPU-only)."
-	echo "    'make redrow-detector-test': clear outputs and re-run all notebooks in 'compare' directory."
 	echo "    'make build-image': build required Docker image locally and test successful creation."
 	echo "    'make launch-docker-local': launch ROS pipeline in docker on local device, don't even ty to connect to any robot."
 	echo "    'make launch-docker-robot': test RobAIR connection and run ROS pipeline on the RobAIR."
@@ -30,9 +43,10 @@ help:
 
 venv:
 	@ # Create python virtual environment
-	python3 -m venv venv
-	pip3 install --upgrade pip jupyter~=1.0
-	pip3 install -e library
+	$(PYTHON) -m venv venv
+	$(VENV_PYTHON) -m pip install --upgrade pip jupyter~=1.0
+	$(VENV_PYTHON) -m pip install -e library
+	$(VENV_PYTHON) -m pip install -r utils/requirements.txt
 
 build-lib:
 	@ # Build and install `follow_the_drow` library locally
@@ -47,18 +61,8 @@ build-lib:
 
 test: venv
 	@ # Run project-internals unit tests (algorithms/geometry, no GPU or dataset needed)
-	pytest tests -v
+	$(VENV_PYTHON) -m pytest tests -v
 .PHONY: test
-
-redrow-detector-test: venv
-	@ # Run DROW detector test
-	jupyter nbconvert --execute --to notebook --inplace compare/redrow_detector.ipynb
-.PHONY: redrow-detector-test
-
-algorithmic-detector-test: venv
-	@ # Run algorithmic detector test
-	jupyter nbconvert --execute --to notebook --inplace compare/algorithmic_detector.ipynb
-.PHONY: algorithmic-detector-test
 
 
 
@@ -97,7 +101,6 @@ clean-local:
 		xargs rm < library/cpp_core/build/install_manifest.txt
 	fi
 	rm -rf venv
-	rm -rf compare/cache
 	rm -rf library/cpp_core/build
 	rm -rf library/follow_the_drow.egg-info
 	rm -rf library/follow_the_drow/*.so

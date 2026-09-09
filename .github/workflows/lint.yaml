@@ -1,0 +1,69 @@
+name: Lint
+
+# Least privilege by default. Add a scope only when a step actually needs it.
+permissions:
+  contents: read
+
+# No branch filter: this runs on every branch, so a problem is found on the
+# commit that caused it rather than at merge time. Scope by `paths` instead,
+# so the workflow only runs on changes it could actually fail on.
+on:
+  push:
+    paths:
+      - 'memory/**'
+      - '**.md'
+      - '.markdownlint.jsonc'
+      - '.github/workflows/**'
+      - '.github/actionlint.yaml'
+      - '.github/scripts/**'
+
+# Runs on the default branch (`main`) are left alone; a push to any other
+# branch supersedes the run before it, because only the latest commit matters
+# there.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  lint-memory:
+    name: Lint the Knowledge Base
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout 🛎️
+        uses: actions/checkout@v4
+
+      # Also runs shellcheck over every `run:` block, which is why a `run:`
+      # longer than a command belongs in .github/scripts/ instead.
+      - name: Lint workflows 🧪
+        uses: raven-actions/actionlint@v2
+
+      - name: Lint markdown 📝
+        uses: DavidAnson/markdownlint-cli2-action@v19
+        with:
+          globs: '**/*.md'
+
+      - name: Setup Python 🐍
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Lint automation scripts 📜
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: 'check --config memory/scripts/ruff.toml memory/scripts'
+
+      # Links resolve, both indexes match the files on disk, and the markdown
+      # house rules hold. Not run with --strict: docs/RESEARCH.md predates the
+      # one-sentence-per-line convention and is a citation-grade research
+      # write-up, not part of the memory/ knowledge base — reformatting its
+      # ~600 lines of prose is out of scope (memory/dos-and-donts.md). Style
+      # warnings still print; only structural problems (links, indexes,
+      # keywords headers) fail this job.
+      - name: Verify the knowledge base 🧠
+        shell: bash
+        run: python memory/scripts/verify_memory.py
+
+# PLACEHOLDER: add a job per language this project uses, following the linter
+# table in memory/coding-guidelines.md. Give each its own `paths` scope, so a
+# Python change does not wait on a Rust toolchain it cannot affect.

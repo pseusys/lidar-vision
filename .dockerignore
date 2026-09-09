@@ -8,8 +8,6 @@ venv
 deploy/out
 deploy/follow_the_drow/config
 
-compare
-
 library/cpp_core/build
 library/build
 

@@ -189,7 +189,7 @@ class FROG_Dataset(Logging):
     Public attributes (same interface as DROW_Dataset)
     --------------------------------------------------
     scan_id      : ndarray[object]   each element is ndarray[uint32] shape (N_seq,)
-    scan_time    : ndarray[object]   each element is ndarray[float32] shape (N_seq,)
+    scan_time    : ndarray[object]   each element is ndarray[float64] shape (N_seq,) -- float32 is not enough precision at Unix-epoch magnitude (~1.4e9): consecutive raw frames collapsed to identical values, quantized in ~128s steps
     scans        : ndarray[object]   each element is ndarray[float32] shape (N_seq, 720)
     det_id       : ndarray[object]   each element is ndarray[uint32]  shape (D_seq,)
     det_wc       : ndarray[object]   always empty lists  (FROG has no wheelchair class)
@@ -411,7 +411,7 @@ class FROG_Dataset(Logging):
 
             sessions.append((
                 scan_id_s,
-                timestamps_s.astype(np.float32),
+                timestamps_s.astype(np.float64),
                 scans_s,
                 det_id_s,
                 array(det_wc_s, dtype=object),
@@ -475,7 +475,7 @@ class FROG_Dataset(Logging):
         """
         dtype = np.dtype([
             ("eq",  np.uint32),
-            ("t",   np.float32),
+            ("t",   np.float64),
             ("xya", np.float32, 3),
         ])
         N = len(timestamps)
@@ -489,7 +489,7 @@ class FROG_Dataset(Logging):
                 y  = np.interp(timestamps, odom_ts, odom_data[:, 1])
                 th = np.interp(timestamps, odom_ts, odom_data[:, 2])
                 odoms          = np.zeros(N, dtype=dtype)
-                odoms["t"]     = timestamps.astype(np.float32)
+                odoms["t"]     = timestamps.astype(np.float64)
                 odoms["xya"]   = np.stack([x, y, th], axis=1).astype(np.float32)
                 return odoms
             except Exception:
@@ -498,7 +498,7 @@ class FROG_Dataset(Logging):
         # Zero-motion fallback — the detector still runs, just without
         # motion compensation between time-window frames.
         odoms        = np.zeros(N, dtype=dtype)
-        odoms["t"]   = timestamps.astype(np.float32)
+        odoms["t"]   = timestamps.astype(np.float64)
         return odoms
 
     # ------------------------------------------------------------------
