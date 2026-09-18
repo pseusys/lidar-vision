@@ -37,7 +37,7 @@ GPU is auto-selected CUDA/ROCm -> DirectML -> CPU; see `memory/gotchas.md` befor
 python evaluate.py --dataset drow --drow --drspaam           # evaluate published baselines, no training
 python train.py --detector spacetime_cnn --dataset frog --epochs 30   # train one of this project's own architectures
 python render_video.py --dataset frog                          # render a detection video
-.venv312/Scripts/python.exe -m pytest tests -q                 # run the test suite (63 tests, ~6s)
+.venv/Scripts/python.exe -m pytest tests -q                 # run the test suite (63 tests, ~6s)
 make launch-docker-local                                        # run the full ROS pipeline in Docker, laptop only
 ```
 

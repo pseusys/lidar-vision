@@ -1,9 +1,17 @@
 """
-Pseudo-odometry estimation for datasets with no real odometry (FROG).
+Pseudo-odometry estimation for datasets with no real odometry.
 
-FROG ships no pose/odom data at all (see frog_dataset.py's _load_or_fake_odom(),
-which falls back to zero-motion when no ``<stem>_odom.npz`` sidecar file is
-found). This module estimates one via classical 2-D LiDAR scan matching
+**Not currently reached for FROG.** The FROG authors do publish real
+per-recording odometry (``frog_<HH-MM>_odom.npz``), all six sessions of it are
+downloaded by ``FROG_Dataset.download()``, and ``_load_odom()`` now *raises*
+rather than falling back if any of it is missing -- a silent zero-odometry
+fallback is indistinguishable from a stationary robot and made every
+ego-motion conclusion unfalsifiable (see frog_dataset.py, TODO.md A14).
+This module remains for a dataset that genuinely ships none, and as the
+source of the ``<stem>_odom.npz`` sidecar ``_load_odom()`` reads when no
+per-recording file exists.
+
+It estimates odometry via classical 2-D LiDAR scan matching
 (trimmed ICP): for each consecutive pair of raw scans, find the rigid
 transform that best aligns the *static* structure between them (walls,
 furniture, ...), rejecting points that don't fit that transform (typically

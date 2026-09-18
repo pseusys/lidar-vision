@@ -186,7 +186,11 @@ class SimpleTracker:
         """
         ego_dtheta : robot heading change (radians) since the previous
                      `step()` call, e.g. odoms[t]["xya"][2] - odoms[t-1]["xya"][2].
-                     0.0 (default) assumes a static sensor, e.g. FROG.
+                     0.0 (default) assumes a static sensor -- which FROG is
+                     NOT: 1.88 cm and up to 0.4 deg per frame on the test
+                     recording. The claim that FROG odometry is all-zero, which
+                     this docstring used to make, described `_load_or_fake_odom()`
+                     substituting zeros on failure, not the robot (TODO.md A14).
         ego_dxy    : robot's own translation since the previous `step()`,
                      already converted to this module's (x, y) convention —
                      see odom_xya_delta_to_tracker_frame(). (0.0, 0.0)
@@ -228,4 +232,185 @@ class SimpleTracker:
             if t.hits >= self.min_hits:
                 score = t.score * (self.coast_decay ** t.time_since_update)
                 out.append((score, t.x, t.y))
+        return out
+
+
+# ---------------------------------------------------------------------------
+# SORT, faithfully — for citation
+# ---------------------------------------------------------------------------
+
+class _KalmanPoint:
+    """Constant-velocity Kalman filter over a 2-D point, state [x, y, vx, vy].
+
+    The point-detection analogue of SORT's 7-state box filter, with its noise
+    scaling carried across term by term: SORT gives the unobservable initial
+    velocities high variance (`P[4:,4:] *= 1000`), inflates the whole covariance
+    (`P *= 10`) and damps the velocity process noise (`Q[4:,4:] *= 0.01`). The
+    box-specific terms it also scales (`R[2:,2:] *= 10`, on the scale and aspect
+    *measurements*) have no counterpart here, because a point has neither.
+
+    Written out rather than pulled from `filterpy` (which SORT uses) to avoid a
+    dependency for twenty lines of linear algebra.
+    """
+
+    __slots__ = ("x", "P", "F", "H", "Q", "R")
+
+    def __init__(self, x0: float, y0: float):
+        self.x = np.array([x0, y0, 0.0, 0.0], dtype=np.float64)
+        self.F = np.array([[1.0, 0, 1.0, 0],
+                           [0, 1.0, 0, 1.0],
+                           [0, 0, 1.0, 0],
+                           [0, 0, 0, 1.0]])
+        self.H = np.array([[1.0, 0, 0, 0],
+                           [0, 1.0, 0, 0]])
+        self.P = np.eye(4)
+        self.P[2:, 2:] *= 1000.0
+        self.P *= 10.0
+        self.Q = np.eye(4)
+        self.Q[2:, 2:] *= 0.01
+        self.R = np.eye(2)
+
+    def predict(self) -> None:
+        self.x = self.F @ self.x
+        self.P = self.F @ self.P @ self.F.T + self.Q
+
+    def update(self, z_x: float, z_y: float) -> None:
+        z = np.array([z_x, z_y], dtype=np.float64)
+        y = z - self.H @ self.x
+        S = self.H @ self.P @ self.H.T + self.R
+        K = self.P @ self.H.T @ np.linalg.inv(S)
+        self.x = self.x + K @ y
+        self.P = (np.eye(4) - K @ self.H) @ self.P
+
+    def apply_ego(self, ego_dtheta: float, ego_dxy: Tuple[float, float]) -> None:
+        """Bring the state from the previous robot frame into the current one.
+
+        SORT has no equivalent — it assumes a static camera. This is a necessary
+        addition rather than a deviation: FROG's robot translates 1.88 cm and
+        rotates up to 0.4 deg per frame, and 0.4 deg/frame over a track's
+        lifetime is a third of a metre at 8 m range.
+        """
+        if ego_dtheta != 0.0:
+            c, s = np.cos(-ego_dtheta), np.sin(-ego_dtheta)
+            rot = np.array([[c, -s], [s, c]])
+            self.x[:2] = rot @ self.x[:2]
+            self.x[2:] = rot @ self.x[2:]
+        self.x[0] -= ego_dxy[0]
+        self.x[1] -= ego_dxy[1]
+
+
+class _SortTrack:
+    __slots__ = ("kf", "id", "score", "hits", "hit_streak", "age", "time_since_update")
+
+    def __init__(self, x: float, y: float, score: float, track_id: int):
+        self.kf = _KalmanPoint(x, y)
+        self.id = track_id
+        self.score = score
+        # SORT starts both counters at zero: the creating detection is not a
+        # "hit", so a track needs `min_hits` *further* consecutive matches
+        # before it is reported.
+        self.hits = 0
+        self.hit_streak = 0
+        self.age = 0
+        self.time_since_update = 0
+
+    def predict(self, ego_dtheta: float = 0.0,
+                ego_dxy: Tuple[float, float] = (0.0, 0.0)) -> None:
+        self.kf.apply_ego(ego_dtheta, ego_dxy)
+        self.kf.predict()
+        self.age += 1
+        if self.time_since_update > 0:
+            self.hit_streak = 0
+        self.time_since_update += 1
+
+    def update(self, x: float, y: float, score: float) -> None:
+        self.time_since_update = 0
+        self.hits += 1
+        self.hit_streak += 1
+        self.score = score
+        self.kf.update(x, y)
+
+    @property
+    def position(self) -> Tuple[float, float]:
+        return float(self.kf.x[0]), float(self.kf.x[1])
+
+
+class SortTracker:
+    """SORT (Bewley et al., *ICIP* 2016), for point detections.
+
+    Follows the reference implementation's track management exactly — the part
+    that decides what gets reported, and therefore the part a false-positive
+    count depends on:
+
+    * a track is created from an unmatched detection with `hits = hit_streak = 0`;
+    * `predict()` zeroes `hit_streak` whenever the previous frame was a miss,
+      so confirmation needs `min_hits` **consecutive** matches, not `min_hits`
+      matches spread over any number of frames;
+    * a track is reported only when `time_since_update < 1` — i.e. it was
+      matched *this* frame. **Coasted tracks are not emitted.**
+    * the `frame_count <= min_hits` grace period at the start of a sequence is
+      preserved;
+    * a track is dropped once `time_since_update > max_age`.
+
+    Two deviations, both forced by the setting rather than chosen:
+
+    1. **Association on Euclidean distance, not IoU.** These detections are
+       points on the ground plane; there are no boxes. Synthesising equal-radius
+       circles would not change anything, since circle IoU is a monotone
+       function of centre distance — it is distance gating with a relabelled
+       threshold.
+    2. **Ego-motion compensation** (`step()`'s `ego_dtheta` / `ego_dxy`). SORT
+       assumes a static camera; this robot moves.
+
+    `SimpleTracker` in this module is a *different* algorithm — fixed-gain
+    velocity, confirmation on total rather than consecutive hits, and coasted
+    tracks reported for false-negative recovery. Useful for deployment, but not
+    SORT, and not what a paper should cite as SORT.
+    """
+
+    def __init__(self, match_radius: float = 0.5, min_hits: int = 3,
+                 max_age: int = 1):
+        self.match_radius = match_radius
+        self.min_hits = min_hits
+        self.max_age = max_age
+        self.tracks: List[_SortTrack] = []
+        self._next_id = 0
+        self.frame_count = 0
+
+    def step(self, detections: List[Tuple[float, float, float]],
+             ego_dtheta: float = 0.0,
+             ego_dxy: Tuple[float, float] = (0.0, 0.0)
+             ) -> List[Tuple[float, float, float]]:
+        self.frame_count += 1
+        detections = [d for d in detections if all(np.isfinite(v) for v in d)]
+
+        for t in self.tracks:
+            t.predict(ego_dtheta, ego_dxy)
+
+        matched_dets = set()
+        if self.tracks and detections:
+            track_pos = np.array([t.position for t in self.tracks])
+            det_pos = np.array([[x, y] for _, x, y in detections])
+            cost = cdist(track_pos, det_pos)
+            gated = np.where(cost > self.match_radius, 1e6, cost)
+            rows, cols = linear_sum_assignment(gated)
+            for r, c in zip(rows, cols):
+                if gated[r, c] < 1e6:
+                    score, x, y = detections[c]
+                    self.tracks[r].update(x, y, score)
+                    matched_dets.add(c)
+
+        for i, (score, x, y) in enumerate(detections):
+            if i not in matched_dets:
+                self.tracks.append(_SortTrack(x, y, score, self._next_id))
+                self._next_id += 1
+
+        out = []
+        for t in self.tracks:
+            if t.time_since_update < 1 and (t.hit_streak >= self.min_hits
+                                            or self.frame_count <= self.min_hits):
+                x, y = t.position
+                out.append((t.score, x, y))
+        self.tracks = [t for t in self.tracks
+                       if t.time_since_update <= self.max_age]
         return out

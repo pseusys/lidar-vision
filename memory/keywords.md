@@ -15,12 +15,17 @@ If two rows match, read both; if none do, read nothing extra and proceed.
 | new idea, proposal, why don't we, have we tried, suggestion, improvement, dtime, wide window, consensus filter | [`rejected-ideas.md`](rejected-ideas.md) |
 | encoding, unicode, cp1252, path, shell, venv, python3, DirectML, ABI, import error, works on my machine, crash on startup, JRDB missing | [`gotchas.md`](gotchas.md) |
 | how do I run, command, invocation, flags, rebuild, entrypoint, train, evaluate, render video, pytest | [`commands.md`](commands.md) |
-| how does a detector work, architecture, cutout, full-scan, SpaceTimeCNN, FullScanTCN, TemporalUNet, DrowDetector, DrSpaamDetector, LFE, tracker, SimpleTracker, DETECTOR_REGISTRY | [`detector-architectures.md`](detector-architectures.md) |
-| is this number real, accuracy, AUC, AP, benchmark, how good is it, can we trust, zero-shot, DROW-native, fine-tuned, false positive, false negative | [`interpreting-evaluation.md`](interpreting-evaluation.md) |
-| dtime sweep, NMS sweep, threshold, tracker sweep, wp-AUC, ms/frame, compare architectures, PeTra, Li2Former numbers | [`performance-log.md`](performance-log.md) |
-| dataset format, one row is, .h5, .csv, .odom2, .npz, session, sequence, det_id, DROW format, FROG format, JRDB format | [`data-model.md`](data-model.md) |
+| how does a detector work, architecture, cutout, full-scan, SpaceTimeCNN, FullScanTCN, TemporalUNet, DrowDetector, DrSpaamDetector, LFE, tracker, SimpleTracker, DETECTOR_REGISTRY, BEAM_BATCH, input shape | [`detector-architectures.md`](detector-architectures.md) |
+| is this number real, accuracy, AUC, AP, benchmark, how good is it, can we trust, zero-shot, DROW-native, fine-tuned, false positive, false negative, batch size changed the answer, eval-dtime, retracted | [`interpreting-evaluation.md`](interpreting-evaluation.md) |
+| how good is it, state of the art, SOTA, wp-AUC, AP, ms/frame, compare architectures, published baseline, PeTra, Li2Former, LFE numbers | [`performance-log.md`](performance-log.md) |
+| dtime sweep, NMS sweep, threshold sweep, tracker sweep, what did this run score, past run | [`../CHANGELOG.md`](../CHANGELOG.md) |
+| informational capacity, mutual information, without training, zero-cost proxy, does this carry signal, plateau | [`informational-capacity-proxy.md`](informational-capacity-proxy.md) |
+| scale vs capacity, distance normalisation, cutout, depth tunnel, range-stratified, why does it miss far people, sub-threshold, miss budget, Bayes error, 1-NN, Cover and Hart | [`static-detector-diagnosis.md`](static-detector-diagnosis.md) |
+| dataset format, one row is, .h5, .csv, .odom2, .npz, session, sequence, det_id, DROW format, FROG format, JRDB format, train/val/test split, guard band, leakage, recording pause, odometry quantization | [`data-model.md`](data-model.md) |
+| how long a window, time span, temporal horizon, receptive field, how fast do people move, stationary people, ceiling, why not just track, frame rate differs, people per frame, phantom persistence, is it a museum artifact, what should the architecture look like | [`dataset-properties.md`](dataset-properties.md) |
+| noise, denoise, denoiser, missing return, NaN, infinity, sentinel, clamp, spike, jitter, outlier, sensor specs, rated range, laser model, UTM-30LX, S300, LMS500, scan anomalies | [`noise-structure.md`](noise-structure.md) |
 | deploy, release, RobAIR, ROS, Docker, launch-docker, conf.env, follow-me, production, it works locally but | [`deployment.md`](deployment.md) |
-| workflow, commit, refactor, is this ok to change, review, evidence, blast radius, what not to commit | [`dos-and-donts.md`](dos-and-donts.md) |
+| workflow, commit, refactor, is this ok to change, review, evidence, blast radius, what not to commit, overfitting, train vs val gap, early stopping | [`dos-and-donts.md`](dos-and-donts.md) |
 | style, lint, formatting, type hints, imports, naming, ruff, shellcheck, hadolint, C++, pybind11 | [`coding-guidelines.md`](coding-guidelines.md) |
 | again, every time, repetitive, by hand, automate, script this | [`automation-scripts.md`](automation-scripts.md) |
 | ci, workflow, github actions, pipeline, build failed, red build | [`coding-guidelines.md`](coding-guidelines.md) |

@@ -41,7 +41,11 @@ _LFE_PPN_PATH   = Path(__file__).parent.parent / LFE_PPN_WEIGHTS_PATH
 # Physical constants matching the FROG training configuration
 _SCAN_NEAR       = 0.2    # metres — minimum range clipped
 _SCAN_FAR        = 10.0   # metres — maximum range clipped
-_PERSON_RADIUS   = 0.4    # metres — assumed person half-width
+_PERSON_RADIUS   = 0.4    # metres — assumed person half-width. Confirmed against
+                          # FROG's own annotations: 151,611 of 153,655 circles in
+                          # the test recording carry exactly this radius. Kept for
+                          # reference; it is deliberately NOT LFEPeaksDetector's
+                          # merge radius any more — see that class's docstring.
 _TRAINED_N_BEAMS = 720    # beam count the ONNX models were trained on
 
 
@@ -131,6 +135,7 @@ def _load_onnx(path: Path):
 def _merge_nearby(
     detections: List[Tuple[float, float, float]],
     radius:     float,
+    slope:      float = 0.0,
 ) -> List[Tuple[float, float, float]]:
     """
     Greedy NMS-style merge of nearby centroids into single detections.
@@ -139,19 +144,43 @@ def _merge_nearby(
     Sec. 5.2.4): "Centroids that are close together are interpreted as legs
     or part of legs, and merged together into final person detections using
     a NMS-like process." Highest-confidence centroids are kept first; any
-    remaining centroid within `radius` of an already-kept one is dropped.
+    remaining centroid within the radius of an already-kept one is dropped.
+
+    `slope` makes that radius range-dependent: `r(d) = radius + slope * d`,
+    floored at zero and evaluated at the *mean* range of the pair being
+    compared. `slope = 0.0` is exactly the old single-scalar behaviour and is
+    the default, because every published number in this repository was measured
+    under it.
+
+    **Why it exists, and why it is not the default** (`memory/rejected-ideas.md`,
+    TODO.md A38/A40). The hypothesis was that one scalar fails in both
+    directions at once: too large for adjacent people, too small for duplicates,
+    because a detector's localisation error grows with range while the
+    separation between two people does not. Swept on both detectors and at both
+    association distances, it **loses to a constant radius of the same average
+    size** -- and the recall it was meant to recover turns out not to be there:
+    recall moves only 1.8 pp across radii from 0.20 m to 0.50 m, while
+    duplicates fall 18-fold. The radius is a precision lever, not a recall one.
+    Kept, defaulting to 0.0, because it costs nothing and the sweep may be worth
+    repeating on a detector with different localisation behaviour.
+
+    The mean-range convention is symmetric and, in practice, arbitrary: two
+    centroids close enough to merge are necessarily at nearly the same range.
     """
     if not detections:
         return []
     dets = sorted(detections, key=lambda d: -d[0])
-    keep = []
+    keep, keep_r = [], []
     for det in dets:
         _, x, y = det
+        r_self = float(np.sqrt(x * x + y * y))
         if all(
-            np.sqrt((x - kx) ** 2 + (y - ky) ** 2) > radius
-            for _, kx, ky in keep
+            np.sqrt((x - kx) ** 2 + (y - ky) ** 2)
+            > max(0.0, radius + slope * 0.5 * (r_self + kr))
+            for (_, kx, ky), kr in zip(keep, keep_r)
         ):
             keep.append(det)
+            keep_r.append(r_self)
     return keep
 
 
@@ -172,9 +201,33 @@ class LFEPeaksDetector:
     peak_prominence  : minimum prominence for find_peaks (default 0.1)
     peak_width       : minimum width in samples (default 1)
     merge_radius     : centroids closer than this (metres) are merged into a
-                        single detection, keeping the higher-confidence one
-                        (default: `_PERSON_RADIUS` — the paper describes this
-                        step but does not give an exact radius)
+                        single detection, keeping the higher-confidence one.
+                        Default **0.30 m**, calibrated against the published AP
+                        rather than derived, because the paper describes the
+                        step without giving a number.
+
+                        Do NOT set this to the person *diameter* (0.8 m). That
+                        rule belongs to LFE-PPN, whose NMS deduplicates whole
+                        *person proposals*; this merge does a different job --
+                        the paper's words are "centroids that are close
+                        together are interpreted as **legs or part of legs**,
+                        and merged together into final person detections", so
+                        its natural scale is the gap between one person's legs.
+                        At 0.8 m it over-merges genuinely distinct people and
+                        costs ~8pp.
+
+                        Measured on frog_16-41, every 5th frame, against the
+                        paper's AP@0.5 65.6 / AP@0.3 63.2:
+
+                          0.25  63.7 / 62.0    (-1.9 / -1.2)
+                          0.30  65.1 / 63.4    (-0.5 / +0.2)  <- default
+                          0.35  66.7 / 64.9    (+1.1 / +1.7)
+                          0.40  67.7 / 65.7    (+2.1 / +2.5)  <- was the default
+                          0.80  59.3 / 57.5    (-6.3 / -5.7)
+
+                        The old 0.40 (`_PERSON_RADIUS`) was the whole of the
+                        "our LFE-Peaks overshoots its paper" discrepancy
+                        (TODO.md A32d).
     """
 
     DEFAULT_WEIGHTS = _LFE_PEAKS_PATH
@@ -185,7 +238,8 @@ class LFEPeaksDetector:
         peak_height:     float = 0.01,
         peak_prominence: float = 0.1,
         peak_width:      int   = 1,
-        merge_radius:    float = _PERSON_RADIUS,
+        merge_radius:    float = 0.30,
+        merge_radius_slope: float = 0.0,
     ):
         self._session        = _load_onnx(onnx_path)
         self._input_name     = self._session.get_inputs()[0].name
@@ -194,6 +248,7 @@ class LFEPeaksDetector:
         self._peak_prominence = peak_prominence
         self._peak_width     = peak_width
         self._merge_radius   = merge_radius
+        self._merge_radius_slope = merge_radius_slope
 
     def detect(
         self,
@@ -242,7 +297,8 @@ class LFEPeaksDetector:
             y     = r *  np.cos(phi)
             detections.append((score, x, y))
 
-        return _merge_nearby(detections, self._merge_radius)
+        return _merge_nearby(detections, self._merge_radius,
+                             self._merge_radius_slope)
 
 
 # ---------------------------------------------------------------------------
@@ -260,8 +316,23 @@ class LFEPPNDetector:
     Parameters
     ----------
     onnx_path     : path to the LFE-PPN ONNX file (default: bundled weights)
-    score_thresh  : minimum objectness score to keep a proposal (default 0.3)
-    nms_radius    : minimum distance (m) between surviving detections (default 0.8)
+    score_thresh  : minimum objectness score to keep a proposal (default 0.3).
+                    Compared against the graph's own sigmoid output, so it is a
+                    probability -- see the note in `detect()`.
+    nms_radius    : minimum distance (m) between surviving detections.
+                    Default **0.30 m**, calibrated against the published AP at
+                    *both* association distances the FROG benchmark reports:
+                    69.3 / 63.9 against their 69.2 / 62.5.
+
+                    Not the 0.8 m the paper's own sentence implies ("a given
+                    hyperparameter, which usually matches the most common ground
+                    truth circle diameter" -- the most common annotated radius is
+                    0.400 m). At 0.8 m this scores 65.8 / 58.6, ~3.5pp low on
+                    both. `LFEPeaksDetector` independently calibrates to the same
+                    0.30 m, and two separately post-processed models agreeing on
+                    one radius is better evidence than either alone: the paper's
+                    sentence appears to describe design intent rather than the
+                    value used.
     """
 
     DEFAULT_WEIGHTS = _LFE_PPN_PATH
@@ -279,13 +350,15 @@ class LFEPPNDetector:
         self,
         onnx_path:    Path  = _LFE_PPN_PATH,
         score_thresh: float = 0.3,
-        nms_radius:   float = 0.8,
+        nms_radius:   float = 0.30,
+        nms_radius_slope: float = 0.0,
     ):
         self._session      = _load_onnx(onnx_path)
         self._input_name   = self._session.get_inputs()[0].name
         self._output_name  = self._session.get_outputs()[0].name
         self._score_thresh = score_thresh
         self._nms_radius   = nms_radius
+        self._nms_radius_slope = nms_radius_slope
 
         out_shape   = self._session.get_outputs()[0].shape
         n_anchors   = out_shape[2] if isinstance(out_shape[2], int) else self._N_ANCHORS_FALLBACK
@@ -296,10 +369,6 @@ class LFEPPNDetector:
         self._anchor_depths = np.linspace(
             _SCAN_NEAR, _SCAN_FAR, self._n_anchors, dtype=np.float32
         )
-
-    @staticmethod
-    def _sigmoid(x: np.ndarray) -> np.ndarray:
-        return 1.0 / (1.0 + np.exp(-np.clip(x, -30, 30)))
 
     def detect(
         self,
@@ -340,11 +409,70 @@ class LFEPPNDetector:
         sector_beam_indices = np.clip(sector_beam_indices, 0, _TRAINED_N_BEAMS - 1)
         sector_angles = angles_p[sector_beam_indices]
 
-        objectness = self._sigmoid(out[:, :, 0])  # (N_sectors, M)
+        # Channel 0 is ALREADY a probability: the exported graph ends with
+        # `Slice -> Sigmoid -> Concat`, applying the sigmoid to the objectness
+        # channel and concatenating the two raw offset channels after it
+        # (verified by reading lfe_ppn.onnx's node list, not inferred from the
+        # value range). This decoder used to apply a second sigmoid, which
+        # squashed every score into [0.5, 0.731] and broke three things at once:
+        #
+        #  * `score_thresh` became inert -- 0.01 and 0.3 returned bit-identical
+        #    output, because all 3,600 anchors cleared any threshold below 0.5;
+        #  * all 3,600 proposals entered the greedy NMS every frame instead of
+        #    the ~61 that genuinely score above 0.3, leaving 182 "detections"
+        #    per frame on scenes holding ~3 people;
+        #  * inference cost 224 ms/frame, ~200x LFE-Peaks, which is what made
+        #    LFE-PPN look unusable for repeated evaluation (TODO.md A5).
+        #
+        # AUC survived it better than the rest, since a sigmoid is monotonic and
+        # preserves detection ordering -- which is exactly why the bug hid: an
+        # earlier measured 67.7% sat plausibly close to the published 66.5%.
+        # Any *threshold* read off that run means nothing, and so does any
+        # false-positive rate at one (TODO.md A31).
+        objectness = out[:, :, 0]                  # (N_sectors, M), already in [0, 1]
         d_offset   = out[:, :, 1]                  # distance offset
         l_offset   = out[:, :, 2]                  # arc offset (normalised)
 
-        # Decode all anchors above threshold
+        # **Both offset channels are normalised by their own anchor cell's
+        # extent**, which is the ordinary convention for anchor-based
+        # regression and is what this decoder used to get wrong. The paper does
+        # not state it, so it was established by scoring the 16 plausible
+        # conventions against LFE-PPN's published 66.5% AP on the official test
+        # recording (2,525 frames):
+        #
+        #   depth offset in raw metres     50.5%   <- what this code did
+        #   depth offset x anchor spacing  65.8-68.5%, for every angle convention
+        #
+        # The depth axis separates by ~15pp and does so under all four angular
+        # conventions tried, so it is a clean finding rather than a fit: it was
+        # a choice between two named conventions, not a tuned constant.
+        #
+        # **The arc channel was re-identified on 2026-09-10 and this comment
+        # block records a mistake worth not repeating.** The first calibration
+        # scored candidates at an association distance of 0.5 m, called the
+        # angular axis "weakly identified" (67.4% with no arc offset at all
+        # against 68.1% with a sector-width one) and picked the sector-width
+        # form. That yardstick ranks the candidates *backwards*: a sector is
+        # 1.5 deg wide, so the whole correction is under 10 cm at conversational
+        # range and a 0.5 m gate cannot see it.
+        #
+        # At d = 0.3 m -- which the FROG benchmark also reports -- the same
+        # candidates span 28.7-58.6%, and the metric form below wins:
+        #
+        #   l x spacing / depth   (this)      58.6 / 65.8   <- also the original
+        #   l x 2 sector widths               56.4 / 66.6
+        #   l x 1 sector width                52.5 / 68.1   <- briefly the default
+        #   no arc offset at all              28.7 / 67.4
+        #
+        # So the depth-scaling fix above was a real +15pp, and the angular
+        # change made alongside it was a regression that AP@0.5 could not show.
+        # **Calibrate anything positional at the tightest association distance
+        # available.**
+        #
+        # Anchor depths stay `linspace(NEAR, FAR, 30)`, spacing 9.8/29 -- which
+        # also settles the open question in docs/RESEARCH.md about the paper's
+        # `-1` term: the endpoint-inclusive form scores 68.1% against the
+        # step form's 67.5%.
         detections = []
         for s in range(n_sectors):
             for m in range(self._n_anchors):
@@ -352,14 +480,17 @@ class LFEPPNDetector:
                 if score < self._score_thresh:
                     continue
                 anchor_d   = float(self._anchor_depths[m])
-                final_d    = anchor_d + float(d_offset[s, m])
-                # Arc offset normalised by depth spacing; convert to angle offset
+                final_d    = anchor_d + float(d_offset[s, m]) * self._depth_spacing
+                # Arc offset: a length in metres, normalised by the anchor
+                # spacing, converted to an angle by dividing by the decoded
+                # depth. NOT an angle scaled by the sector width -- see below.
                 phi_offset = (float(l_offset[s, m]) * self._depth_spacing
-                              / max(anchor_d, 0.1))
+                              / max(final_d, 0.2))
                 final_phi  = float(sector_angles[s]) + phi_offset
 
                 x = final_d * -np.sin(final_phi)
                 y = final_d *  np.cos(final_phi)
                 detections.append((score, x, y))
 
-        return _merge_nearby(detections, self._nms_radius)
+        return _merge_nearby(detections, self._nms_radius,
+                             self._nms_radius_slope)

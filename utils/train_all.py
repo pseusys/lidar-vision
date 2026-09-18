@@ -31,6 +31,8 @@ import sys
 import time
 from pathlib import Path
 
+import torch
+
 # train.py is in the same directory — add it to the path if needed
 sys.path.insert(0, str(Path(__file__).parent))
 from train import (  # noqa: E402
@@ -82,7 +84,12 @@ def _eval_worker(det, ckpt_path, dataset, train_split, test_split,
         model_args = _default_args(detector=det, force_cpu=force_cpu)
         net = _build_model(model_args).to(dev)
         load_checkpoint(ckpt_path, net)
-        aucs = evaluate_auc(net, test_ds, cfg, device=dev, batch_size=batch_size)
+        # dtime comes from the checkpoint, never from evaluate_auc's default of
+        # 1: scoring a dtime=10 model at dtime=1 silently cost 2.5pp wp-AUC
+        # (TODO.md A15).
+        dtime = int(torch.load(ckpt_path, map_location="cpu").get("dtime", 1))
+        aucs = evaluate_auc(net, test_ds, cfg, device=dev, batch_size=batch_size,
+                            dtime=dtime)
         result_queue.put(("ok", aucs))
     except Exception as exc:
         result_queue.put(("error", str(exc)))
@@ -121,7 +128,12 @@ def _eval_in_process(det, ckpt_path, dataset, train_split, test_split,
         model_args = _default_args(detector=det, force_cpu=force_cpu)
         net = _build_model(model_args).to(dev)
         load_checkpoint(ckpt_path, net)
-        aucs = evaluate_auc(net, test_ds, cfg, device=dev, batch_size=batch_size)
+        # dtime comes from the checkpoint, never from evaluate_auc's default of
+        # 1: scoring a dtime=10 model at dtime=1 silently cost 2.5pp wp-AUC
+        # (TODO.md A15).
+        dtime = int(torch.load(ckpt_path, map_location="cpu").get("dtime", 1))
+        aucs = evaluate_auc(net, test_ds, cfg, device=dev, batch_size=batch_size,
+                            dtime=dtime)
         return ("ok", aucs)
     except Exception as exc:
         return ("error", str(exc))

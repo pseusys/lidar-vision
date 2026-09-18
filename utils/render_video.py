@@ -99,8 +99,9 @@ _SCAN_S = 2
 def _setup(args):
     if args.dataset == "frog":
         from follow_the_drow.datasets import FROG_Dataset, frog_laser_angles
-        print(f"Loading FROG dataset (split='{args.split}') …")
-        dataset = FROG_Dataset(split=args.split)
+        _mode = getattr(args, "frog_mode", "official")
+        print(f"Loading FROG dataset (mode='{_mode}', split='{args.split}') …")
+        dataset = FROG_Dataset(split=args.split, mode=_mode)
         cfg = SimpleNamespace(
             name="frog",
             angles_fn=frog_laser_angles,
@@ -390,6 +391,11 @@ def _parse():
     p.add_argument("--dataset",      default="frog", choices=["drow", "frog"])
     p.add_argument("--split",        default="test",
                    help="Dataset split: train / val / test (default: test)")
+    p.add_argument("--frog-mode",    default="official",
+                   choices=["official", "transferred", "balanced"],
+                   help="FROG partition (default: official). 'transferred' renders "
+                        "person-free frames only, which is the fastest way to see "
+                        "what a detector fires at when nobody is there.")
     p.add_argument("--seq",          type=int, default=None,
                    help="Render only this sequence (default: all sequences)")
     p.add_argument("--max-frames",   type=int, default=0,

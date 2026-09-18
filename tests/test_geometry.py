@@ -57,6 +57,19 @@ class TestAlignedRawScan:
         aligned = aligned_raw_scan(scans, odom, beam_spacing=BEAM_SPACING, angles=ANGLES)
         assert int(np.argmin(aligned[0, :, 0])) == 110
 
+    def test_rotation_delta_wraps_across_the_pi_boundary(self):
+        # Historical theta=+170deg, current theta=-170deg: a naive subtraction
+        # gives -340deg (wraps to +20deg -- the true, small rotation) but a
+        # naive implementation would compute -340deg directly and divide it
+        # by beam_spacing, producing a ~340-beam bogus shift instead of the
+        # correct ~20-beam one. Real FROG odometry's theta spans the full
+        # +/-pi range and does cross this boundary in practice (confirmed
+        # empirically, ~1% of real windows) -- this is not a hypothetical case.
+        scans = np.stack([_spike_scan(100), np.full(N, 10.0, dtype=np.float32)])
+        odom = _odom([np.deg2rad(170.0), np.deg2rad(-170.0)])
+        aligned = aligned_raw_scan(scans, odom, beam_spacing=BEAM_SPACING, angles=ANGLES)
+        assert int(np.argmin(aligned[0, :, 0])) == 80
+
     def test_forward_translation_shortens_straight_ahead_range(self):
         # Exact geometry at phi=0 (no small-angle approximation needed): the
         # robot advancing 0.3m toward a point directly ahead must shorten
@@ -108,6 +121,14 @@ class TestCutout:
                      laserIncrement=BEAM_SPACING)
         hist_min = cut[:, 0, :].min(axis=1)
         assert int(np.argmin(hist_min)) < 100
+
+    def test_rotation_delta_wraps_across_the_pi_boundary(self):
+        # +170 deg then -170 deg is a 20 deg left turn, exactly like 0 then +20 deg;
+        # an unwrapped difference is -340 deg, a 340-beam shift that moves every window off the scan.
+        scans = np.stack([_spike_scan(100), np.full(N, 10.0, dtype=np.float32)])
+        across = cutout(scans, _odom([np.deg2rad(170.0), np.deg2rad(-170.0)]), N, win_sz=1.66, thresh_dist=1.0, nsamp=48, laserIncrement=BEAM_SPACING)
+        plain = cutout(scans, _odom([0.0, np.deg2rad(20.0)]), N, win_sz=1.66, thresh_dist=1.0, nsamp=48, laserIncrement=BEAM_SPACING)
+        np.testing.assert_allclose(across, plain, atol=1e-5)
 
     def test_has_no_translation_correction(self):
         """

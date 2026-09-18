@@ -109,12 +109,32 @@ A tried-and-rejected idea goes in [`rejected-ideas.md`](rejected-ideas.md) with 
 Name what would have failed if it were wrong, and run that.
 A synthetic unit test passing has already been mistaken for "the logic is correct" twice in this project's real history — once for a scan-alignment sign error, once for the odometry timestamp-gap bug — and both were only caught by checking against real recorded FROG data, not by any test that was green beforehand.
 
+**DON'T change a calibrated constant without re-running every table downstream of it.**
+Nothing in this repo notices, and the tables do not say which constant they were measured under.
+`LFEPPNDetector.nms_radius` moved from 0.8 m to 0.30 m in the working tree — a *correct* recalibration, against the published AP at both association distances — and for as long as nobody re-ran the false-positive passes, `PAPER.md`, `performance-log.md`, `dataset-properties.md` and `CHANGELOG.md` all kept quoting LFE-PPN figures from before the move. They were wrong by up to 2x. It surfaced only because two documents disagreed with each other and someone chased it (`CHANGELOG.md` 2026-09-11).
+The cheap habit: when a default changes, grep the docs for the numbers that default produces, before committing.
+
+**DON'T write a matching shortcut that a future parameter change can invalidate silently.**
+`phantom_analysis.py` counted true positives as `min(detections-near-a-person, people-present)` — exact whenever a detector emits no duplicates, nonsense when it emits many, and there is nothing in the expression to say which regime you are in.
+It gave correct answers for months, then reported a 5.0% miss rate where a one-to-one assignment gives 19.3%, the moment a radius change made the detector duplicate-heavy.
+Use `linear_sum_assignment` and pay the microseconds.
+
 **DO write the prediction before running the test.**
 An analysis run first and interpreted afterwards will find something.
 This project has produced at least three findings that looked strong or plausible at first and did not survive an independent check: a verification script's own sign error, a 10x arithmetic slip in a dtime-to-distance extrapolation, and roughly half of all real-data timestamp gaps producing a plausible-*looking* but wrong odometry delta.
 
-**DO replicate on an independent slice** before acting on any per-segment result.
-This project's own convention: check both the train and test fold, not test alone — the dtime sweep (`docs/RESEARCH.md`) was only trusted once train ≈ test ruled out overfitting as the explanation.
+**DO replicate on an independent slice** before acting on any per-segment result — and **DO verify the slice is actually independent** before reading anything into the agreement.
+The dtime sweep was trusted for weeks because "train ≈ test ruled out overfitting".
+It did not: `split="test"` was loading the training file, so the two columns were two samples of one dataset, and even the val split was FROG's own per-frame holdout sitting 38 ms from its training neighbours (`data-model.md`, `TODO.md` A11-A12).
+**Agreement between two slices is evidence of independence failing at least as often as it is evidence of generalization.** Measure the distance between them before quoting the agreement.
+
+**DON'T trust a metric that moves when you change something that cannot affect the model.**
+Batch size, evaluation `dtime`, checkpoint selection and split membership are harness knobs; if the number tracks one of them, the harness is what you are measuring.
+Measured here: wp-AUC rose monotonically with evaluation batch size (beam-AUC 0.9644 at batch 1 to 0.9810 at batch 64) because the minibatch was folded into the beam axis, and fell 2.5pp when the evaluator silently used a different `dtime` than training did (`interpreting-evaluation.md`, `TODO.md` A15/A18).
+Both looked like properties of the model for months.
+
+**DO check that the reported number and the saved artefact are the same object.**
+`train.py` computed its final AUC *before* reloading the best checkpoint, so for its whole history the printed number described a network that was then discarded — and the file it wrote was stamped with the stopping epoch rather than the epoch whose weights it held (`TODO.md` A16).
 
 **No minimum-sample threshold is set for this project.**
 Treat any DROW-native result as lower-confidence by construction: DROW's train split has ~17.8x fewer total person-annotation instances than FROG's (`interpreting-evaluation.md`), not because of an agreed cutoff below which a result doesn't count.

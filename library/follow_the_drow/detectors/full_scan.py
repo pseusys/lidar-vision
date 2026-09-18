@@ -15,19 +15,25 @@ deliberately for efficiency and explainability (see RESEARCH.md):
 
 SpaceTimeCNNDetector and FullScanTCNDetector share the same input/output
 contract as DrowDetector (default --head drow):
-  forward(x)       → (logits (N_beams, 4), votes (N_beams, 2))
+  forward(x)       → (logits (B*N_beams, 4), votes (B*N_beams, 2))
   forward_one(xb)  → (confs, votes)   numpy in / numpy out
 
 With --head heatmap (all full-scan detectors):
-  forward(x)       → ((heatmap (N_beams, 1),),)
+  forward(x)       → ((heatmap (B*N_beams, 1),),)
   forward_one(xb)  → (sigmoid_heatmap, zeros_votes)
 
-TemporalUNetDetector has BEAM_BATCH=True (like DrSpaamDetector) — the
-DataLoader passes (B, N_beams, T, 1) rather than (B*N_beams, T, 1) because
-the U-Net pools over the beam axis and cannot split beams across the batch.
-Its default head is "heatmap" to match LFE-Peaks.
+**Every** full-scan detector sets BEAM_BATCH=True (like DrSpaamDetector), so
+the DataLoader passes (B, N_beams, T, 1) rather than a (B*N_beams, T, 1)
+flattened batch. All three convolve along the beam axis, so flattening splices
+B frames into one long scan and lets normalization statistics, SE gates and
+the convolutions themselves leak between frames that happen to share a
+minibatch — which made measured accuracy a function of batch size (TODO.md
+A18). TemporalUNetDetector additionally pools over the beam axis, so it could
+never have been flattened at all. Its default head is "heatmap", matching
+LFE-Peaks.
 
-Input shape: (N_beams, T, 1) for A/B; (B, N_beams, T, 1) for C.
+Input shape: (B, N_beams, T, 1); a bare (N_beams, T, 1) single scan is also
+accepted and treated as B=1.
 Channel 0 is the raw range measurement, optionally rotation-aligned.
 
 Detectors
@@ -329,6 +335,11 @@ class SpaceTimeCNNDetector(nn.Module):
     """
 
     INPUT_MODE = "raw_scan"
+    # (B, N_beams, T, 1), not a (B*N_beams, T, 1) flattened batch: the beam
+    # axis is a spatial axis this model convolves along, so folding the batch
+    # into it makes a batch of B scans into one B*N_beams-beam "scan". See
+    # forward().
+    BEAM_BATCH = True
 
     _SPATIAL_DILATIONS = (1, 4, 16, 64)
     _SPATIAL_KS        = (3, 5, 9)
@@ -377,8 +388,29 @@ class SpaceTimeCNNDetector(nn.Module):
             self.head_votes  = nn.Linear(C, 2)
 
     def forward(self, x: torch.Tensor):
-        """x : (N_beams, T, 1)"""
-        x = x.permute(2, 0, 1).unsqueeze(0)   # → (1, 1, N_beams, T)
+        """
+        x : (B, N_beams, T, 1)  from DataLoader / evaluate_auc (BEAM_BATCH=True)
+            (N_beams, T, 1)     a bare single scan (forward_one, ROS node)
+
+        Returns ((B*N, 1),) for heatmap, or ((B*N, 4), (B*N, 2)) for drow head.
+
+        The batch axis is kept separate all the way through. It used to be
+        folded into the beam axis -- `x.permute(2, 0, 1).unsqueeze(0)` on a
+        `(B*N_beams, T, 1)` input, making a batch of 4 scans into one
+        2880-beam "scan". Three things then leaked between frames that share a
+        minibatch: GroupNorm's statistics, `_SEBlock`'s global channel gate,
+        and the beam-axis convolutions themselves (receptive field 177 beams)
+        convolving across the seam between one frame's leftmost beams and the
+        next frame's rightmost. Because evaluation batches are consecutive
+        frames in time, a bigger batch leaked more temporal context and scored
+        higher: measured on the real val split at dtime=10, beam-level person
+        AUC ran 0.9644 (batch 1) -> 0.9696 (4) -> 0.9765 (16) -> 0.9810 (64),
+        while the robot itself runs `forward_one()` at batch 1 (TODO.md A18).
+        """
+        if x.dim() == 3:
+            x = x.unsqueeze(0)                 # (N, T, 1) → (1, N, T, 1)
+        B, N = x.shape[:2]
+        x = x.permute(0, 3, 1, 2)              # → (B, 1, N_beams, T)
 
         x = self.stem(x)
         x = self.joint1(x)
@@ -390,10 +422,10 @@ class SpaceTimeCNNDetector(nn.Module):
         for stage in self.temporal_stages:
             x = stage(x)
 
-        x = x.mean(dim=-1)                     # (1, C, N_beams) — collapse T
-        x = x.squeeze(0).permute(1, 0)         # (N_beams, C)
+        x = x.mean(dim=-1)                     # (B, C, N_beams) — collapse T
+        x = x.permute(0, 2, 1).reshape(B * N, -1)   # (B*N, C)
         if self.head_type == "heatmap":
-            return (self.head_heatmap(x),)     # ((N_beams, 1),)
+            return (self.head_heatmap(x),)     # ((B*N, 1),)
         return self.head_logits(x), self.head_votes(x)
 
     @torch.no_grad()
@@ -466,6 +498,10 @@ class FullScanTCNDetector(nn.Module):
     """
 
     INPUT_MODE = "raw_scan"
+    # (B, N_beams, T, 1) -- the spatial backbone convolves along the beam axis,
+    # so a flattened batch would splice B frames into one long scan. See
+    # forward().
+    BEAM_BATCH = True
 
     def __init__(self, n_time: int = 5, tcn_channels: int = 64,
                  backbone_channels: int = 64, dropout: float = 0.1,
@@ -486,17 +522,37 @@ class FullScanTCNDetector(nn.Module):
             self.head_votes   = nn.Linear(backbone_channels, 2)
 
     def forward(self, x: torch.Tensor):
-        """x : (N_beams, T, 1)  single scan  |  (B*N_beams, T, 1)  flattened batch"""
-        x_t = x.permute(0, 2, 1)                            # (rows, 1, T) — conv1d over T per beam
-        for block in self.temporal_tcn:
-            x_t = block(x_t)                                # (rows, tcn_channels, T)
-        beam_feat = x_t[:, :, -1]                           # (rows, tcn_channels) — causal "now" summary
+        """
+        x : (B, N_beams, T, 1)  from DataLoader / evaluate_auc (BEAM_BATCH=True)
+            (N_beams, T, 1)     a bare single scan (forward_one, ROS node)
 
-        spatial_in  = beam_feat.unsqueeze(1)                # (rows, 1, tcn_channels) — single pseudo-timestep
-        spatial_out = self.backbone(spatial_in)             # (rows, 1, backbone_channels)
-        pooled      = spatial_out.squeeze(1)                # (rows, backbone_channels)
+        Returns ((B*N, 1),) for heatmap, or ((B*N, 4), (B*N, 2)) for drow head.
+
+        The temporal TCN is per-beam and never leaked, but the spatial
+        backbone did: it convolves along the beam axis, and a flattened
+        `(B*N_beams, ...)` batch handed it B frames concatenated end to end, so
+        its dilated kernels (receptive field 31 beams) reached across the seam
+        between one frame and the next. Keeping B separate makes each frame its
+        own row of the backbone's batch (TODO.md A18).
+        """
+        if x.dim() == 3:
+            x = x.unsqueeze(0)                              # (N, T, 1) → (1, N, T, 1)
+        B, N = x.shape[:2]
+
+        rows = x.reshape(B * N, *x.shape[2:])                # (B*N, T, 1)
+        x_t = rows.permute(0, 2, 1)                          # (B*N, 1, T) — conv1d over T per beam
+        for block in self.temporal_tcn:
+            x_t = block(x_t)                                 # (B*N, tcn_channels, T)
+        beam_feat = x_t[:, :, -1]                            # (B*N, tcn_channels) — causal "now" summary
+
+        # DilatedScanBackbone reads (N_beams, items, C) and treats dim 1 as
+        # independent batch elements -- one frame per element here, so its
+        # beam-axis convolutions never cross a frame boundary.
+        spatial_in  = beam_feat.reshape(B, N, -1).permute(1, 0, 2)   # (N, B, tcn_channels)
+        spatial_out = self.backbone(spatial_in)                       # (N, B, backbone_channels)
+        pooled      = spatial_out.permute(1, 0, 2).reshape(B * N, -1)  # (B*N, backbone_channels)
         if self.head_type == "heatmap":
-            return (self.head_heatmap(pooled),)             # ((rows, 1),)
+            return (self.head_heatmap(pooled),)             # ((B*N, 1),)
         return self.head_logits(pooled), self.head_votes(pooled)
 
     @torch.no_grad()

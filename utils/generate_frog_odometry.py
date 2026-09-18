@@ -1,7 +1,12 @@
 """
-Generate pseudo-odometry for FROG (which ships none) via ICP-based scan
-matching, and write it to the ``<h5-stem>_odom.npz`` sidecar file that
-FROG_Dataset._load_or_fake_odom() already knows how to pick up automatically
+Generate pseudo-odometry via ICP-based scan matching, and write it to the
+``<h5-stem>_odom.npz`` sidecar file that
+FROG_Dataset._load_odom() already knows how to pick up automatically
+
+**Rarely needed now.** FROG does publish real per-recording odometry, all of
+it is downloaded by ``FROG_Dataset.download()``, and ``_load_odom()`` prefers
+it and raises rather than silently faking when it is absent (TODO.md A14).
+This script is the fallback for a recording that genuinely has none.
 -- no changes to frog_dataset.py are needed; this script only needs to
 produce that file. See library/follow_the_drow/utils/odometry_estimation.py
 for the estimator itself and its verification tests

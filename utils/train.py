@@ -18,8 +18,8 @@ Eval-only
   algorithmic          — AlgorithmicDetector (rule-based; see evaluate.py)
 
 All detectors consume raw-scan input (optionally rotation-aligned):
-  aligned_raw_scan(scans_hist, odoms_hist)  →  (T, N_beams, 1)  [default]
-  raw_scan(scans_hist)                      →  (T, N_beams, 1)  [--no-align-scans]
+  aligned_raw_scan(scans_hist, odoms_hist)  ->  (T, N_beams, 1)  [default]
+  raw_scan(scans_hist)                      ->  (T, N_beams, 1)  [--no-align-scans]
   transposed to (N_beams, T, 1)
 
 All detectors produce (default --head drow):
@@ -75,6 +75,7 @@ Usage
 """
 
 import argparse
+import os
 import random
 from pathlib import Path
 from types import SimpleNamespace
@@ -89,14 +90,14 @@ from torch.utils.data import Dataset, DataLoader, Subset
 
 
 # ---------------------------------------------------------------------------
-# Device detection (CUDA → DirectML → CPU)
+# Device detection (CUDA -> DirectML -> CPU)
 # ---------------------------------------------------------------------------
 
 def detect_device():
     """
     Detect the best available compute device.
 
-    Priority: CUDA / ROCm  →  DirectML  →  CPU.
+    Priority: CUDA / ROCm  ->  DirectML  ->  CPU.
 
     DirectML (``torch-directml``) enables hardware-accelerated training on any
     DX12-capable GPU on Windows without requiring CUDA or ROCm drivers.
@@ -235,12 +236,15 @@ def _setup_datasets(args):
     _time_frame_size = getattr(args, "time_frame", 5)
     if args.dataset == "frog":
         from follow_the_drow.datasets import FROG_Dataset, frog_laser_angles
-        print(f"Loading FROG train split ('{args.train_split}') …")
-        train_ds = FROG_Dataset(split=args.train_split, time_frame_size=_time_frame_size)
+        _mode = getattr(args, "frog_mode", "official")
+        print(f"Loading FROG train split ('{_mode}/{args.train_split}') …")
+        train_ds = FROG_Dataset(split=args.train_split, mode=_mode,
+                                time_frame_size=_time_frame_size)
         val_ds = None
         if args.val_split:
-            print(f"Loading FROG val split ('{args.val_split}') …")
-            val_ds = FROG_Dataset(split=args.val_split, time_frame_size=_time_frame_size)
+            print(f"Loading FROG val split ('{_mode}/{args.val_split}') …")
+            val_ds = FROG_Dataset(split=args.val_split, mode=_mode,
+                                  time_frame_size=_time_frame_size)
         cfg = SimpleNamespace(
             name="frog",
             angles_fn=frog_laser_angles,
@@ -419,7 +423,7 @@ def make_heatmap_target(scan: np.ndarray, angles: np.ndarray,
     scan          : (N,) range measurements
     angles        : (N,) beam angles in radians
     gt_per_class  : {class_id: [(r, phi), ...]}
-    sigma_beams   : Gaussian width in beam units (default 2 → ≈1° FWHM at 0.5°/beam)
+    sigma_beams   : Gaussian width in beam units (default 2 -> ~1deg FWHM at 0.5deg/beam)
 
     Returns
     -------
@@ -454,8 +458,8 @@ def compute_heatmap_loss(heatmap_pred: torch.Tensor,
     heatmap_target : (N,) float32 in [0, 1]  (Gaussian heatmap from make_heatmap_target)
 
     Weighted BCE: beams inside any person's Gaussian (target > 0.1) are
-    upweighted relative to background beams to compensate for the ≈50:1
-    background/foreground imbalance typical in 720-beam FROG scans with 1–3
+    upweighted relative to background beams to compensate for the ~50:1
+    background/foreground imbalance typical in 720-beam FROG scans with 1-3
     persons per frame.
     """
     n_pos = (heatmap_target > 0.1).float().sum()
@@ -514,6 +518,54 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
 
 # ---------------------------------------------------------------------------
 # Input extraction (detector-type aware)
+HISTORY_MODES = ("full", "zero", "shuffle", "frozen")
+
+
+def _apply_history_mode(scans_hist, odoms_hist, mode: str, seed: int = None):
+    """Ablate the temporal axis of one window, without changing its shape.
+
+    The current scan always stays in slot -1, because the labels describe it.
+
+    ``full``     unchanged.
+    ``zero``     history blanked to 0. **Out of distribution** -- a 0 m range is
+                 physically impossible and the model never saw one, so most of
+                 what this costs is damage, not information removal. Measured on
+                 the real test recording: 67.1% -> 42.0%, and 42.0% is 23pp
+                 *below* LFE-Peaks' genuinely single-frame 64.9%, which is how
+                 you can tell (TODO.md A21). Kept for the train-time ablation,
+                 where zeros are in-distribution because training saw them.
+    ``frozen``   every historical slot replaced by the current scan, odometry
+                 included: a static world, static robot. In-distribution.
+                 Removes motion *and* multi-look aggregation.
+    ``shuffle``  history slots permuted, each keeping its own odometry so the
+                 ego-motion correction stays coherent. In-distribution, and the
+                 sharpest of the three: it destroys ordering and direction while
+                 preserving the *set* of observations, so it separates motion
+                 (velocity, gait) from aggregation (several noisy looks at one
+                 scene). Unchanged AUC under shuffle means the model is not
+                 using motion.
+    """
+    if mode not in HISTORY_MODES:
+        raise ValueError(f"history mode must be one of {HISTORY_MODES}, got {mode!r}")
+    if mode == "full":
+        return scans_hist, odoms_hist
+
+    scans_hist = np.asarray(scans_hist).copy()
+    odoms_hist = np.asarray(odoms_hist).copy()
+    if mode == "zero":
+        scans_hist[:-1] = 0.0
+    elif mode == "frozen":
+        scans_hist[:-1] = scans_hist[-1]
+        odoms_hist[:-1] = odoms_hist[-1]
+    else:                                       # shuffle
+        n = len(scans_hist) - 1
+        if n > 1:
+            order = np.random.RandomState(seed).permutation(n)
+            scans_hist[:-1] = scans_hist[:-1][order]
+            odoms_hist[:-1] = odoms_hist[:-1][order]
+    return scans_hist, odoms_hist
+
+
 # ---------------------------------------------------------------------------
 
 def _local_normalize(r: np.ndarray, window: int = 21) -> np.ndarray:
@@ -578,33 +630,32 @@ def _diff_encode(r: np.ndarray) -> np.ndarray:
 
 
 def _extract_input(net, scan, scans_hist, odoms_hist, angles, cfg, device,
-                   align_scans: bool = True, zero_history: bool = False,
+                   align_scans: bool = True, history_mode: str = "full",
+                   history_seed: int = None,
                    diff_channels: bool = False, global_normalize: bool = False,
                    local_normalize_window: int = 0):
     """
     Build the model input tensor from raw scan data.
 
-    Cutout-based detectors → (N_beams, T, N_SAMP)  (always uses odometry alignment
+    Cutout-based detectors -> (N_beams, T, N_SAMP)  (always uses odometry alignment
                               via cutout()'s built-in rotation correction)
-    Full-scan detectors    → (N_beams, T, 1)
+    Full-scan detectors    -> (N_beams, T, 1)
                               With align_scans=True (default): rotation-corrected via
                               aligned_raw_scan(); falls back to raw_scan() if odoms
                               are zero (FROG without odom file).
                               With align_scans=False: raw_scan() — no odometry used.
 
-    zero_history: ablation flag — zero every historical frame (all but the
-    last/current one) before feature extraction, so the model only ever sees
-    real data from the current scan. Used to measure how much the temporal
-    window actually contributes vs. a single-frame-equivalent input, with the
-    architecture (T dimension, parameter count) held fixed.
+    history_mode: which temporal ablation to apply to this window --
+    "full" (default), "zero", "shuffle" or "frozen". See
+    _apply_history_mode(). Shape, parameter count and the current frame are
+    untouched in every mode, so the model is identical across them.
 
     diff_channels, global_normalize: raw_scan-mode only -- see _diff_encode()/
     _global_normalize(). Both representation choices, not augmentations: must
     be applied identically at train and eval time, unlike beam_shift_aug.
     """
-    if zero_history:
-        scans_hist = scans_hist.copy()
-        scans_hist[:-1] = 0.0
+    scans_hist, odoms_hist = _apply_history_mode(scans_hist, odoms_hist,
+                                                 history_mode, seed=history_seed)
     if getattr(net, "INPUT_MODE", "cutout") == "raw_scan":
         if align_scans:
             r = aligned_raw_scan(scans_hist, odoms_hist, cfg.laser_inc, angles=angles)
@@ -716,7 +767,7 @@ class LidarFrameDataset(Dataset):
     def __init__(self, dataset, cfg, input_mode: str,
                  vote_radius: float, nsamp: int = 48, cache: bool = True,
                  head: str = "drow", heatmap_sigma: float = 2.0,
-                 align_scans: bool = True, zero_history: bool = False,
+                 align_scans: bool = True, history_mode: str = "full",
                  dtime: int = 1, beam_shift_aug: int = 0,
                  diff_channels: bool = False, global_normalize: bool = False,
                  local_normalize_window: int = 0,
@@ -734,7 +785,7 @@ class LidarFrameDataset(Dataset):
         self._align_scans   = align_scans and (input_mode == "raw_scan")
         # Ablation: zero every historical frame so training only ever sees
         # real data from the current scan — see _extract_input()'s docstring.
-        self._zero_history  = zero_history
+        self._history_mode  = history_mode
         # Stride (in raw scans) between the dataset.time_frame frames fetched
         # per sample — see DROW_Dataset.get_scan()/FROG_Dataset.get_scan().
         # dtime=1 (default): consecutive frames, the original behaviour.
@@ -769,9 +820,8 @@ class LidarFrameDataset(Dataset):
         iscan = ds.idet2iscan[seq][det_idx]
         scan  = ds.scans[seq][iscan]
         scans_hist, odoms_hist = ds.get_scan(seq, iscan, ds.time_frame, dtime=self._dtime)
-        if self._zero_history:
-            scans_hist = scans_hist.copy()
-            scans_hist[:-1] = 0.0
+        scans_hist, odoms_hist = _apply_history_mode(
+            scans_hist, odoms_hist, self._history_mode, seed=det_idx)
 
         gt_per_class = {
             1: ds.det_wc[seq][det_idx],
@@ -886,6 +936,16 @@ def train_epoch(net, frame_ds: LidarFrameDataset, optimizer,
 # Evaluation
 # ---------------------------------------------------------------------------
 
+def _bounded(frame_ds, max_frames: int):
+    """An evenly-strided view of at most *max_frames* frames, or the dataset
+    itself when it already fits. Deterministic, so the same frames are scored
+    every epoch."""
+    n = len(frame_ds)
+    if not max_frames or n <= max_frames:
+        return frame_ds
+    return Subset(frame_ds, list(range(0, n, (n + max_frames - 1) // max_frames)))
+
+
 def evaluate_loss(net, frame_ds: LidarFrameDataset, vote_weight: float,
                   subsample: float = 1.0, device: str = "cpu",
                   batch_size: int = 4):
@@ -934,6 +994,13 @@ def evaluate_loss(net, frame_ds: LidarFrameDataset, vote_weight: float,
     return total_loss / n, class_loss / n, vote_loss / n
 
 
+# The end-of-training val pass is bounded too. Val is three whole held-out
+# recordings (195,058 annotated frames, ~4x the test set); scoring all of them
+# once would cost hours in the vote-decode loop for a number whose only job is
+# to summarise a selection signal. The test set is what gets reported in full.
+FINAL_AUC_MAX_FRAMES = 20_000
+
+
 def _safe_auc(recs, precs):
     mask = ~np.isnan(recs) & ~np.isnan(precs)
     r, p = recs[mask], precs[mask]
@@ -946,14 +1013,31 @@ def _safe_auc(recs, precs):
 def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
                  v2d_conf: dict = None, device: str = "cpu",
                  batch_size: int = 1, align_scans: bool = True,
-                 zero_history: bool = False, dtime: int = 1,
+                 history_mode: str = "full", dtime: int = 1,
                  diff_channels: bool = False, global_normalize: bool = False,
                  local_normalize_window: int = 0,
-                 return_curves: bool = False, tracker_kwargs: dict = None):
+                 return_curves: bool = False, tracker_kwargs: dict = None,
+                 max_frames: int = 0, return_detections: bool = False):
     """
     Run full inference on every annotated frame and compute per-class AUC.
 
     Works with any detector that has INPUT_MODE set ("cutout" or "raw_scan").
+
+    `dtime` must match the value the weights were trained at -- a mismatch is
+    silent and costs real accuracy (76.3% vs 78.8% wp-AUC when a dtime=10 model
+    was scored at dtime=1). Callers get it from the checkpoint; see
+    save_checkpoint() and TODO.md A15.
+
+    `max_frames` (0 = all) evenly strides the annotated frames down to at most
+    that many, for the per-epoch early-stopping gate where a full pass over a
+    12k-frame val split every epoch would dominate training time. Reported
+    numbers always use the full split.
+
+    `return_detections` additionally returns the flat per-frame detections the
+    AUC was computed from -- score, frame index, and how many frames were
+    evaluated. It exists so the false-positive rate on a person-free split
+    (TODO.md A31) counts exactly the detections this function would have
+    scored, rather than a second decoder written for that metric alone.
 
     Returns a dict with keys 'agnostic', 'wc', 'wa', 'wp'.
     """
@@ -974,13 +1058,14 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
     all_scans_for_pr         = []
     all_wcs, all_was, all_wps = [], [], []
 
-    n_frames = sum(len(dataset.det_id[seq]) for seq in range(len(dataset.det_id)))
-
     all_pairs = [
         (seq, det_idx)
         for seq in range(len(dataset.det_id))
         for det_idx in range(len(dataset.det_id[seq]))
     ]
+    if max_frames and len(all_pairs) > max_frames:
+        all_pairs = all_pairs[::(len(all_pairs) + max_frames - 1) // max_frames]
+    n_frames = len(all_pairs)
 
     _angles = cfg.angles_fn(dataset.scans[0].shape[1])
 
@@ -1040,7 +1125,8 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
             buf_x.append(_extract_input(net, scan, scans_hist, odoms_hist,
                                         _angles, cfg, device,
                                         align_scans=align_scans,
-                                        zero_history=zero_history,
+                                        history_mode=history_mode,
+                                        history_seed=det_idx,
                                         diff_channels=diff_channels,
                                         global_normalize=global_normalize,
                                         local_normalize_window=local_normalize_window))
@@ -1057,7 +1143,7 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
         pbar.close()
 
     # ------------------------------------------------------------------ #
-    # Decode raw model outputs → (det_x, det_y, det_p, det_f)            #
+    # Decode raw model outputs -> (det_x, det_y, det_p, det_f)            #
     # ------------------------------------------------------------------ #
     if _head_type == "heatmap":
         from scipy.signal import find_peaks
@@ -1122,10 +1208,11 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
             if seq != prev_seq:
                 tracker, prev_seq = SimpleTracker(**tracker_kwargs), seq
                 prev_theta, prev_wx, prev_wy = theta, wx, wy
-            # Real per-frame heading/translation delta where odometry exists
-            # (DROW); naturally 0.0 on FROG (confirmed all-zero — Section
-            # 8.6) with no special-casing needed, matching its "assume
-            # static sensor" fallback exactly.
+            # Real per-frame heading/translation delta. This used to say
+            # FROG's was "confirmed all-zero" — that was the faked-odometry
+            # bug talking (TODO.md A14), not the robot: FROG moves 1.88 cm and
+            # up to 0.4 deg per frame, which over a track's lifetime is a
+            # third of a metre at 8 m range.
             ego_dtheta = theta - prev_theta
             ego_dxy = odom_xya_delta_to_tracker_frame(wx - prev_wx, wy - prev_wy, theta)
             prev_theta, prev_wx, prev_wy = theta, wx, wy
@@ -1152,6 +1239,19 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
         # for error-breakdown analysis (TP/FP/FN at a chosen operating point)
         # rather than just the integrated AUC. See utils/error_breakdown.py.
         result["wp_curve"] = wp
+    if return_detections:
+        # `pairs` maps a frame id back to (sequence, detection index), without
+        # which the flat arrays cannot be rejoined to the dataset -- needed by
+        # any trajectory analysis, which has to know *where in the recording*
+        # a detection happened (utils/temporal_oracle.py).
+        result["detections"] = {
+            "scores":   det_p[:, 3].astype(np.float32),
+            "x":        det_x.astype(np.float32),
+            "y":        det_y.astype(np.float32),
+            "frames":   det_f.astype(np.int64),
+            "n_frames": len(all_pairs),
+            "pairs":    list(all_pairs),
+        }
     return result
 
 
@@ -1182,15 +1282,57 @@ def _arch_metadata(net) -> dict:
 
 
 def save_checkpoint(path: Path, net, optimizer, epoch: int,
-                    detector_name: str, dataset_name: str):
-    torch.save({
+                    detector_name: str, dataset_name: str,
+                    dtime: int = 1, val_wp_auc: float = None,
+                    frog_mode: str = None):
+    """Persist weights plus everything needed to *evaluate them the way they
+    were trained*.
+
+    `dtime` is stored because leaving it to the caller is what caused the bug:
+    `evaluate_auc()` defaults it to 1 and nothing in `train_model()` passed it,
+    so a model trained on 0.38 s windows was scored on 0.038 s ones -- 76.3%
+    against 78.8% wp-AUC on the same weights and the same data. With it in the
+    checkpoint, `evaluate.py --eval-dtime` can default to the value the weights
+    were actually trained at instead of to 1 (TODO.md A15).
+
+    `frog_mode` is stored for the same reason `dtime` is, one level up: with
+    three FROG partitions to choose from (TODO.md A30), a checkpoint evaluated
+    under the wrong one is not a worse number, it is a different experiment --
+    and `balanced`'s val even contains recordings `official` trains on. Stored
+    here, `evaluate.py --frog-mode` can default to the partition the weights
+    were actually trained on.
+
+    `val_wp_auc` is the score this checkpoint was *selected* on, stored so a
+    later `--resume` can seed `best_val_auc` with it. Without it, resuming
+    reset the bar to -inf and the first epoch after a resume overwrote
+    `.best.pth` unconditionally — destroying the very checkpoint the resume
+    existed to preserve.
+
+    Written to a temporary file and renamed into place, because `torch.save()`
+    straight to the path is not atomic: a crash partway through leaves a
+    truncated file *and* the previous best already gone. `os.replace()` is
+    atomic on both POSIX and Windows.
+    """
+    payload = {
         "detector":  detector_name,
         "model":     net.state_dict(),
         "optimizer": optimizer.state_dict(),
         "epoch":     epoch,
         "dataset":   dataset_name,
+        "dtime":     int(dtime),
         **_arch_metadata(net),
-    }, path)
+    }
+    if frog_mode is not None:
+        payload["frog_mode"] = str(frog_mode)
+    if val_wp_auc is not None:
+        payload["val_wp_auc"] = float(val_wp_auc)
+
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        torch.save(payload, tmp)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
     print(f"  Checkpoint saved -> {path}")
 
 
@@ -1229,9 +1371,10 @@ def _default_args(**overrides) -> SimpleNamespace:
     defaults = dict(
         detector="spacetime_cnn",
         dataset="frog",
+        frog_mode="official",
         train_split="train",
         val_split="val",
-        epochs=20,
+        epochs=100,
         lr=1e-3,
         weight_decay=1e-4,
         dropout=0.5,
@@ -1256,9 +1399,9 @@ def _default_args(**overrides) -> SimpleNamespace:
         unet_channels=32,
         # alignment
         align_scans=True,
-        zero_history=False,
+        history_mode="full",
         # regularisation / scheduling
-        patience=5,
+        patience=15,
         lr_schedule="plateau",
         # checkpoint
         out=Path("weights_trained.pth"),
@@ -1271,6 +1414,8 @@ def _default_args(**overrides) -> SimpleNamespace:
         eval_only=False,
         eval_r=0.5,
         auc_every=5,
+        auc_max_frames=2000,
+        train_probe=True,
         force_cpu=False,
     )
     defaults.update(overrides)
@@ -1350,8 +1495,14 @@ def train_model(args) -> dict:
         lr=args.lr, weight_decay=args.weight_decay, using_dml=using_dml)
 
     start_epoch = 0
+    resumed_val_auc = None
     if args.resume:
         start_epoch = load_checkpoint(args.resume, net, optimizer)
+        # The score this checkpoint was selected on, so the bar survives the
+        # resume. Without it best_val_auc restarted at -inf and the first epoch
+        # after a resume overwrote .best.pth even when it scored worse.
+        resumed_val_auc = torch.load(
+            args.resume, map_location="cpu").get("val_wp_auc")
 
     # Build frame datasets once.  By default preprocessing is cached and
     # amortised across epochs; pass --no-frame-cache to trade that RAM
@@ -1364,8 +1515,10 @@ def train_model(args) -> dict:
                               "heatmap" if args.detector == "temporal_unet" else "drow")
     _heatmap_sigma  = getattr(args, "heatmap_sigma", 2.0)
     _align_scans    = getattr(args, "align_scans", True)
-    _zero_history   = getattr(args, "zero_history", False)
+    _history_mode   = getattr(args, "history_mode", "full")
     _dtime          = getattr(args, "dtime", 1)
+    _frog_mode      = (getattr(args, "frog_mode", "official")
+                       if cfg.name == "frog" else None)
     _beam_shift_aug = getattr(args, "beam_shift_aug", 0)
     _diff_channels  = getattr(args, "diff_channels", False)
     _global_normalize = getattr(args, "global_normalize", False)
@@ -1375,16 +1528,20 @@ def train_model(args) -> dict:
     train_frame_ds = LidarFrameDataset(
         train_ds, cfg, _input_mode, args.vote_radius, _nsamp,
         cache=_frame_cache, head=_head, heatmap_sigma=_heatmap_sigma,
-        align_scans=_align_scans, zero_history=_zero_history, dtime=_dtime,
+        align_scans=_align_scans, history_mode=_history_mode, dtime=_dtime,
         beam_shift_aug=_beam_shift_aug, diff_channels=_diff_channels,
         global_normalize=_global_normalize,
         local_normalize_window=_local_normalize_window,
         range_jitter_scale=_range_jitter_scale,
         range_jitter_offset=_range_jitter_offset)
+    # Never cached: val is three whole held-out recordings (195,058 frames,
+    # nearly 2x the training set), and only a bounded stride of it is ever read.
+    # Caching all of it cost ~4.9 GB on top of train's ~2.7 GB and OOM'd a 17 GB
+    # machine outright.
     val_frame_ds = (LidarFrameDataset(
         val_ds, cfg, _input_mode, args.vote_radius, _nsamp,
-        cache=_frame_cache, head=_head, heatmap_sigma=_heatmap_sigma,
-        align_scans=_align_scans, zero_history=_zero_history, dtime=_dtime,
+        cache=False, head=_head, heatmap_sigma=_heatmap_sigma,
+        align_scans=_align_scans, history_mode=_history_mode, dtime=_dtime,
         beam_shift_aug=0,  # never augment validation
         diff_channels=_diff_channels, global_normalize=_global_normalize,
         local_normalize_window=_local_normalize_window,
@@ -1412,13 +1569,30 @@ def train_model(args) -> dict:
     else:
         scheduler = None
 
-    # Early stopping
+    # Early stopping and model selection, both on val wp-AUC.
+    #
+    # Not on val_loss, which they used to run on. compute_loss() recomputes
+    # pos_weight = n_neg/n_pos per *batch* and returns weight=None for
+    # person-free frames, and train_epoch/evaluate_loss then average over
+    # batches rather than samples -- so the number's scale swings with batch
+    # composition. Measured on one checkpoint, 2,000 frames each: a contiguous
+    # block gives train 0.0908 / val 0.2915, a random sample of the same data
+    # gives train 0.1973 / val 0.1775. A 3x swing on batching alone.
+    #
+    # The concrete damage: two runs with identical architecture, dtime and
+    # data diverged only because of where that noise landed. One improved
+    # steadily to epoch 14 and stopped at 19; the other happened to hit
+    # val_loss 0.1987 at epoch 3 -- a value the first did not reach until
+    # epoch 19 -- which set an unbeatable bar and let patience kill it at
+    # epoch 8 while train_loss was still falling. Cost: 78.8% vs 79.7% wp-AUC
+    # (TODO.md A17).
     patience = getattr(args, "patience", 0)
     if patience > 0 and val_ds is None:
         print("  [WARN] patience>0 requires a val split; early stopping disabled.\n")
         patience = 0
 
-    best_val_loss    = float("inf")
+    best_val_auc     = -float("inf") if resumed_val_auc is None else float(resumed_val_auc)
+    best_epoch       = start_epoch
     patience_counter = 0
     best_path = args.out.with_suffix(".best.pth") if patience > 0 else None
 
@@ -1428,6 +1602,7 @@ def train_model(args) -> dict:
         val_loss=[], val_class_loss=[], val_vote_loss=[],
         auc_epochs=[],
         val_auc_agnostic=[], val_auc_wc=[], val_auc_wa=[], val_auc_wp=[],
+        train_auc_wp=[],
         stopped_epoch=start_epoch,
     )
 
@@ -1454,10 +1629,15 @@ def train_model(args) -> dict:
 
         stop = False
         if val_ds is not None:
+            # A fixed stride, not the whole split and not a fresh random sample
+            # per epoch: val_loss is a logged diagnostic that nothing gates on,
+            # so walking 195k frames for it every epoch was pure cost -- and a
+            # trend line you read across epochs has to be the same sample each
+            # time to mean anything.
             vl, vc, vv = evaluate_loss(
-                net, val_frame_ds,
+                net, _bounded(val_frame_ds, getattr(args, "auc_max_frames", 2000)),
                 vote_weight=args.vote_weight,
-                subsample=args.subsample, device=device,
+                subsample=1.0, device=device,
                 batch_size=args.batch_size,
             )
             history["val_loss"].append(vl)
@@ -1468,49 +1648,76 @@ def train_model(args) -> dict:
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
                 scheduler.step(vl)
 
-            # Early stopping
-            if patience > 0:
-                if vl < best_val_loss:
-                    best_val_loss = vl
-                    patience_counter = 0
-                    save_checkpoint(best_path, net, optimizer, epoch,
-                                    args.detector, cfg.name)
-                else:
-                    patience_counter += 1
-                    msg += f"  patience={patience_counter}/{patience}"
-                    if patience_counter >= patience:
-                        tqdm.write(msg)
-                        tqdm.write(
-                            f"  Early stopping at epoch {epoch} "
-                            f"(no val improvement for {patience} epochs)."
-                        )
-                        final_epoch = epoch
-                        stop = True
+            # wp-AUC: the gate when patience is on, and the logged diagnostic
+            # when --auc-every asks for it. Strided to --auc-max-frames so the
+            # per-epoch cost stays bounded on a 12k-frame val split; the final
+            # number below is computed on all of it.
+            auc_every = getattr(args, "auc_every", 0)
+            want_auc = (patience > 0) or (auc_every > 0 and epoch % auc_every == 0)
+            if want_auc:
+                aucs = evaluate_auc(
+                    net, val_ds, cfg, eval_r=args.eval_r, device=device,
+                    batch_size=args.batch_size, dtime=_dtime,
+                    align_scans=_align_scans, history_mode=_history_mode,
+                    diff_channels=_diff_channels,
+                    global_normalize=_global_normalize,
+                    local_normalize_window=_local_normalize_window,
+                    max_frames=getattr(args, "auc_max_frames", 2000))
+                history["auc_epochs"].append(epoch)
+                history["val_auc_agnostic"].append(aucs["agnostic"])
+                history["val_auc_wc"].append(aucs["wc"])
+                history["val_auc_wa"].append(aucs["wa"])
+                history["val_auc_wp"].append(aucs["wp"])
+                msg += f"  |  val_wp_auc={aucs['wp']:.1%}"
+
+                # Memorization probe: the same metric on a strided subsample of
+                # the *training* split. The gap val-minus-train is the direct
+                # measure of how much this model memorises rather than
+                # generalises -- and the absence of it is what let four
+                # measurement bugs hide for weeks. FROG's own interleaved
+                # holdout scored identically to a stride-9 train subsample
+                # (78.8% both at matched dtime), so "val" and "train" were the
+                # same number and no gap could ever appear. Diagnostic only:
+                # selecting on it would reintroduce exactly that failure.
+                if getattr(args, "train_probe", True):
+                    probe = evaluate_auc(
+                        net, train_ds, cfg, eval_r=args.eval_r, device=device,
+                        batch_size=args.batch_size, dtime=_dtime,
+                        align_scans=_align_scans, history_mode=_history_mode,
+                        diff_channels=_diff_channels,
+                        global_normalize=_global_normalize,
+                        local_normalize_window=_local_normalize_window,
+                        max_frames=getattr(args, "auc_max_frames", 2000))
+                    history["train_auc_wp"].append(probe["wp"])
+                    msg += (f"  train_wp_auc={probe['wp']:.1%}"
+                            f"  gap={probe['wp'] - aucs['wp']:+.1%}")
+
+                if patience > 0:
+                    if aucs["wp"] > best_val_auc:
+                        best_val_auc = aucs["wp"]
+                        best_epoch = epoch
+                        patience_counter = 0
+                        save_checkpoint(best_path, net, optimizer, epoch,
+                                        args.detector, cfg.name, dtime=_dtime,
+                                        val_wp_auc=aucs["wp"],
+                                        frog_mode=_frog_mode)
+                    else:
+                        patience_counter += 1
+                        msg += f"  patience={patience_counter}/{patience}"
+                        if patience_counter >= patience:
+                            tqdm.write(msg)
+                            tqdm.write(
+                                f"  Early stopping at epoch {epoch} "
+                                f"(no val wp-AUC improvement for {patience} epochs)."
+                            )
+                            final_epoch = epoch
+                            stop = True
 
         if scheduler is not None and not isinstance(
                 scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
             scheduler.step()
 
         tqdm.write(msg)
-
-        # AUC evaluation
-        auc_every = getattr(args, "auc_every", 0)
-        if auc_every > 0 and epoch % auc_every == 0:
-            auc_ds = val_ds or train_ds
-            aucs = evaluate_auc(net, auc_ds, cfg, eval_r=args.eval_r,
-                                device=device, batch_size=args.batch_size,
-                                align_scans=_align_scans, zero_history=_zero_history,
-                                diff_channels=_diff_channels,
-                                global_normalize=_global_normalize,
-                                local_normalize_window=_local_normalize_window)
-            history["auc_epochs"].append(epoch)
-            history["val_auc_agnostic"].append(aucs["agnostic"])
-            history["val_auc_wc"].append(aucs["wc"])
-            history["val_auc_wa"].append(aucs["wa"])
-            history["val_auc_wp"].append(aucs["wp"])
-            tqdm.write(f"  AUC  agnostic={aucs['agnostic']:.1%}  "
-                       f"wc={aucs['wc']:.1%}  wa={aucs['wa']:.1%}  "
-                       f"wp={aucs['wp']:.1%}")
 
         final_epoch = epoch
         if stop:
@@ -1519,35 +1726,52 @@ def train_model(args) -> dict:
 
     history["stopped_epoch"] = final_epoch
 
-    # Final AUC (skip if already computed for this epoch)
+    # Restore the best weights BEFORE measuring anything. The final AUC used to
+    # be computed here and load_checkpoint() called after it, so the printed
+    # number described the last (post-patience) epoch's weights while the file
+    # written to disk held the best epoch's -- verified on the dtime=10 run,
+    # which printed 76.7% from epoch-8 weights and saved epoch-3 weights
+    # stamped "epoch 8". The reported number and the saved model were never the
+    # same network (TODO.md A16).
     print()
-    if val_ds is not None:
-        last_auc_epoch = history["auc_epochs"][-1] if history["auc_epochs"] else -1
-        if last_auc_epoch != final_epoch:
-            print("Computing final AUC on val set …")
-            aucs = evaluate_auc(net, val_ds, cfg, eval_r=args.eval_r,
-                                device=device, batch_size=args.batch_size,
-                                align_scans=_align_scans, diff_channels=_diff_channels,
-                                global_normalize=_global_normalize,
-                                local_normalize_window=_local_normalize_window)
-            history["auc_epochs"].append(final_epoch)
-            history["val_auc_agnostic"].append(aucs["agnostic"])
-            history["val_auc_wc"].append(aucs["wc"])
-            history["val_auc_wa"].append(aucs["wa"])
-            history["val_auc_wp"].append(aucs["wp"])
-            print(f"  Agnostic (any) : {aucs['agnostic']:.1%}")
-            print(f"  Wheelchair(wc) : {aucs['wc']:.1%}")
-            print(f"  Walker    (wa) : {aucs['wa']:.1%}")
-            print(f"  Person    (wp) : {aucs['wp']:.1%}")
-            print()
-
-    # Load best weights before saving final checkpoint
+    saved_epoch = final_epoch
     if best_path is not None and best_path.exists():
-        print(f"  Loading best checkpoint (val_loss={best_val_loss:.4f}) …")
+        print(f"  Loading best checkpoint (epoch {best_epoch}, "
+              f"val wp-AUC={best_val_auc:.1%}) …")
         load_checkpoint(best_path, net)
+        # Stamp the epoch these weights actually come from. The old code wrote
+        # `epoch=final_epoch` regardless, so the dtime=10 run's checkpoint held
+        # epoch-3 weights labelled "epoch 8" -- and every later reader believed
+        # the label (TODO.md A16).
+        saved_epoch = best_epoch
 
-    save_checkpoint(args.out, net, optimizer, epoch=final_epoch,
-                    detector_name=args.detector, dataset_name=cfg.name)
+    # Final AUC on the *whole* val split, for the weights just restored.
+    if val_ds is not None:
+        n_val = sum(len(d) for d in val_ds.det_id)
+        print(f"Computing final AUC on val set "
+              f"({min(n_val, FINAL_AUC_MAX_FRAMES):,} of {n_val:,} frames) …")
+        aucs = evaluate_auc(net, val_ds, cfg, eval_r=args.eval_r, device=device,
+                            batch_size=args.batch_size, dtime=_dtime,
+                            align_scans=_align_scans, history_mode=_history_mode,
+                            diff_channels=_diff_channels,
+                            global_normalize=_global_normalize,
+                            local_normalize_window=_local_normalize_window,
+                            max_frames=FINAL_AUC_MAX_FRAMES)
+        history["auc_epochs"].append(saved_epoch)
+        history["val_auc_agnostic"].append(aucs["agnostic"])
+        history["val_auc_wc"].append(aucs["wc"])
+        history["val_auc_wa"].append(aucs["wa"])
+        history["val_auc_wp"].append(aucs["wp"])
+        print(f"  Agnostic (any) : {aucs['agnostic']:.1%}")
+        print(f"  Wheelchair(wc) : {aucs['wc']:.1%}")
+        print(f"  Walker    (wa) : {aucs['wa']:.1%}")
+        print(f"  Person    (wp) : {aucs['wp']:.1%}")
+        print()
+
+    save_checkpoint(args.out, net, optimizer, epoch=saved_epoch,
+                    detector_name=args.detector, dataset_name=cfg.name,
+                    dtime=_dtime, frog_mode=_frog_mode,
+                    val_wp_auc=None if best_val_auc == -float("inf") else best_val_auc)
 
     return history
 
@@ -1678,12 +1902,23 @@ def main():
     )
     # Dataset
     parser.add_argument("--dataset",     choices=["drow", "frog", "jrdb"], default="frog")
+    parser.add_argument("--frog-mode",   choices=["official", "transferred", "balanced"],
+                        default="official",
+                        help="FROG partition (default: official, the published "
+                             "benchmark). 'transferred' trains identically and "
+                             "tests on person-free frames; 'balanced' gives every "
+                             "split crowded, sparse and empty scenes. Stored in the "
+                             "checkpoint so evaluate.py picks it up. Ignored for "
+                             "--dataset drow/jrdb.")
     parser.add_argument("--train-split", default="train",
                         help="Training split (default: train)")
     parser.add_argument("--val-split",   default="val",
                         help="Validation split (default: val; '' to disable)")
     # Training
-    parser.add_argument("--epochs",      type=int,   default=10)
+    parser.add_argument("--epochs",      type=int,   default=100,
+                        help="Training epochs (default: 100, roughly matching "
+                             "LFE-Peaks/LFE-PPN's own 100/150-epoch recipe). "
+                             "Use --patience to stop early.")
     parser.add_argument("--lr",          type=float, default=1e-3)
     parser.add_argument("--weight-decay",type=float, default=1e-4)
     parser.add_argument("--dropout",     type=float, default=0.5,
@@ -1753,12 +1988,12 @@ def main():
                              "must be divisible by 3×8=24 for GroupNorm)")
     parser.add_argument("--n-spatial-stages", type=int, default=3,
                         help="Spatial inception stages 1–4 (SpaceTimeCNN; default: 3). "
-                             "Beam RF: 3→17, 4→49, 5→177, 6→689 beams.")
+                             "Beam RF: 3->17, 4->49, 5->177, 6->689 beams.")
     parser.add_argument("--tcn-channels", type=int, default=64,
                         help="Temporal TCN channel width (FullScanTCN; default: 64)")
     parser.add_argument("--unet-channels", type=int, default=32,
                         help="Base encoder channel width (TemporalUNet; default: 32). "
-                             "Doubles at each encoder stage: 32→64→128→256.")
+                             "Doubles at each encoder stage: 32->64->128->256.")
     # Odometry alignment
     parser.add_argument("--align-scans", dest="align_scans", action="store_true",
                         default=True,
@@ -1768,12 +2003,17 @@ def main():
     parser.add_argument("--no-align-scans", dest="align_scans", action="store_false",
                         help="Disable odometry alignment (use raw, unaligned scans). "
                              "Reproduces the original unaligned baseline.")
-    parser.add_argument("--zero-history", action="store_true", default=False,
-                        help="Ablation: zero every historical frame in the T-frame "
-                             "window (all but the current/last one) before feature "
-                             "extraction, for both training and evaluation. Measures "
-                             "how much the temporal window actually contributes vs. "
-                             "a single-frame-equivalent input, architecture unchanged.")
+    parser.add_argument("--history-mode", choices=list(HISTORY_MODES), default="full",
+                        help="Temporal ablation applied to every window, at train "
+                             "and eval time alike. 'zero' blanks the history "
+                             "(out-of-distribution -- a 0 m range is impossible; "
+                             "valid only when *trained* with it), 'frozen' repeats "
+                             "the current scan, 'shuffle' permutes the history slots "
+                             "so ordering and direction are destroyed while the set "
+                             "of observations survives. Shuffle is the sharp one: it "
+                             "separates motion from multi-look aggregation. "
+                             "Architecture, shape and parameter count are identical "
+                             "in every mode. See TODO.md A21.")
     # Detection head (full-scan models only)
     parser.add_argument("--head", choices=["drow", "heatmap"], default=None,
                         help="Detection head for full-scan models (default: 'drow' "
@@ -1786,12 +2026,13 @@ def main():
                              "accumulation. Use --heatmap-sigma to control peak width.")
     parser.add_argument("--heatmap-sigma", type=float, default=2.0,
                         help="Gaussian sigma in beam units for heatmap targets "
-                             "(default: 2 → ≈1° FWHM at 0.5°/beam). "
+                             "(default: 2 -> ~1deg FWHM at 0.5deg/beam). "
                              "Ignored when --head drow.")
     # Regularisation / scheduling
-    parser.add_argument("--patience",    type=int,   default=0,
-                        help="Early-stopping patience in epochs (0=disabled). "
-                             "Saves best checkpoint to <out>.best.pth.")
+    parser.add_argument("--patience",    type=int,   default=15,
+                        help="Early-stopping patience in epochs, counted on "
+                             "val wp-AUC (0=disabled; default: 15). Saves the "
+                             "best-wp-AUC checkpoint to <out>.best.pth.")
     parser.add_argument("--lr-schedule", choices=["none", "cosine", "plateau"],
                         default="none",
                         help="LR schedule: none | cosine | plateau (default: none)")
@@ -1815,7 +2056,22 @@ def main():
     parser.add_argument("--eval-only",  action="store_true")
     parser.add_argument("--eval-r",     type=float, default=0.5)
     parser.add_argument("--auc-every",  type=int,   default=0,
-                        help="Compute full AUC every N epochs (0 = end only)")
+                        help="Log val wp-AUC every N epochs (0 = end only). "
+                             "With --patience > 0 it is computed every epoch "
+                             "regardless, since it is the early-stopping gate.")
+    parser.add_argument("--no-train-probe", dest="train_probe",
+                        action="store_false", default=True,
+                        help="Skip the per-epoch memorization probe (wp-AUC on "
+                             "a strided train subsample, logged beside the val "
+                             "gate as train_wp_auc/gap). On by default: the gap "
+                             "between the two is what makes a leaking split or "
+                             "a memorising model visible immediately. Halves "
+                             "the per-epoch eval cost when off.")
+    parser.add_argument("--auc-max-frames", type=int, default=2000,
+                        help="Cap the per-epoch wp-AUC gate at this many "
+                             "evenly-strided val frames (0 = whole split; "
+                             "default: 2000). The final reported AUC always "
+                             "uses the whole split.")
     # Hyperparameter tuning (Optuna)
     parser.add_argument("--tune",        action="store_true",
                         help="Run Optuna hyperparameter search instead of training. "
@@ -1863,7 +2119,9 @@ def main():
         print("=== Evaluation ===")
         aucs = evaluate_auc(net, eval_ds, cfg, eval_r=args.eval_r, device=device,
                             batch_size=args.batch_size,
+                            dtime=getattr(args, "dtime", 1),
                             align_scans=getattr(args, "align_scans", True),
+                            history_mode=getattr(args, "history_mode", "full"),
                             diff_channels=getattr(args, "diff_channels", False),
                             global_normalize=getattr(args, "global_normalize", False),
                             local_normalize_window=getattr(args, "local_normalize_window", 0))

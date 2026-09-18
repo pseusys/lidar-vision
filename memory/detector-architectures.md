@@ -28,12 +28,20 @@ Every stage after preprocessing is shared by every detector; only the extraction
 
 | Detector | Beam communication | Temporal fusion order | Cost | Best FROG wp-AUC |
 | --- | --- | --- | --- | --- |
-| `SpaceTimeCNNDetector` (A) | local, joint with time from layer 1 | joint | ~9-12 ms/frame | **highest of the three** (`performance-log.md`) |
-| `FullScanTCNDetector` (B) | local, growing via dilation | time-then-space (causal TCN first) | ~2-3 ms/frame | lower than A, higher speed |
-| `TemporalUNetDetector` (C) | global (bottleneck) + local (skips) | joint (T input channels) | ~2-3 ms/frame | lowest of the three |
+| `SpaceTimeCNNDetector` (A) | local, joint with time from layer 1 | joint | ~9-12 ms/frame | retracted (`performance-log.md`) |
+| `FullScanTCNDetector` (B) | local, growing via dilation | time-then-space (causal TCN first) | ~2-3 ms/frame | retracted |
+| `TemporalUNetDetector` (C) | global (bottleneck) + local (skips) | joint (T input channels) | ~2-3 ms/frame | retracted |
 
 A vs. B is a deliberate ablation: does fusing space and time jointly from the first layer beat collapsing time first and mixing space afterward?
-A wins on accuracy, B and C win on speed — consistent with the general video-CNN finding that joint processing usually edges out factorized designs on accuracy while factorized designs win on speed.
+The accuracy ordering that used to sit in this table (A > B > C) is **retracted pending re-measurement** — every FROG number behind it carries at least one of the four 2026-09-10 measurement bugs, and A18 in particular hit A and B but not C, so the three were not even measured the same way.
+The speed ordering (B ~ C < A) is unaffected: it is a timing measurement, not an accuracy one.
+
+**All three set `BEAM_BATCH = True` and take `(B, N_beams, T, C)`.**
+Every one of them convolves along the beam axis, so a flattened `(B*N_beams, T, C)` minibatch splices B frames into one long scan and lets GroupNorm statistics, the SE gate and the convolutions themselves leak between frames that share a batch.
+A and B did exactly that until 2026-09-10; C never could, because it pools over the beam axis.
+Measured before the fix, real val split at `dtime`=10: beam-level person AUC 0.9644 (batch 1) -> 0.9696 (4) -> 0.9765 (16) -> 0.9810 (64), because evaluation batches are consecutive frames and a bigger batch leaked more temporal context.
+`tests/test_batch_independence.py` now asserts a frame's output is identical alone or inside a batch of 16, for every model and both heads.
+Old checkpoints still load — shapes are unchanged — but compute different outputs.
 Two earlier designs (`FullScanTransformerDetector`, `FullScanCNNDetector`) used global self-attention and a GRU respectively and were removed for violating the non-recursive constraint; see `rejected-ideas.md` for why they were also worse, not merely disqualified on principle.
 
 ## Source of truth
@@ -62,4 +70,8 @@ A detector class not in this dict cannot be trained or evaluated through `train.
 | `align_scans` | on (default) | `train.py --no-align-scans`, `_extract_input()` | Whether historical frames are odometry-rotation-corrected before extraction. |
 | `SimpleTracker.match_radius` | 0.5 m (fine stride) | `tracking.py`, `evaluate_auc(tracker_kwargs=...)` | Max distance to associate a detection with a predicted track position — a single global value, known not to generalize across invocation rates (`rejected-ideas.md`). |
 | `SimpleTracker.min_hits` | 3 (default) | same | Real matches required before a track is reported at all. |
+| `LFEPeaksDetector.merge_radius` / `LFEPPNDetector.nms_radius` | **0.30 m** both | `lfe_detector.py`'s `_merge_nearby()` | How close two centroids must be to count as one person. Calibrated against each detector's published AP at *both* association distances, not taken from the paper's sentence — which implies the 0.8 m person diameter and is ~3.5pp low for LFE-PPN and ~6pp low for LFE-Peaks. Changing either invalidates every false-positive number in the repo; that has already happened once (`CHANGELOG.md` 2026-09-11). |
+| `merge_radius_slope` / `nms_radius_slope` | **0.0** (default = the single scalar above) | same | Makes the radius range-dependent, `r(d) = radius + slope * d`, evaluated at the pair's mean range and floored at zero. Exists because Tier 0 measured one scalar failing in both directions at 0.30 m — ~5 pp of LFE-Peaks' recall spent merging adjacent people, while LFE-PPN emits 1.609 duplicates per frame (`static-detector-diagnosis.md`, `TODO.md` A38). `0.0` is bit-identical to the old behaviour and is guarded by `tests/test_merge_radius.py`. |
 | session-split threshold | 300 s | `frog_dataset.py`'s `_load_h5()` | Any real timestamp gap wider than this starts a new sequence, so temporal windows never cross it — chosen to isolate FROG's one genuine ~24.6h recording-session boundary without splitting on the 61 sub-90s in-session pauses. |
+| `dropout` | **0.5** (`train.py --dropout`, `_default_args()`) | `_build_model()` | Applied uniformly to every trainable detector — `drow`, `drspaam`, `li2former`, and all three full-scan models alike — via `_build_model()`'s single `dr = getattr(args, "dropout", 0.5)`, which overrides each class's own constructor default (`full_scan.py`'s three classes default to 0.1 when instantiated directly, bypassing `train.py`). §5.4 of `docs/RESEARCH.md` documents 0.1 as the *design intent* for the novel full-scan architectures specifically — that intent was never wired into `train.py`'s actual default, so every full-scan training run through the CLI has used 0.5, not 0.1 (verified by reading `_build_model()` and `_default_args()` directly, 2026-09-10 — an earlier memory note claiming "0.1, light regularisation" was wrong, based on checking only the class constructor, not the CLI override). 0.5 exactly matches the official DR-SPAAM/DROW training recipe's own `dropout: 0.5` (`VisualComputingInstitute/2D_lidar_person_detection`'s `base_dr_spaam_drow_cfg.yaml`, fetched directly 2026-09-10) — so this project's dropout is not under-regularized relative to the papers it ports. |
+| `weight_decay` | **1e-4** (`train.py --weight-decay`) | `_make_optimizer()` | The official DR-SPAAM/DROW repo's own optimizer (`dr_spaam/pipeline/optim.py`) uses plain `Adam(..., amsgrad=True)` with **no weight decay at all** — this project's default is already *more* regularized on this axis than the papers it ports, not less. Neither this project nor the official recipe (`augment_data: False` in the same yaml) applies data augmentation by default. |

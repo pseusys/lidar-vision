@@ -20,6 +20,8 @@ Start with [`../AGENTS.md`](../AGENTS.md) for orientation; come here for depth.
 | --- | --- |
 | [`detector-architectures.md`](detector-architectures.md) | How a scan becomes a detection, the three proposed architectures vs. the cutout baselines, `DETECTOR_REGISTRY` as source of truth, the tunables table. Full literature review and citations are in `../docs/RESEARCH.md`. |
 | [`data-model.md`](data-model.md) | The DROW/FROG/JRDB file formats, FROG's session-splitting semantics, the real-vs-estimated odometry file formats, and what regenerating either invalidates. |
+| [`dataset-properties.md`](dataset-properties.md) | What the *data* constrains, not what the files contain: how long people actually stay still, the ceiling that puts on any motion-based method, the frame-rate and density differences that make cross-dataset numbers incomparable, and what the false positives turn out to be. **Read before designing an architecture.** |
+| [`noise-structure.md`](noise-structure.md) | What each dataset's range readings contain, what its sensor promises (sourced specs), what the loaders rewrite before a model sees it, and which denoising mechanism each kind of noise calls for. |
 | [`deployment.md`](deployment.md) | The ROS/Docker pipeline on RobAIR: the one deploy command, the node reference table, and what silently isn't wired up yet. |
 | [`commands.md`](commands.md) | Every routine invocation, with the flags actually used, in pipeline order. |
 
@@ -28,7 +30,9 @@ Start with [`../AGENTS.md`](../AGENTS.md) for orientation; come here for depth.
 | File | What's in it |
 | --- | --- |
 | [`interpreting-evaluation.md`](interpreting-evaluation.md) | How to discount an accuracy or speed number correctly — which regime it's from, what it doesn't correct for, what it's silently not comparable to. |
-| [`performance-log.md`](performance-log.md) | The measured tables themselves: the accuracy/speed comparison, the `dtime` sweep, the NMS sweep, the tracker invocation-rate sweep. |
+| [`performance-log.md`](performance-log.md) | The standing comparison: published SOTA against this project's own architectures, accuracy and speed, latest measurement only. Sweeps and history live in `CHANGELOG.md`. |
+| [`informational-capacity-proxy.md`](informational-capacity-proxy.md) | A no-training AUC/mutual-information proxy for how much temporal signal a `(T, dtime)` configuration carries, with citations, and what it can't tell you. |
+| [`static-detector-diagnosis.md`](static-detector-diagnosis.md) | Where a single-frame detector loses recall and to what: range-stratified error, the scale-vs-capacity answer from a no-training 1-NN probe over four window parameterisations, the sub-threshold miss budget, and the Cover & Hart bracket. **Read before proposing a static architecture.** |
 
 ## Tooling and operations
 

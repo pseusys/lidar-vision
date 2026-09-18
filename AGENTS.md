@@ -51,7 +51,7 @@ A research project on person detection from knee-height 2D LiDAR data, structure
 
 **Storage** is files, not a database: datasets and published weights are downloaded into `library/follow_the_drow/include/` (gitignored, populated by `pip install ./library`); trained checkpoints go to `checkpoints*/` directories (gitignored); evaluation logs go to `results/` (gitignored).
 **Working directory** is the repo root for most commands, but `cd utils` first for `train.py` / `evaluate.py` / `render_video.py` — their relative paths (`../checkpoints`, `../results`) assume it.
-**Runtime**: Python 3.12, in the `.venv312` virtualenv — activate with `.venv312/Scripts/activate` (Windows) or call `.venv312/Scripts/python.exe` directly.
+**Runtime**: Python 3.12, in the `.venv` virtualenv — activate with `.venv/Scripts/activate` (Windows) or call `.venv/Scripts/python.exe` directly.
 **Secrets**: none.
 This project has no API keys, tokens, or credentials anywhere in the repo; `deploy/conf.env` is committed runtime configuration (topic names, thresholds, node enable flags), not a secret.
 
@@ -64,7 +64,8 @@ This project has no API keys, tokens, or credentials anywhere in the repo; `depl
 | Write code in one of this project's languages | [`memory/coding-guidelines.md`](memory/coding-guidelines.md) |
 | Understand a detector's architecture or the research rationale | [`memory/detector-architectures.md`](memory/detector-architectures.md) |
 | **Discount an accuracy or speed number correctly** | [`memory/interpreting-evaluation.md`](memory/interpreting-evaluation.md) |
-| Compare a tuning sweep against past runs | [`memory/performance-log.md`](memory/performance-log.md) |
+| See where this project stands against published SOTA | [`memory/performance-log.md`](memory/performance-log.md) |
+| Compare a tuning sweep against past runs | [`CHANGELOG.md`](CHANGELOG.md) |
 | Understand a dataset file format, or what a rebuild invalidates | [`memory/data-model.md`](memory/data-model.md) |
 | Run something | [`memory/commands.md`](memory/commands.md) |
 | Avoid a known platform or environment trap | [`memory/gotchas.md`](memory/gotchas.md) |
@@ -178,6 +179,6 @@ Use `->` instead of `→`, plain words instead of check marks.
 *Because:* `Li2FormerDetector` training hit three separate DirectML crash modes (allocator OOM at batch_size=2, an access violation, a segfault at batch_size=1) across in-process and subprocess attempts, and no code-side fix resolved any of them — the eventual conclusion was a driver/version limitation of `torch-directml==0.2.5.dev240914`, not a bug in this repo.
 Check whether CUDA/ROCm is available first; if only DirectML is, and it crashes once, say so and move on rather than iterating blindly.
 
-**I5. Use `.venv312/Scripts/python.exe` directly (or activate `.venv312`) — do not run bare `python3` or `make venv`/`make test` and assume they work.**
-*Because:* on this machine `python3` resolves to the Windows Store's install stub, not a real interpreter, so `make venv`'s `python3 -m venv venv` does not create a usable environment — the actual working interpreter was created by hand as `.venv312` (Python 3.12, required for ABI compatibility with the prebuilt C++ extension, see `memory/gotchas.md`).
+**I5. Use `.venv/Scripts/python.exe` directly (or activate `.venv`) — do not run bare `python3` or `make venv`/`make test` and assume they work.**
+*Because:* on this machine `python3` resolves to the Windows Store's install stub, not a real interpreter, so `make venv`'s `python3 -m venv venv` does not create a usable environment — the actual working interpreter was created by hand as `.venv` (Python 3.12, required for ABI compatibility with the prebuilt C++ extension, see `memory/gotchas.md`).
 Fixing the Makefile itself is `TODO.md`'s item A6; until then, the manual venv is the source of truth.

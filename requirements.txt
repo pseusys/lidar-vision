@@ -1,0 +1,56 @@
+# Training environment on AMD ROCm for Windows (TODO.md A43; CHANGELOG.md 2026-09-14).
+#
+# Target: Windows 11, AMD Radeon RX 9060 XT, Python 3.12 (required both by the
+# ROCm wheels and by the prebuilt C++ extension, memory/gotchas.md), AMD
+# Adrenalin driver 26.2.2 (required by AMD for the 7.2.1 PyTorch release).
+# Source: AMD's "Install PyTorch on Windows" and Windows support matrix pages,
+# ROCm 7.2.1 / PyTorch 2.9.1.
+#
+# This is the project's one environment. torch-directml is deliberately absent:
+# it pins torch 2.4.1 and cannot share a venv with this torch. Run from the repository root.
+#
+# Create it with Python 3.12 explicitly. On this machine a bare `python`
+# resolves to 3.14 (C:\Python314), and every wheel below is cp312-only, which
+# pip reports as "is not a supported wheel on this platform":
+#
+#   py -3.12 -m venv .venv
+#   .venv\Scripts\python.exe -m pip install --no-cache-dir -r requirements.txt
+#   .venv\Scripts\python.exe -c "import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+#
+# ROCm builds of PyTorch expose the GPU through the torch.cuda API, so
+# utils/train.py's detect_device() picks it up as "CUDA / ROCm" unchanged.
+
+# --- ROCm SDK 7.2.1 --------------------------------------------------------
+rocm_sdk_core @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_core-7.2.1-py3-none-win_amd64.whl
+rocm_sdk_devel @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_devel-7.2.1-py3-none-win_amd64.whl
+rocm_sdk_libraries_custom @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm_sdk_libraries_custom-7.2.1-py3-none-win_amd64.whl
+rocm @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz
+
+# --- PyTorch 2.9.1 built for ROCm 7.2.1 ------------------------------------
+# torchvision and torchaudio are left out: nothing in library/, utils/ or
+# tests/ imports them.
+torch @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl
+
+# --- this project's library (builds the pybind11 extension) -----------------
+# The first install downloads ~2 GB of datasets and weights only if
+# library/follow_the_drow/include/ is missing; it already exists in this checkout.
+# Its pyproject.toml asks for torch~=2.0 and numpy~=1.24, which the pins here
+# satisfy, so it does not pull a CPU torch over the ROCm one.
+-e ./library
+
+# --- runtime dependencies, pinned to the versions working in .venv312 -------
+numpy==1.26.4            # library requires numpy 1.x
+scipy==1.17.1
+h5py==3.16.0
+opencv-python==4.11.0.86
+scikit-learn==1.9.0
+matplotlib==3.11.1
+onnxruntime==1.28.0      # LFE-Peaks / LFE-PPN baselines and step-1 candidates
+optuna==4.8.0            # train.py --tune
+tqdm==4.70.0
+pytorch-lightning==2.6.5 # declared by the library
+certifi
+
+# --- checks -----------------------------------------------------------------
+pytest==9.1.1
+onnx==1.22.0             # the multiply-add counting script (PROPOSAL.md §7.2)

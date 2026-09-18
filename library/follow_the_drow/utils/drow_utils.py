@@ -47,7 +47,8 @@ def cutout(scans, odoms, number, win_sz=1.66, thresh_dist=1, nsamp=48, UNK=29.99
 
     for t in range(T):
         # Rotation-only odometry correction (same design choice as original DROW).
-        odom_a = float(odoms[t]["xya"][2] - odoms[-1]["xya"][2])
+        raw_a  = float(odoms[t]["xya"][2] - odoms[-1]["xya"][2])
+        odom_a = float(arctan2(sin(raw_a), cos(raw_a)))     # wrapped: a turn across +-pi is small, not ~2 pi
         shift  = odom_a / laserIncrement
 
         # Window [start, end] for every beam simultaneously.       (number,)
@@ -169,6 +170,80 @@ def _prec_rec_2d(det_scores, det_coords, det_frames, gt_coords, gt_frames, gt_ra
         recs[i] = tp/(fn+tp) if fn+tp > 0 else nan
 
     return recs, precs, threshs
+
+
+# Default operating points for false_positive_rate(). 0.3 is LFE-PPN's own
+# published objectness threshold, so it is the one an author would deploy at;
+# 0.9 is "the detector is nearly certain", where a phantom is least excusable.
+FP_THRESHOLDS = (0.3, 0.5, 0.7, 0.9)
+
+
+def false_positive_rate(det_scores, det_frames, n_frames,
+                        frame_period_s=None, thresholds=FP_THRESHOLDS):
+    """False positives per frame, per second, and the share of frames carrying
+    at least one -- on an evaluation split that contains no annotated people.
+
+    **Why this exists rather than an AUC.** On a person-free split wp-AUC is
+    undefined, not merely low: with no true positives, precision is 0 at every
+    threshold and recall has no denominator. Reporting "AUC" there would name
+    something the number is not, which this project has already paid for once
+    (TODO.md A31). Every detection is a false positive by construction, so a
+    count is both well-defined and the quantity a deployment actually feels.
+
+    Arguments:
+    - `det_scores` (D,) confidence of each of the D detections.
+    - `det_frames` (D,) frame index of each detection. Only used to count how
+      many *distinct* frames carry a false positive.
+    - `n_frames` the number of frames evaluated, including the ones that
+      produced no detection at all -- passing only the frames that fired is the
+      easy way to turn a good result into a terrible one.
+    - `frame_period_s` seconds per frame, for the per-second figure. FROG's
+      median is ~1/26.2 s. `None` leaves `fp_per_s` as nan rather than
+      inventing a rate.
+    - `thresholds` operating points to report. A single number here would be a
+      choice presented as a measurement; a sweep lets the reader pick.
+
+    Returns a dict with `n_frames`, `frame_period_s`, `duration_s`, and
+    `per_threshold`: {threshold: {fp, fp_per_frame, fp_per_s, frames_with_fp,
+    frame_fp_rate}}.
+
+    `duration_s` is `n_frames * frame_period_s`, deliberately -- not the span
+    between the first and last timestamp. The scored frames need not be
+    contiguous (`transferred`'s person-free frames are interleaved with
+    populated ones the split drops), so a span would bill the gaps to the
+    detector and understate its rate.
+    """
+    det_scores = array(det_scores, dtype=float32).ravel()
+    det_frames = array(det_frames, dtype=int64).ravel()
+    if len(det_scores) != len(det_frames):
+        raise ValueError(
+            f"det_scores has {len(det_scores)} entries but det_frames has "
+            f"{len(det_frames)}; they index the same detections."
+        )
+    if n_frames <= 0:
+        raise ValueError(f"n_frames must be positive, got {n_frames}.")
+
+    duration_s = n_frames * frame_period_s if frame_period_s else float(nan)
+
+    per_threshold = {}
+    for thresh in thresholds:
+        keep = det_scores >= thresh
+        n_fp = int(keep.sum())
+        frames_with_fp = int(len(unique(det_frames[keep]))) if n_fp else 0
+        per_threshold[float(thresh)] = {
+            "fp":             n_fp,
+            "fp_per_frame":   n_fp / n_frames,
+            "fp_per_s":       n_fp / duration_s if duration_s == duration_s else float(nan),
+            "frames_with_fp": frames_with_fp,
+            "frame_fp_rate":  frames_with_fp / n_frames,
+        }
+
+    return {
+        "n_frames":       int(n_frames),
+        "frame_period_s": frame_period_s,
+        "duration_s":     duration_s,
+        "per_threshold":  per_threshold,
+    }
 
 
 # Same but slightly different for the ground-truth.
@@ -341,6 +416,10 @@ def votes_to_detections(xs, ys, probas, weighted_avg=False, min_thresh=1e-5, bin
         for ipeak in range(len(m_x)):
             my_voter_idxs = where(det_voters == ipeak)[0]
             my_voter_idxs = my_voter_idxs[center_dist[ipeak, my_voter_idxs] < vote_collect_radius_sq]
+            # Neighbouring cells whose blurred votes tie are both maxima, and the votes all go to the nearer one: a peak left
+            # with none would average nothing into a NaN detection, which every distance gate lets through.
+            if not len(my_voter_idxs):
+                continue
             all_dets[-1].append(vote_combiner(x[my_voter_idxs], y[my_voter_idxs], probs[my_voter_idxs,:]))
 
         if retgrid:
@@ -430,9 +509,14 @@ def aligned_raw_scan(scans_hist, odoms_hist, beam_spacing=laser_increment, angle
     T, N = scans.shape
 
     # Delta-yaw per frame: how far the robot has rotated between frame t and now.
-    # One vectorised subtract — no loop over T.
-    theta  = odoms_hist["xya"][:, 2].astype(float32)           # (T,)
-    shifts = (theta[-1] - theta) / float(beam_spacing)          # (T,)
+    # One vectorised subtract, wrapped to (-pi, pi] via atan2(sin, cos) — theta
+    # is a real heading spanning the full range, and a naive subtraction across
+    # a +/-pi crossing produces a ~2*pi-radian spurious delta (confirmed on
+    # real FROG odometry: ~1% of windows cross this boundary).
+    theta      = odoms_hist["xya"][:, 2].astype(float32)        # (T,)
+    raw_dtheta = theta[-1] - theta                              # (T,)
+    dtheta     = arctan2(sin(raw_dtheta), cos(raw_dtheta))       # (T,) wrapped
+    shifts     = dtheta / float(beam_spacing)                    # (T,)
 
     # Fractional source indices.  aligned_t[i] = scan_t[i + shift_t]:
     # positive shift_t means the robot turned CCW between frame t and now,
