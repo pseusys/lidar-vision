@@ -399,6 +399,111 @@ class TestObjectMemory:
         with_b = model.step(xy, score, valid, pose, dt, model.initial_state(2), cand_features=a + 1.0)
         assert not torch.allclose(with_a.candidate_logit, with_b.candidate_logit)
 
+    def test_without_the_scalar_gate_rescoring_still_starts_silent(self):
+        # T1 (`TODO.md` A51): the same "untrained stage 3 is exactly stage 2" property, from a zero-initialised last layer
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, rescore_gate=False)
+        assert model.rescore_gate is None
+        for out, score, valid in self._run(model, 8):
+            assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-5)
+
+    def test_the_scalar_gate_starves_the_rescoring_head_of_gradient_and_dropping_it_does_not(self):
+        """Why T1 exists: with `delta = gate * mlp(...)` and `gate` starting at zero, the head's own gradient is scaled by zero, so
+        the run's first steps train the scalar alone -- it stayed at +0.03 to +0.05 through step 3a."""
+        def head_gradient(**kwargs):
+            torch.manual_seed(0)
+            model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, **kwargs)
+            sum(out.candidate_logit[valid].sum() for out, _, valid in self._run(model, 3)).backward()
+            return sum(p.grad.abs().sum().item() for p in model.rescore.parameters())
+
+        assert head_gradient() == pytest.approx(0.0, abs=1e-9)
+        assert head_gradient(rescore_gate=False) > 0.0
+
+    def test_a_rescoring_limit_bounds_the_correction_both_ways(self):
+        # O1 (`TODO.md` A51): the signed correction is what shifted the whole score distribution down
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, rescore_gate=False, rescore_limit=3.0)
+        for out, score, valid in self._run(model, 4):
+            assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-5)
+        with torch.no_grad():                                   # a trained head, with weights far larger than it would reach
+            for p in model.rescore.parameters():
+                p.copy_(torch.randn_like(p) * 20.0)
+        for out, score, valid in self._run(model, 4):
+            shift = (out.candidate_logit - torch.logit(score.clamp(1e-6, 1 - 1e-6)))[valid]
+            assert shift.abs().max() <= 3.0 + 1e-5
+            assert shift.abs().max() > 1.0                      # and the limit binds rather than silencing the head
+
+    def test_in_sensor_coordinates_a_static_object_drifts_as_the_robot_moves(self):
+        """D1 (`TODO.md` A51 phase 3b): room coordinates are the design's central claim -- a chair keeps zero velocity because the
+        slot stays put while the robot moves. The ablation keeps slots in the sensor frame, where the same chair appears to move."""
+        # the robot drives 0.2 m forward in 0.1 s, so the same static object is 0.2 m nearer in its own frame -- small enough that
+        # association still holds either way, which is what isolates the frame from the gate
+        score, valid = torch.full((1, 1), 0.9), torch.ones(1, 1, dtype=torch.bool)
+        frames = ((torch.tensor([[[0.0, 4.0]]]), torch.zeros(1, 3)), (torch.tensor([[[0.0, 3.8]]]), torch.tensor([[0.2, 0.0, 0.0]])))
+        out = {}
+        for name, room in (("room", True), ("sensor", False)):
+            torch.manual_seed(0)
+            model = ObjectMemory(SlotRules(capacity=8), dim=32, heads=4, room_frame=room)
+            slots = model.initial_state(1)
+            for xy, pose in frames:
+                slots = model.step(xy, score, valid, pose, torch.full((1,), 0.1), slots).slots
+            out[name] = slots.velocity.norm(dim=-1).max().item()
+        assert out["room"] == pytest.approx(0.0, abs=1e-6)    # the object stands still in the room
+        assert out["sensor"] > 0.1                            # and appears to move in the sensor frame
+
+    def test_the_latest_score_rule_replaces_the_accumulated_value(self):
+        """D2: a slot is held by accumulated value, so a person hidden for a moment keeps their slot; the ablation ranks on the
+        latest score instead."""
+        xy, score, valid = torch.tensor([[[0.0, 4.0]]]), torch.full((1, 1), 0.8), torch.ones(1, 1, dtype=torch.bool)
+        values = {}
+        for name, latest in (("accumulate", False), ("latest", True)):
+            torch.manual_seed(0)
+            model = ObjectMemory(SlotRules(capacity=8, latest_value=latest), dim=32, heads=4)
+            slots = model.initial_state(1)
+            for _ in range(3):
+                slots = model.step(xy, score, valid, torch.zeros(1, 3), torch.full((1,), 0.04), slots).slots
+            values[name] = slots.value.max().item()
+        # a slot is created at the candidate's score either way; from then on the rule decides
+        assert values["latest"] == pytest.approx(0.8, abs=1e-5)
+        assert values["accumulate"] > 0.8                    # it climbs towards certainty rather than copying the score
+
+    def test_a_fixed_decay_removes_the_learned_one(self):
+        """D3: the selective recurrence decays each slot at a learned, input-dependent rate; the ablation gives every slot one
+        fixed time constant, which is verified by the parameters it removes."""
+        torch.manual_seed(0)
+        learned = ObjectMemory(SlotRules(capacity=8), dim=32, heads=4)
+        torch.manual_seed(0)
+        fixed = ObjectMemory(SlotRules(capacity=8), dim=32, heads=4, fixed_decay_s=8.0)
+        assert fixed.decay is None and learned.decay is not None
+        removed = sum(p.numel() for p in learned.decay.parameters()) + learned.decay_bias.numel()
+        assert sum(p.numel() for p in learned.parameters()) - sum(p.numel() for p in fixed.parameters()) == removed
+        for out, score, valid in TestObjectMemory()._run(fixed, 6):
+            assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-5)
+
+    def test_learning_the_value_rule_gives_its_constants_a_gradient(self):
+        """D4 (owner's question 2026-09-20): the bookkeeping is a fixed rule under `no_grad`, so the loss cannot shape it. With
+        `learn_value` the two constants of the value rule become parameters that the loss can reach."""
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=8), dim=32, heads=4, learn_value=True, rescore_gate=False)
+        names = dict(model.named_parameters())
+        assert "value_gain" in names and "value_fade" in names
+        with torch.no_grad():                                # a trained rescoring head: at init its last layer is zero, which stops
+            model.rescore[-1].weight.normal_(0.0, 0.1)       # every gradient from reaching what the head reads, value included
+        # one candidate held still, then absent for a frame, then back: the slot is created, matched (gain), faded (fade), matched
+        here, gone = torch.tensor([[[0.0, 4.0]]]), torch.tensor([[[0.0, 4.0]]])
+        present, absent = torch.ones(1, 1, dtype=torch.bool), torch.zeros(1, 1, dtype=torch.bool)
+        slots, loss = model.initial_state(1), 0.0
+        for xy, valid in ((here, present), (here, present), (gone, absent), (here, present)):
+            out = model.step(xy, torch.full((1, 1), 0.8), valid, torch.zeros(1, 3), torch.full((1,), 0.2), slots)
+            slots, loss = out.slots, loss + out.candidate_logit.sum()
+        loss.backward()
+        assert names["value_gain"].grad is not None and names["value_gain"].grad.abs().sum() > 0
+        assert names["value_fade"].grad is not None and names["value_fade"].grad.abs().sum() > 0
+
+    def test_the_value_rule_is_a_fixed_rule_by_default(self):
+        model = ObjectMemory(SlotRules(capacity=8), dim=32, heads=4)
+        assert not any(name.startswith("value_") for name, _ in model.named_parameters())
+
     def test_decay_times_start_spread_over_the_short_and_long_horizons(self):
         model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, decay_init_s=(1.0, 60.0))
         times = 1.0 / torch.nn.functional.softplus(model.decay_bias)

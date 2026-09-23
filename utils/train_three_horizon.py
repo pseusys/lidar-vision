@@ -60,8 +60,13 @@ CANDIDATE_FLOOR = 0.01
 TOP_P = 64
 OPERATING_THRESHOLD = 0.3
 MIN_REPORTED_SCORE = 1e-3
+CANDIDATE_AP_TOLERANCE = 0.01      # the candidates' val AP is fixed data; this much drift means the device state is bad
+PROBABILITY_EPS = 1e-6
+FP_BUDGET_TOLERANCE = 1e-9
+TIMED_FRAMES = 2000
+EXTRA_TEST_RADII_M = (0.3,)
 FOCAL_GAMMA = 2.0
-FRAME_PERIOD_S = 1.0 / 26.2
+DT_AVERAGE_FRAMES = 32         # intervals in stage 3's running time step; FROG's stamps come in bunches of 3 (`TODO.md` A51 0b)
 LFE_MISSING_RETURN_M = 10.0     # the FROG loader's legacy clamp, kept for LFE-Peaks' candidates only
 MIN_DT_S = 1e-3
 MAX_DT_S = 1.0
@@ -146,6 +151,29 @@ class Split:
     data: SequenceCandidates
     offsets: np.ndarray
     lengths: np.ndarray
+    dt: np.ndarray
+
+
+def frame_periods(time: np.ndarray, offsets: np.ndarray, lengths: np.ndarray, frames: int) -> np.ndarray:
+    """Stage 3's time step for every frame `[F]` of recordings packed end to end: a causal running average of the stamped intervals, the
+    plain mean until `frames` intervals have passed and an exponential average with rate `1 / frames` after, clipped to
+    `[MIN_DT_S, MAX_DT_S]`. One stamped interval is never trusted: FROG stamps 40 Hz scans in bunches of 38 ms, 38 ms and under 0.1 ms,
+    and a division by one of those sent slot velocities to several m/s (`TODO.md` A51 0a). A recording's first frame has no elapsed time."""
+    out = np.full(len(time), MIN_DT_S)
+    for offset, n in zip(offsets, lengths):
+        average = 0.0
+        for t in range(1, n):
+            interval = min(max(time[offset + t] - time[offset + t - 1], 0.0), MAX_DT_S)
+            average += max(1.0 / t, 1.0 / frames) * (interval - average)
+            out[offset + t] = min(max(average, MIN_DT_S), MAX_DT_S)
+    return out
+
+
+def mean_frame_period(time: np.ndarray, offsets: np.ndarray, lengths: np.ndarray) -> float:
+    """Elapsed time over frames, pooled across recordings packed end to end: robust to bunched stamps, unlike any single interval or their
+    median. Turns durations in seconds into frame counts."""
+    spans = [(time[o + n - 1] - time[o], n - 1) for o, n in zip(offsets, lengths) if n > 1]
+    return float(sum(e for e, _ in spans) / sum(f for _, f in spans))
 
 
 def pack(seqs: Sequence[SequenceCandidates]) -> Split:
@@ -159,7 +187,8 @@ def pack(seqs: Sequence[SequenceCandidates]) -> Split:
         ))
     data = SequenceCandidates(**{f.name: np.concatenate([getattr(s, f.name) for s in widened]) for f in fields(SequenceCandidates)})
     lengths = np.array([len(s.time) for s in seqs])
-    return Split(data, np.concatenate([[0], np.cumsum(lengths)[:-1]]), lengths)
+    offsets = np.concatenate([[0], np.cumsum(lengths)[:-1]])
+    return Split(data, offsets, lengths, frame_periods(data.time, offsets, lengths, DT_AVERAGE_FRAMES))
 
 
 class StreamSampler:
@@ -202,6 +231,10 @@ class EarlyStopping:
         self.best = -math.inf
         self.since_best = 0
 
+    def state(self) -> Dict[str, float]:
+        """What a resumed run has to restore: the bar and how many evaluations have missed it."""
+        return dict(best=self.best, since_best=self.since_best)
+
     def update(self, metric: float) -> bool:
         """Record one evaluation; True if it is a new best."""
         if metric > self.best:
@@ -223,6 +256,10 @@ class BestCheckpoint:
         self.best = -math.inf
         self.saved = False
 
+    def state(self) -> Dict[str, object]:
+        """What a resumed run has to restore, so a worse epoch after a crash cannot overwrite a better saved model."""
+        return dict(best=self.best, saved=self.saved)
+
     def offer(self, metric: float, checkpoint: dict) -> bool:
         if not metric > self.best:
             return False
@@ -243,6 +280,10 @@ class PeriodicCheckpoint:
         self.due = epochs
         self.saved: List[Path] = []
 
+    def state(self) -> Dict[str, object]:
+        """What a resumed run has to restore: when the next periodic checkpoint is due, and the ones already written."""
+        return dict(due=self.due, saved=list(self.saved))
+
     def offer(self, epoch: float, checkpoint: dict) -> Optional[Path]:
         """Save `checkpoint` when this evaluation reaches the next multiple of `epochs`; the path written, or None. Intervals that
         pass together save once, not once each."""
@@ -259,6 +300,89 @@ def plateau_schedule(optimizer: torch.optim.Optimizer, factor: float, patience_e
     """Cut the learning rate by `factor` once `patience_evals` evaluations in a row fail to improve val AP, never below `min_lr`;
     step it with each evaluation's AP."""
     return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=factor, patience=patience_evals, min_lr=min_lr)
+
+
+def non_finite_summary(named: Dict[str, torch.Tensor]) -> str:
+    """Which of these tensors hold a NaN or an infinity, and how many. The epoch-level guard fires up to 151 iterations after a run
+    breaks and its traceback points at the guard itself, so this names what was already broken at the iteration that did it."""
+    parts = []
+    for name, tensor in named.items():
+        if tensor is None or tensor.numel() == 0 or not tensor.dtype.is_floating_point:
+            continue
+        nans, infs = int(torch.isnan(tensor).sum()), int(torch.isinf(tensor).sum())
+        if nans or infs:
+            parts.append(f"{name} ({nans} NaN, {infs} inf of {tensor.numel()})")
+    return ", ".join(parts)
+
+
+def nan_diagnosis(model: ObjectMemory, out, loss: float, grad_norm: float) -> str:
+    """Everything worth knowing at the first iteration whose loss or gradient is not finite: which outputs, which slot state, which
+    parameters and which gradients had already gone bad."""
+    outputs = {"candidate_logit": out.candidate_logit, "slot_logit": out.slot_logit, "slot_xy": out.slot_xy,
+               "slots.state": out.slots.state, "slots.value": out.slots.value, "slots.position": out.slots.position,
+               "slots.velocity": out.slots.velocity}
+    parameters = {name: p.detach() for name, p in model.named_parameters()}
+    gradients = {f"grad {name}": p.grad for name, p in model.named_parameters() if p.grad is not None}
+    worst = sorted(((float(p.detach().abs().max()), name) for name, p in model.named_parameters()), reverse=True)[:3]
+    return (f"loss {loss}, gradient norm {grad_norm}\n"
+            f"  outputs not finite: {non_finite_summary(outputs) or 'none'}\n"
+            f"  parameters not finite: {non_finite_summary(parameters) or 'none'}\n"
+            f"  gradients not finite: {non_finite_summary(gradients) or 'none'}\n"
+            f"  largest parameters: " + ", ".join(f"{name} max|w| {value:.3f}" for value, name in worst))
+
+
+def training_fault(first_candidate_ap: float, candidate_ap: float, loss: float, tolerance: float = CANDIDATE_AP_TOLERANCE) -> Optional[str]:
+    """Why this run should stop now, or None. The candidates' validation AP is read from the cache and cannot depend on the model,
+    so it moving means the data on the device has gone bad; a loss of exactly zero or a non-finite one means the model has. Both
+    have happened here mid-run, and six epochs were burned before the process died (`memory/gotchas.md`)."""
+    if math.isfinite(first_candidate_ap) and math.isfinite(candidate_ap) and abs(candidate_ap - first_candidate_ap) > tolerance:
+        return (f"the candidates' val AP moved from {first_candidate_ap:.2%} to {candidate_ap:.2%}, but it is read from the cache and "
+                "cannot depend on the model: the data on the device is corrupt")
+    if not math.isfinite(loss) or loss == 0.0:
+        return f"the training loss is {loss}, so the model is no longer learning anything"
+    return None
+
+
+def rng_snapshot(rng: np.random.Generator) -> Dict[str, object]:
+    """Both random streams a run draws from, for `rng_restore`."""
+    return dict(torch=torch.get_rng_state(), numpy=rng.bit_generator.state)
+
+
+def rng_restore(snapshot: Dict[str, object], rng: np.random.Generator) -> None:
+    torch.set_rng_state(snapshot["torch"])
+    rng.bit_generator.state = snapshot["numpy"]
+
+
+def save_resume(path: Path, **state) -> None:
+    """Write a run's state so a crash costs the time since the last evaluation instead of the whole run (`memory/gotchas.md`: a
+    driver bugcheck took a healthy 3.5 h run on 2026-09-22). Written beside the target and renamed, so a crash during the save
+    itself cannot leave a half-written file in its place."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".partial")
+    torch.save(state, temporary)
+    os.replace(temporary, path)
+
+
+def load_resume(path: Path, resume: bool) -> Optional[Dict[str, object]]:
+    """The state `save_resume` wrote, or None when not resuming, when there is nothing to resume from, or when the file cannot be
+    read -- a run that has to start over is better than one that starts from rubble."""
+    if not resume or not path.exists():
+        return None
+    try:
+        return torch.load(path, map_location="cpu", weights_only=False)
+    except Exception as error:
+        print(f"ignoring {path}: {error}", flush=True)
+        return None
+
+
+def memory_schedule(optimizer: torch.optim.Optimizer, schedule: str, max_epochs: float, iterations: int, factor: float, patience: int,
+                    min_lr: float) -> Tuple[object, bool]:
+    """Stage 3's learning-rate schedule and whether it steps every iteration (`TODO.md` A51 T2). The cosine schedule spans
+    `max_epochs` per chunk length, so it hardly decays in the 9-37 epochs a stage runs; the plateau schedule steps once per
+    evaluation on val AP, as step 2 does."""
+    if schedule == "plateau":
+        return plateau_schedule(optimizer, factor, patience, min_lr), False
+    return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs * iterations), True
 
 
 def coast_targets(slot_xy: torch.Tensor, coasting: torch.Tensor, gt_xy: torch.Tensor, gt_missed: torch.Tensor, radius: float) -> torch.Tensor:
@@ -329,6 +453,29 @@ def calibration_network(checkpoint: dict, angles: np.ndarray, **overrides) -> Ca
     return net
 
 
+def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = None, **overrides) -> ObjectMemory:
+    """A stage-3 checkpoint's memory, shaped the way it was trained.
+
+    The slot capacity and the rescoring arms (`TODO.md` A51: the scalar gate, and the correction's limit) change what parameters
+    exist, so they are read from the checkpoint's `args` (stored as strings); a checkpoint written before a flag existed falls back
+    to the constructor's own default. `capacity` replays the memory at another slot count while keeping every other rule the
+    checkpoint was trained with; `overrides` go straight to the constructor.
+    """
+    args = checkpoint.get("args", {})
+    parameters = signature(ObjectMemory).parameters
+    shape = {"rescore_gate": parameters["rescore_gate"].default if args.get("rescore_gate") is None else literal_eval(args["rescore_gate"]),
+             "rescore_limit": parameters["rescore_limit"].default if args.get("rescore_limit") is None else float(args["rescore_limit"]),
+             "room_frame": parameters["room_frame"].default if args.get("room_frame") is None else literal_eval(args["room_frame"]),
+             "fixed_decay_s": parameters["fixed_decay_s"].default if args.get("fixed_decay_s") is None else float(args["fixed_decay_s"]),
+             "learn_value": parameters["learn_value"].default if args.get("learn_value") is None else literal_eval(args["learn_value"])}
+    slots = capacity if capacity else (parameters["rules"].default.capacity if args.get("slots") is None else int(args["slots"]))
+    rules = SlotRules(capacity=slots,
+                      latest_value=SlotRules().latest_value if args.get("latest_value") is None else literal_eval(args["latest_value"]))
+    memory = ObjectMemory(rules, feature_dim=feature_dim, **shape, **overrides)
+    memory.load_state_dict(checkpoint["model"])
+    return memory
+
+
 def clip_frames(index: int, recording_start: int, length: int) -> np.ndarray:
     """Global frame indices of the `length`-frame clip ending at `index`, history clamped at the recording's first frame."""
     return np.maximum(np.arange(index - length + 1, index + 1), recording_start)
@@ -368,10 +515,10 @@ def decode_votes(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: 
 # ---------------------------------------------------------------- data on the device
 
 def gather(split: Split, seq: np.ndarray, frame: np.ndarray, device) -> Dict[str, torch.Tensor]:
-    """Frames `[B, L]` of `split` as tensors, with seconds since each stream's previous frame."""
+    """Frames `[B, L]` of `split` as tensors, with each frame's time step (`frame_periods`)."""
     flat = split.offsets[seq] + frame
     d = split.data
-    dt = np.where(frame > 0, d.time[flat] - d.time[np.maximum(flat - 1, 0)], FRAME_PERIOD_S).clip(MIN_DT_S, MAX_DT_S)
+    dt = split.dt[flat]
     arrays = dict(xy=d.xy[flat], score=d.score[flat], valid=d.valid[flat], target=d.target[flat], pose=d.pose[flat],
                   annotated=d.annotated[flat], gt_xy=d.gt_xy[flat], gt_valid=d.gt_valid[flat], gt_covered=d.gt_covered[flat],
                   features=d.features[flat].astype(np.float32), dt=dt.astype(np.float32))
@@ -390,10 +537,11 @@ def focal_loss(logit: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) ->
 
 # ---------------------------------------------------------------- scoring
 
-def score_detections(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]]) -> Dict[str, float]:
-    """AP at 0.5 m over frames of (scores, xy, annotated people), plus precision, recall and false positives and negatives per frame
-    at 0.3, read off the same precision-recall curve (`tracker_sweep.score_populated`). No frames -- a window with nothing annotated --
-    gives undefined metrics."""
+def score_detections(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]], radius: float = MATCH_RADIUS_M, fp_budget: Optional[float] = None) -> Dict[str, float]:
+    """AP at `radius` over frames of (scores, xy, annotated people), plus precision, recall and false positives and negatives per frame
+    at 0.3, read off the same precision-recall curve (`tracker_sweep.score_populated`). With `fp_budget`, also the model's own operating
+    point: the lowest threshold whose false positives per frame stay within the budget, with its recall and errors (`own_*`). No frames
+    -- a window with nothing annotated -- gives undefined metrics."""
     if not frames:
         return dict(ap=float("nan"), precision=float("nan"), recall=float("nan"), fp_per_frame=float("nan"), fn_per_frame=float("nan"), frames=0, people=0)
     d_s, d_xy, d_f, g_xy, g_f = [], [], [], [], []
@@ -401,14 +549,55 @@ def score_detections(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]]) ->
         d_s.append(scores), d_xy.append(xy), d_f.append(np.full(len(scores), f)), g_xy.append(gt), g_f.append(np.full(len(gt), f))
     g_f = np.concatenate(g_f)
     recs, precs, threshs = _prec_rec_2d(np.concatenate(d_s).astype(np.float32), np.concatenate(d_xy).astype(np.float32), np.concatenate(d_f),
-                                         np.concatenate(g_xy).astype(np.float32), g_f, np.full(len(g_f), MATCH_RADIUS_M, np.float32))
+                                         np.concatenate(g_xy).astype(np.float32), g_f, np.full(len(g_f), radius, np.float32))
     idx = np.nonzero(np.asarray(threshs) >= OPERATING_THRESHOLD)[0]
     i = int(idx[-1]) if len(idx) else 0
     n_gt, n = len(g_f), len(frames)
     tp = float(recs[i]) * n_gt
     fp = tp * (1 - float(precs[i])) / float(precs[i]) if precs[i] > 0 else float("nan")
-    return dict(ap=_safe_auc(recs, precs), precision=float(precs[i]), recall=float(recs[i]), fp_per_frame=fp / n, fn_per_frame=(n_gt - tp) / n,
-                frames=n, people=n_gt)
+    result = dict(ap=_safe_auc(recs, precs), precision=float(precs[i]), recall=float(recs[i]), fp_per_frame=fp / n, fn_per_frame=(n_gt - tp) / n,
+                  frames=n, people=n_gt)
+    if fp_budget is not None:
+        recs, precs = np.asarray(recs, np.float64), np.asarray(precs, np.float64)
+        tps = recs * n_gt
+        fps = np.where(precs > 0, tps * (1 - precs) / np.where(precs > 0, precs, 1.0), np.inf) / n
+        within = np.nonzero(fps <= fp_budget + FP_BUDGET_TOLERANCE)[0]
+        j = int(within[-1]) if len(within) else None
+        result.update(own_threshold=float(threshs[j]) if j is not None else float("nan"), own_recall=float(recs[j]) if j is not None else float("nan"),
+                      own_fp_per_frame=float(fps[j]) if j is not None else float("nan"), own_fn_per_frame=(n_gt - float(tps[j])) / n if j is not None else float("nan"))
+    return result
+
+
+def coasting_hits(report_xy: np.ndarray, kept_xy: np.ndarray, gt_xy: np.ndarray, radius: float) -> int:
+    """How many annotated people `[G, 2]` that no kept candidate `[C, 2]` covers are covered by a coasting report `[R, 2]`, one to one."""
+    if not len(report_xy) or not len(gt_xy):
+        return 0
+    _, covered = candidate_targets(kept_xy, np.ones(len(kept_xy), bool), gt_xy, radius)
+    target, _ = candidate_targets(report_xy, np.ones(len(report_xy), bool), gt_xy[~covered], radius)
+    return int(target.sum())
+
+
+@torch.no_grad()
+def memory_ms_per_frame(model: ObjectMemory, split: Split, device, frames: int = TIMED_FRAMES) -> float:
+    """Milliseconds per `ObjectMemory.step` for one stream, as on the robot, over the first recording's first `frames` frames after one
+    untimed warm-up step."""
+    model.eval()
+    n = min(frames + 1, int(split.lengths[0]))
+    batch = gather(split, np.zeros((1, n), dtype=int), np.arange(n)[None], device)
+    slots = model.initial_state(1, device)
+    synchronise = str(device).startswith("cuda")        # `detect_device` hands back a string, or a DirectML device object
+    elapsed = 0.0
+    for t in range(n):
+        if synchronise:
+            torch.cuda.synchronize()
+        start = time.perf_counter()
+        slots = model.step(batch["xy"][:, t], batch["score"][:, t], batch["valid"][:, t], batch["pose"][:, t], batch["dt"][:, t], slots,
+                           cand_features=batch["features"][:, t]).slots
+        if synchronise:
+            torch.cuda.synchronize()
+        elapsed += (time.perf_counter() - start) if t else 0.0
+    model.train()
+    return 1000.0 * elapsed / max(n - 1, 1)
 
 
 def evaluation_segments(split, windows: int, window_frames: int, warmup_frames: int) -> List[Tuple[int, int, int, int]]:
@@ -425,12 +614,18 @@ def evaluation_segments(split, windows: int, window_frames: int, warmup_frames: 
 
 @torch.no_grad()
 def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: int, segments: List[Tuple[int, int, int, int]],
-             slice_frames: int = 512) -> Dict[str, Dict[str, float]]:
+             slice_frames: int = 512, extra_radii: Sequence[float] = ()) -> Dict[str, Dict[str, float]]:
     """Play each segment (recording, first frame, frames, warm-up) from empty memory, `streams` at a time, and score every
     `stride`-th annotated frame after its warm-up: the candidates alone, and the candidates rescored plus coasting slots.
-    Frames are gathered `slice_frames` at a time, so memory is bounded by streams x slice rather than by the longest recording."""
+    Frames are gathered `slice_frames` at a time, so memory is bounded by streams x slice rather than by the longest recording.
+
+    The memory's scores also carry its own operating point at the candidates' false positives per frame, coasting reports at 0.3 per
+    frame with the share landing on people no kept candidate covers, and the median rescoring shift in logits on candidates that are a
+    person and on the rest (`TODO.md` A51 0c); `extra_radii` adds AP at further match radii to both, as `ap_<radius>m`."""
     model.eval()
     raw, memory = [], []
+    shift_person, shift_other = [], []
+    coast_reports, coast_hits = 0, 0
     segments = sorted(segments, key=lambda seg: -seg[2])
     for group in [segments[i:i + streams] for i in range(0, len(segments), streams)]:
         length = max(seg[2] for seg in group)
@@ -456,14 +651,27 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                 slot_p = torch.sigmoid(out.slot_logit)[rows].cpu().numpy()
                 valid, xy, coasting = batch["valid"][rows, i].cpu().numpy(), batch["xy"][rows, i].cpu().numpy(), out.coasting[rows].cpu().numpy()
                 slot_xy, score = out.slot_xy[rows].cpu().numpy(), batch["score"][rows, i].cpu().numpy()
+                shift = (out.candidate_logit - torch.logit(batch["score"][:, i].clamp(PROBABILITY_EPS, 1.0 - PROBABILITY_EPS)))[rows].cpu().numpy()
+                target = batch["target"][rows, i].cpu().numpy()
                 gt = [batch["gt_xy"][r, i][batch["gt_valid"][r, i]].cpu().numpy() for r in rows]
                 for j in range(len(rows)):
                     report = coasting[j] & (slot_p[j] >= MIN_REPORTED_SCORE)
                     raw.append((score[j][valid[j]], xy[j][valid[j]], gt[j]))
                     memory.append((np.concatenate([cand_p[j][valid[j]], slot_p[j][report]]), np.concatenate([xy[j][valid[j]], slot_xy[j][report]]), gt[j]))
+                    shift_person.append(shift[j][valid[j] & target[j]]), shift_other.append(shift[j][valid[j] & ~target[j]])
+                    confident = coasting[j] & (slot_p[j] >= OPERATING_THRESHOLD)
+                    coast_reports += int(confident.sum())
+                    coast_hits += coasting_hits(slot_xy[j][confident], xy[j][valid[j] & (cand_p[j] >= OPERATING_THRESHOLD)], gt[j], MATCH_RADIUS_M)
     model.train()
     base, new = score_detections(raw), score_detections(memory)
+    new.update(score_detections(memory, fp_budget=base["fp_per_frame"]) if memory else {})
     new["exchange_rate"] = exchange_rate(base["fp_per_frame"], base["fn_per_frame"], new["fp_per_frame"], new["fn_per_frame"])
+    shift_person, shift_other = np.concatenate(shift_person or [np.zeros(0)]), np.concatenate(shift_other or [np.zeros(0)])
+    new.update(rescore_shift_person=float(np.median(shift_person)) if len(shift_person) else float("nan"),
+               rescore_shift_other=float(np.median(shift_other)) if len(shift_other) else float("nan"),
+               coast_per_frame=coast_reports / max(len(memory), 1), coast_precision=coast_hits / coast_reports if coast_reports else float("nan"))
+    for radius in extra_radii:
+        base[f"ap_{radius:g}m"], new[f"ap_{radius:g}m"] = score_detections(raw, radius=radius)["ap"], score_detections(memory, radius=radius)["ap"]
     return dict(candidates=base, memory=new)
 
 
@@ -503,29 +711,53 @@ def train_memory(args) -> None:
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     device, _ = detect_device()
-    splits = {name: load_split(name, args.limit_recordings, args.stage2, device) for name in SPLITS}
+    splits = {name: load_split(name, args.limit_recordings, args.stage2, device) for name in ("train", "val")}
     for name, split in splits.items():
         print(f"{name}: {len(split.lengths)} recordings, {split.lengths.sum()} frames, {int(split.data.annotated.sum())} annotated", flush=True)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     best = BestCheckpoint(args.out_dir / f"{args.mode}_object_memory.best.pth")
+    resume_path = args.out_dir / f"{args.mode}_resume.pth"
+    resumed = load_resume(resume_path, args.resume)
 
-    model = ObjectMemory(SlotRules(capacity=args.slots), feature_dim=splits["train"].data.features.shape[-1]).to(device)
-    print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}", flush=True)
+    model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value), feature_dim=splits["train"].data.features.shape[-1],
+                         rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame,
+                         fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value).to(device)
+    print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}; rescoring "
+          f"{'through a scalar gate' if args.rescore_gate else 'from a zero-initialised head'}, "
+          f"{f'limited to +-{args.rescore_limit:g} logits' if args.rescore_limit else 'unlimited'}; slots in "
+          f"{'room' if args.room_frame else 'sensor'} coordinates, value by "
+          f"{'the latest score' if args.latest_value else 'accumulation'}{' (learned)' if args.learn_value else ''}, decay "
+          f"{f'fixed at {args.fixed_decay_s:g} s' if args.fixed_decay_s else 'learned per slot'}", flush=True)
     start = time.time()
-    history = []
+    history, done_hours, first_stage, first_epoch = [], 0.0, 0, 0
+    if resumed:
+        model.load_state_dict(resumed["model"])
+        best.__dict__.update(resumed["best"])
+        history, done_hours, first_stage, first_epoch = resumed["history"], resumed["hours"], resumed["stage"], resumed["epoch"]
+        rng_restore(resumed["rng"], rng)
+        print(f"resuming {resume_path.name}: chunk stage {first_stage}, {first_epoch} epochs done, {done_hours:.2f} h already spent", flush=True)
     frames_per_epoch = int(splits["train"].lengths.sum())
 
-    for chunk_s in args.chunk_s:
-        length = max(2, round(chunk_s / FRAME_PERIOD_S))
+    train_period = mean_frame_period(splits["train"].data.time, splits["train"].offsets, splits["train"].lengths)
+    val_period = mean_frame_period(splits["val"].data.time, splits["val"].offsets, splits["val"].lengths)
+    print(f"mean frame period: train {train_period * 1000:.2f} ms, val {val_period * 1000:.2f} ms", flush=True)
+    for stage, chunk_s in enumerate(args.chunk_s):
+        if stage < first_stage:
+            continue
+        length = max(2, round(chunk_s / train_period))
         streams = min(args.max_streams, max(1, args.tokens // length))
         iterations = math.ceil(frames_per_epoch / (streams * length))
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-        schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.max_epochs * iterations)
+        schedule, step_every_iteration = memory_schedule(optimizer, args.schedule, args.max_epochs, iterations, args.lr_factor, args.lr_patience, args.min_lr)
         stopper = EarlyStopping(args.patience, args.min_epochs, args.max_epochs, args.max_hours)
         sampler = StreamSampler(splits["train"].lengths, streams, rng)
         slots = model.initial_state(streams, device)
         print(f"\n== chunks of {chunk_s:g} s: {length} frames x {streams} streams, {iterations} iterations per epoch", flush=True)
-        epoch = 0
+        epoch = first_epoch if stage == first_stage else 0
+        if resumed and stage == first_stage:
+            optimizer.load_state_dict(resumed["optimizer"])
+            schedule.load_state_dict(resumed["schedule"])
+            stopper.__dict__.update(resumed["stopper"])
         while True:
             t_epoch, losses = time.time(), []
             for _ in range(iterations):
@@ -542,29 +774,47 @@ def train_memory(args) -> None:
                     missed = batch["gt_valid"][:, t] & ~batch["gt_covered"][:, t]
                     loss = loss + focal_loss(out.candidate_logit, batch["target"][:, t], batch["valid"][:, t] & annotated)
                     coast = coast_targets(out.slot_xy, out.coasting, batch["gt_xy"][:, t], missed, MATCH_RADIUS_M)
-                    loss = loss + focal_loss(out.slot_logit, coast, out.coasting & annotated)
+                    loss = loss + args.coast_weight * focal_loss(out.slot_logit, coast, out.coasting & annotated)
                 loss = loss / batch["annotated"].sum().clamp(min=1)
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
+                grad_norm = float(torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP))
+                value = loss.item()
+                if not math.isfinite(value) or not math.isfinite(grad_norm):
+                    # the epoch-level guard would fire up to `iterations` steps later, pointing at itself; stop where it broke
+                    path = args.out_dir / f"{args.mode}_nan.pth"
+                    torch.save(dict(model=model.state_dict(), chunk_s=chunk_s, epoch=epoch + 1, seq=seq, frame=frame, reset=reset,
+                                    args={k: str(v) for k, v in vars(args).items()}), path)
+                    raise RuntimeError(f"not finite at chunk {chunk_s:g} s, epoch {epoch + 1}, iteration {len(losses) + 1} of {iterations}: "
+                                       f"{nan_diagnosis(model, out, value, grad_norm)}\n  chunk and weights saved to {path}")
                 optimizer.step()
-                schedule.step()
-                losses.append(loss.item())
+                if step_every_iteration:
+                    schedule.step()
+                losses.append(value)
             epoch += 1
             train_s = time.time() - t_epoch
             val = evaluate(model, splits["val"], device, args.val_stride, args.max_streams,
-                           evaluation_segments(splits["val"], args.val_windows, round(args.val_window_s / FRAME_PERIOD_S), round(args.val_warmup_s / FRAME_PERIOD_S)))
+                           evaluation_segments(splits["val"], args.val_windows, round(args.val_window_s / val_period), round(args.val_warmup_s / val_period)))
+            first_candidate_ap = history[0]["val_ap_candidates"] if history else val["candidates"]["ap"]
+            fault = training_fault(first_candidate_ap, val["candidates"]["ap"], float(np.mean(losses)))
+            if fault is not None:
+                raise RuntimeError(f"stopping at chunk {chunk_s:g} s epoch {epoch}: {fault}")
+            if not step_every_iteration:
+                schedule.step(val["memory"]["ap"])
             improved = stopper.update(val["memory"]["ap"])      # patience restarts with every chunk length
             checkpoint = dict(model=model.state_dict(), chunk_s=chunk_s, epoch=epoch, val=val, args={k: str(v) for k, v in vars(args).items()})
             if improved:
                 torch.save(checkpoint, args.out_dir / f"{args.mode}_object_memory.{chunk_s:g}s.best.pth")
             overall = best.offer(val["memory"]["ap"], checkpoint)   # the run's best does not
-            hours = (time.time() - start) / 3600
+            hours = done_hours + (time.time() - start) / 3600
             row = dict(chunk_s=chunk_s, epoch=epoch, loss=float(np.mean(losses)), val_ap=val["memory"]["ap"], val_ap_candidates=val["candidates"]["ap"],
-                       val_fp=val["memory"]["fp_per_frame"], val_fn=val["memory"]["fn_per_frame"], gate=model.rescore_gate.item(), train_s=train_s,
+                       val_fp=val["memory"]["fp_per_frame"], val_fn=val["memory"]["fn_per_frame"], gate=model.rescore_gate.item() if model.rescore_gate is not None else float("nan"), train_s=train_s,
                        eval_s=time.time() - t_epoch - train_s, hours=hours, stage_best=improved, best=overall,
                        gpu_gb=torch.cuda.max_memory_allocated() / 2**30 if torch.cuda.is_available() else float("nan"))
             history.append(row)
+            save_resume(resume_path, model=model.state_dict(), optimizer=optimizer.state_dict(), schedule=schedule.state_dict(),
+                        stopper=stopper.state(), best=best.state(), history=history, hours=hours, stage=stage, epoch=epoch,
+                        rng=rng_snapshot(rng), args={k: str(v) for k, v in vars(args).items()})
             marker = "  best" if overall else ("  stage best" if improved else "")
             print(f"  epoch {epoch:>3}  loss {row['loss']:.4f}  val AP {row['val_ap']:.2%} (candidates {row['val_ap_candidates']:.2%})  "
                   f"FP {row['val_fp']:.3f} FN {row['val_fn']:.3f}  gate {row['gate']:+.3f}  train {train_s:.0f} s  eval {row['eval_s']:.0f} s  "
@@ -573,17 +823,27 @@ def train_memory(args) -> None:
                 break
         if best.saved:
             model.load_state_dict(torch.load(best.path, map_location=device)["model"])     # the next stage resumes from the run's best
-        if (time.time() - start) / 3600 >= args.max_hours:
+        if done_hours + (time.time() - start) / 3600 >= args.max_hours:
             break
 
-    results = dict(history=history, test={})
-    for stride in TEST_STRIDES:
-        results["test"][f"stride_{stride}"] = evaluate(model, splits["test"], device, stride, args.max_streams, evaluation_segments(splits["test"], 0, 0, 0))
+    del splits["train"], splits["val"]                  # the test candidates are only needed now, and three splits at once exhaust a 16 GB host
+    splits["test"] = load_split("test", args.limit_recordings, args.stage2, device)
+    print(f"test: {len(splits['test'].lengths)} recordings, {splits['test'].lengths.sum()} frames, "
+          f"{int(splits['test'].data.annotated.sum())} annotated", flush=True)
+    results = dict(history=history, test={}, memory_ms_per_frame=memory_ms_per_frame(model, splits["test"], device))
+    print(f"\nstage 3 alone, one stream: {results['memory_ms_per_frame']:.2f} ms per frame", flush=True)
+    for stride in args.test_strides:
+        results["test"][f"stride_{stride}"] = evaluate(model, splits["test"], device, stride, args.max_streams, evaluation_segments(splits["test"], 0, 0, 0),
+                                                       extra_radii=EXTRA_TEST_RADII_M)
         r = results["test"][f"stride_{stride}"]
-        print(f"\ntest, every {stride} annotated frame: candidates AP {r['candidates']['ap']:.2%} P {r['candidates']['precision']:.1%} R {r['candidates']['recall']:.1%} "
-              f"FP {r['candidates']['fp_per_frame']:.3f} FN {r['candidates']['fn_per_frame']:.3f}"
-              f"  |  memory AP {r['memory']['ap']:.2%} P {r['memory']['precision']:.1%} R {r['memory']['recall']:.1%} "
-              f"FP {r['memory']['fp_per_frame']:.3f} FN {r['memory']['fn_per_frame']:.3f}  exchange rate {r['memory']['exchange_rate']:.2f}", flush=True)
+        c, m = r["candidates"], r["memory"]
+        print(f"\ntest, every {stride} annotated frame: candidates AP {c['ap']:.2%} (0.3 m {c['ap_0.3m']:.2%}) P {c['precision']:.1%} R {c['recall']:.1%} "
+              f"FP {c['fp_per_frame']:.3f} FN {c['fn_per_frame']:.3f}"
+              f"  |  memory AP {m['ap']:.2%} (0.3 m {m['ap_0.3m']:.2%}) P {m['precision']:.1%} R {m['recall']:.1%} "
+              f"FP {m['fp_per_frame']:.3f} FN {m['fn_per_frame']:.3f}  exchange rate {m['exchange_rate']:.2f}"
+              f"\n  memory at its own threshold {m['own_threshold']:.3f}: R {m['own_recall']:.1%} FP {m['own_fp_per_frame']:.3f} FN {m['own_fn_per_frame']:.3f}"
+              f"  |  rescoring shift person {m['rescore_shift_person']:+.3f} other {m['rescore_shift_other']:+.3f} logits"
+              f"  |  coasting {m['coast_per_frame']:.3f} per frame, precision {m['coast_precision']:.1%}", flush=True)
     (args.out_dir / f"{args.mode}_results.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
     print(f"wrote {args.out_dir / f'{args.mode}_results.json'}", flush=True)
 
@@ -722,6 +982,8 @@ def train_calibration(args) -> None:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     best = BestCheckpoint(args.out_dir / "step2_calibration.best.pth")
     periodic = PeriodicCheckpoint(args.out_dir, "step2_calibration", args.checkpoint_every)
+    resume_path = args.out_dir / "step2_resume.pth"
+    resumed = load_resume(resume_path, args.resume)
 
     train_split, val_split = splits["train"], splits["val"]
     iterations = math.ceil(len(train_split.annotated) / args.batch)
@@ -734,6 +996,17 @@ def train_calibration(args) -> None:
         schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=int(args.max_epochs * iterations))
     stopper = EarlyStopping(args.patience, args.min_epochs, args.max_epochs, args.max_hours)
     start, step, history, losses, done = time.time(), 0, [], [], False
+    done_hours = 0.0
+    if resumed:
+        net.load_state_dict(resumed["model"])
+        optimizer.load_state_dict(resumed["optimizer"])
+        schedule.load_state_dict(resumed["schedule"])
+        stopper.__dict__.update(resumed["stopper"])
+        best.__dict__.update(resumed["best"])
+        periodic.__dict__.update(resumed["periodic"])
+        history, step, done_hours = resumed["history"], resumed["step"], resumed["hours"]
+        rng_restore(resumed["rng"], rng)
+        print(f"resuming {resume_path.name}: {step} iterations done, {done_hours:.2f} h already spent", flush=True)
     t_block = time.time()
     while not done:
         for chunk in np.array_split(rng.permutation(len(train_split.annotated)), iterations):
@@ -762,11 +1035,14 @@ def train_calibration(args) -> None:
             checkpoint = dict(model=net.state_dict(), epoch=epoch, val=val, args={k: str(v) for k, v in vars(args).items()})
             best.offer(val["ap"], checkpoint)
             periodic.offer(epoch, checkpoint)
-            hours = (time.time() - start) / 3600
+            hours = done_hours + (time.time() - start) / 3600
             row = dict(epoch=epoch, loss=float(np.mean(losses)), val_ap=val["ap"], val_fp=val["fp_per_frame"], val_fn=val["fn_per_frame"], lr=optimizer.param_groups[0]["lr"], train_s=train_s,
                        eval_s=time.time() - t_block - train_s, hours=hours, best=improved,
                        gpu_gb=torch.cuda.max_memory_allocated() / 2**30 if torch.cuda.is_available() else float("nan"))
             history.append(row)
+            save_resume(resume_path, model=net.state_dict(), optimizer=optimizer.state_dict(), schedule=schedule.state_dict(),
+                        stopper=stopper.state(), best=best.state(), periodic=periodic.state(), history=history, hours=hours,
+                        step=step, rng=rng_snapshot(rng), args={k: str(v) for k, v in vars(args).items()})
             print(f"  epoch {epoch:6.2f}  loss {row['loss']:.4f}  val AP {row['val_ap']:.2%}  FP {row['val_fp']:.3f} FN {row['val_fn']:.3f}  lr {row['lr']:.1e}  "
                   f"train {train_s:.0f} s  eval {row['eval_s']:.0f} s  {hours:.2f} h  GPU {row['gpu_gb']:.1f} GB{'  best' if improved else ''}", flush=True)
             losses, t_block = [], time.time()
@@ -838,7 +1114,8 @@ def evaluate_joint(net: CalibrationNetwork, memory: ObjectMemory, split: FrameSp
     and score every `stride`-th annotated frame after its warm-up: stage 2's candidates alone (the memory's feedback already in them),
     and the candidates rescored plus coasting slots."""
     net.eval(), memory.eval()
-    offsets, _ = recording_bounds(split.start)
+    offsets, lengths = recording_bounds(split.start)
+    periods = frame_periods(split.time, offsets, lengths, DT_AVERAGE_FRAMES)
     people_at = {int(f): i for i, f in enumerate(split.annotated)}
     raw, full = [], []
     segments = sorted(segments, key=lambda seg: -seg[2])
@@ -852,7 +1129,7 @@ def evaluate_joint(net: CalibrationNetwork, memory: ObjectMemory, split: FrameSp
         state = None
         for t in range(length):
             f = frame[:, t]
-            dt = (split.time[f] - split.time[np.maximum(f - 1, 0)] if t else np.full(len(f), FRAME_PERIOD_S)).clip(MIN_DT_S, MAX_DT_S)
+            dt = periods[f]
             joint, state = joint_step(net, memory, torch.from_numpy(split.scans[f]).to(device), torch.from_numpy(split.poses[f]).to(device),
                                       torch.from_numpy(dt.astype(np.float32)).to(device), state)
             rows = np.nonzero(chosen[:, t])[0]
@@ -879,20 +1156,21 @@ def train_joint(args) -> None:
     splits = {name: first_recordings(load_frames(name), args.limit_recordings) for name in SPLITS}
     angles = frog_laser_angles(720)
     net = calibration_network(torch.load(args.stage2, map_location="cpu"), angles, prior_channels=PRIOR_CHANNELS).to(device)
-    memory = ObjectMemory(SlotRules(capacity=args.slots), feature_dim=net.head.in_channels).to(device)
-    memory.load_state_dict(torch.load(args.memory, map_location=device)["model"])
+    memory = object_memory(torch.load(args.memory, map_location=device, weights_only=False), net.head.in_channels).to(device)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     best = BestCheckpoint(args.out_dir / "step3b_joint.best.pth")
 
     train = splits["train"]
     offsets, lengths = recording_bounds(train.start)
     people_at = {int(f): i for i, f in enumerate(train.annotated)}
-    length = max(2, round(args.chunk_s / FRAME_PERIOD_S))
+    periods = frame_periods(train.time, offsets, lengths, DT_AVERAGE_FRAMES)
+    length = max(2, round(args.chunk_s / mean_frame_period(train.time, offsets, lengths)))
     iterations = math.ceil(len(train.scans) / length)
     eval_every = max(1, round(args.eval_every * iterations))
     val = splits["val"]
-    val_segments = evaluation_segments(SimpleNamespace(lengths=recording_bounds(val.start)[1]), args.val_windows,
-                                       round(args.val_window_s / FRAME_PERIOD_S), round(args.val_warmup_s / FRAME_PERIOD_S))
+    val_offsets, val_lengths = recording_bounds(val.start)
+    val_period = mean_frame_period(val.time, val_offsets, val_lengths)
+    val_segments = evaluation_segments(SimpleNamespace(lengths=val_lengths), args.val_windows, round(args.val_window_s / val_period), round(args.val_warmup_s / val_period))
     parameters = list(net.parameters()) + list(memory.parameters())
     optimizer = torch.optim.AdamW(parameters, lr=args.lr, weight_decay=args.weight_decay)
     schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=int(args.max_epochs * iterations))
@@ -900,6 +1178,18 @@ def train_joint(args) -> None:
     sampler = StreamSampler(lengths, 1, rng)
     print(f"joint: {length} frames per chunk, {iterations} chunks per epoch, evaluating every {eval_every}", flush=True)
     state, start, step, history, losses, t_block = None, time.time(), 0, [], [], time.time()
+    resume_path = args.out_dir / "step3b_resume.pth"
+    resumed = load_resume(resume_path, args.resume)
+    done_hours = 0.0
+    if resumed:
+        net.load_state_dict(resumed["net"]), memory.load_state_dict(resumed["memory"])
+        optimizer.load_state_dict(resumed["optimizer"])
+        schedule.load_state_dict(resumed["schedule"])
+        stopper.__dict__.update(resumed["stopper"])
+        best.__dict__.update(resumed["best"])
+        history, step, done_hours = resumed["history"], resumed["step"], resumed["hours"]
+        rng_restore(resumed["rng"], rng)
+        print(f"resuming {resume_path.name}: {step} chunks done, {done_hours:.2f} h already spent", flush=True)
     while True:
         seq, frame, reset = sampler.next_chunk(length, args.reset_prob)
         state = None if state is None else detach_joint(state)
@@ -908,7 +1198,7 @@ def train_joint(args) -> None:
             if reset[0, t]:
                 state = None
             f = int(offsets[seq[0, t]] + frame[0, t])
-            dt = FRAME_PERIOD_S if frame[0, t] == 0 else float(np.clip(train.time[f] - train.time[f - 1], MIN_DT_S, MAX_DT_S))
+            dt = float(periods[f])
             joint, state = joint_step(net, memory, torch.from_numpy(train.scans[f][None]).to(device), torch.from_numpy(train.poses[f][None]).to(device),
                                       torch.tensor([dt], dtype=torch.float32, device=device), state)
             i = people_at.get(f)
@@ -1011,19 +1301,18 @@ def run_ablations(args) -> None:
               f"exchange rate {r['exchange_rate']:.2f}", flush=True)
 
     whole = evaluation_segments(candidates, 0, 0, 0)
-    memory_state = torch.load(args.memory, map_location=device)["model"]
+    memory_checkpoint = torch.load(args.memory, map_location=device, weights_only=False)
     joint_state = torch.load(args.joint, map_location=device)
     test = first_recordings(load_frames("test"), args.limit_recordings)
     test_segments = evaluation_segments(SimpleNamespace(lengths=recording_bounds(test.start)[1]), 0, 0, 0)
     for slots in args.slots:
-        memory = ObjectMemory(SlotRules(capacity=slots), feature_dim=candidates.data.features.shape[-1]).to(device)
-        memory.load_state_dict(memory_state)
+        memory = object_memory(memory_checkpoint, candidates.data.features.shape[-1], capacity=slots).to(device)
         r = evaluate(memory, candidates, device, 1, args.streams, whole)["memory"]
         results["memory_slots"][slots] = r
         print(f"stage 3 on stage 2's candidates, {slots} slots: AP {r['ap']:.2%}  P {r['precision']:.1%}  R {r['recall']:.1%}  "
               f"FP {r['fp_per_frame']:.3f}  FN {r['fn_per_frame']:.3f}", flush=True)
         net = calibration_network(dict(model=joint_state["net"], args=joint_state.get("args", {})), angles, prior_channels=PRIOR_CHANNELS).to(device)
-        memory.load_state_dict(joint_state["memory"])
+        memory.load_state_dict(joint_state["memory"])       # the joint run's own memory, same shape as step3a's
         r = evaluate_joint(net, memory, test, test_segments, 1, device, args.streams)["memory"]
         results["joint_slots"][slots] = r
         print(f"whole detector with feedback, {slots} slots: AP {r['ap']:.2%}  P {r['precision']:.1%}  R {r['recall']:.1%}  "
@@ -1041,6 +1330,8 @@ def main() -> None:
         p.add_argument("--weight-decay", type=float, default=1e-2)
         p.add_argument("--seed", type=int, default=0)
         p.add_argument("--out-dir", type=Path, default=_HERE.parent / "checkpoints_three_horizon")
+        p.add_argument("--resume", action="store_true", help="continue from this run's saved state in --out-dir, written after every "
+                                                             "evaluation; a crash then costs the time since it, not the whole run")
     for step1 in (sub.choices["step1"], sub.choices["step3a"]):
         step1.add_argument("--chunk-s", type=float, nargs="+", default=[1.0, 10.0, 30.0], help="chunk-length curriculum, seconds")
         step1.add_argument("--max-epochs", type=float, default=100, help="per chunk length; patience usually ends a stage first")
@@ -1056,6 +1347,35 @@ def main() -> None:
         step1.add_argument("--val-window-s", type=float, default=60.0, help="scored length of each val window")
         step1.add_argument("--val-warmup-s", type=float, default=30.0, help="memory warm-up before each val window is scored")
         step1.add_argument("--limit-recordings", type=int, default=0, help="use only the first N recordings of each split (smoke runs)")
+        step1.add_argument("--schedule", choices=("cosine", "plateau"), default="cosine",
+                           help="cosine spans --max-epochs per chunk length, so it hardly decays in the epochs a stage runs; plateau cuts "
+                                "the rate when val AP stalls, as step 2 does (TODO A51 T2)")
+        step1.add_argument("--lr-factor", type=float, default=0.3, help="plateau only: how much to cut the rate by")
+        step1.add_argument("--lr-patience", type=int, default=2, help="plateau only: evaluations without improvement before a cut")
+        step1.add_argument("--min-lr", type=float, default=1e-5, help="plateau only: rate floor")
+        step1.add_argument("--test-strides", type=int, nargs="+", default=list(TEST_STRIDES),
+                           help="score every Nth annotated test frame, once per value; a screening run can pass 5 alone and skip the "
+                                "second full pass")
+        step1.add_argument("--coast-weight", type=float, default=1.0,
+                           help="weight of the coasting loss against the candidate loss; the coasting head holds a live slot on 95.5%% of the "
+                                "people stage 3 fails to report, yet ranks them too low to report (TODO A51 O2)")
+        step1.add_argument("--room-frame", action=argparse.BooleanOptionalAction, default=True,
+                           help="keep slots in room coordinates, so a static object keeps zero velocity; --no-room-frame keeps them in "
+                                "the sensor frame, the ablation of the design's central claim (TODO A51 D1)")
+        step1.add_argument("--latest-value", action="store_true",
+                           help="hold a slot by the latest candidate score instead of its accumulated value (TODO A51 D2)")
+        step1.add_argument("--fixed-decay-s", type=float, default=0.0,
+                           help="give every slot one decay time instead of a learned, input-dependent one; 0 keeps the learned decay "
+                                "(TODO A51 D3)")
+        step1.add_argument("--learn-value", action="store_true",
+                           help="make the value rule's gain and fade time parameters the loss can reach, the bookkeeping's only "
+                                "trainable part (TODO A51 D4)")
+        step1.add_argument("--rescore-gate", action=argparse.BooleanOptionalAction, default=True,
+                           help="scale the rescoring by a scalar that starts at zero; --no-rescore-gate zero-initialises the head's last "
+                                "layer instead, which starts equally silent but leaves the head's own gradient unscaled (TODO A51 T1)")
+        step1.add_argument("--rescore-limit", type=float, default=0.0,
+                           help="bound the rescoring correction to +-this many logits through a tanh; 0 leaves it unbounded, as it was "
+                                "when it shifted the whole score distribution down (TODO A51 O1)")
     sub.choices["step1"].set_defaults(stage2=None)
     sub.choices["step3a"].add_argument("--stage2", type=Path, required=True, help="trained stage 1-2 checkpoint whose candidates stage 3 learns from")
     step3b = sub.choices["step3b"]

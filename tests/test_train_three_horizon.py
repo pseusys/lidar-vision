@@ -14,11 +14,11 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from follow_the_drow.detectors.three_horizon import MAX_RANGE_M, CalibrationNetwork
+from follow_the_drow.detectors.three_horizon import MAX_RANGE_M, CalibrationNetwork, ObjectMemory, SlotRules
 from train_three_horizon import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, clip_frames, clip_length, coast_targets, decode_votes, evaluate, evaluation_segments,
     FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates,
-    TOP_P, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
+    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, coasting_hits, load_resume, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
 )
 
 
@@ -291,6 +291,41 @@ class TestCalibrationNetworkFor:
         assert rebuilt.max_range_m == MAX_RANGE_M and rebuilt.coarse.lags == [0, 8, 16, 24, 32]
 
 
+class TestObjectMemoryFor:
+    """A stage-3 checkpoint carries the rescoring arms it was trained with (`TODO.md` A51 T1, O1), so anything rebuilding it from
+    disk must read them rather than assume the defaults -- a T1 checkpoint has no `rescore_gate` parameter at all."""
+
+    def test_the_arms_and_slot_count_come_from_the_checkpoint_args(self):
+        trained = ObjectMemory(SlotRules(capacity=8), dim=32, heads=4, feature_dim=4, rescore_gate=False, rescore_limit=3.0)
+        checkpoint = dict(model=trained.state_dict(), args={"slots": "8", "rescore_gate": "False", "rescore_limit": "3.0"})
+        rebuilt = object_memory(checkpoint, feature_dim=4, dim=32, heads=4)
+        assert rebuilt.rescore_gate is None and rebuilt.rescore_limit == 3.0 and rebuilt.rules.capacity == 8
+        assert set(rebuilt.state_dict()) == set(checkpoint["model"])
+
+    def test_the_slot_ablations_survive_a_round_trip(self):
+        trained = ObjectMemory(SlotRules(capacity=8, latest_value=True), dim=32, heads=4, feature_dim=4, room_frame=False,
+                               fixed_decay_s=8.0, learn_value=True)
+        checkpoint = dict(model=trained.state_dict(),
+                          args={"slots": "8", "latest_value": "True", "room_frame": "False", "fixed_decay_s": "8.0", "learn_value": "True"})
+        rebuilt = object_memory(checkpoint, feature_dim=4, dim=32, heads=4)
+        assert not rebuilt.room_frame and rebuilt.rules.latest_value and rebuilt.fixed_decay_s == 8.0 and rebuilt.decay is None
+        assert set(rebuilt.state_dict()) == set(checkpoint["model"])
+
+    def test_a_capacity_override_keeps_the_checkpoint_own_slot_rules(self):
+        # the slot-count ablation rebuilds a trained memory at another capacity; it must not silently drop how that memory holds slots
+        trained = ObjectMemory(SlotRules(capacity=8, latest_value=True), dim=32, heads=4, feature_dim=4)
+        checkpoint = dict(model=trained.state_dict(), args={"slots": "8", "latest_value": "True"})
+        rebuilt = object_memory(checkpoint, feature_dim=4, capacity=16, dim=32, heads=4)
+        assert rebuilt.rules.capacity == 16 and rebuilt.rules.latest_value
+
+    def test_a_checkpoint_from_before_the_flags_keeps_the_gate(self):
+        trained = ObjectMemory(SlotRules(capacity=8), dim=32, heads=4, feature_dim=4)
+        checkpoint = dict(model=trained.state_dict(), args={"slots": "8"})
+        rebuilt = object_memory(checkpoint, feature_dim=4, dim=32, heads=4)
+        assert rebuilt.rescore_gate is not None and rebuilt.rescore_limit == 0.0
+        assert set(rebuilt.state_dict()) == set(checkpoint["model"])
+
+
 class TestPeriodicCheckpoint:
 
     def test_it_keeps_one_checkpoint_per_interval(self, tmp_path):
@@ -452,6 +487,60 @@ class TestRecordingBounds:
         assert offsets.tolist() == [0, 3, 5] and lengths.tolist() == [3, 2, 4]
 
 
+class TestFramePeriods:
+    """Stage 3's time step never trusts one stamped interval (`TODO.md` A51 0b): FROG stamps 40 Hz scans in bunches of 38 ms, 38 ms and
+    under 0.1 ms, and DROW rounds its 12.7 Hz stamps to 0.05 s. A running average of the intervals is one number per stream."""
+
+    @staticmethod
+    def _bunched(n):
+        return np.concatenate([[100.0], 100.0 + np.cumsum(np.tile([0.038, 0.038, 0.00005], n // 3 + 1)[:n - 1])])
+
+    def test_bunched_stamps_settle_on_the_true_period(self):
+        time = self._bunched(400)
+        dt = frame_periods(time, np.array([0]), np.array([400]), 32)
+        assert np.all(np.abs(dt[100:] - 0.02535) / 0.02535 < 0.05)
+
+    def test_rounded_stamps_settle_on_the_true_period(self):
+        true = np.arange(600) / 12.7
+        time = np.round(true / 0.05) * 0.05
+        dt = frame_periods(time, np.array([0]), np.array([600]), 32)
+        assert np.all(np.abs(dt[100:] - 1 / 12.7) / (1 / 12.7) < 0.15)
+
+    def test_it_is_the_plain_mean_of_the_intervals_until_the_window_fills(self):
+        time = np.array([0.0, 0.01, 0.03, 0.06])
+        dt = frame_periods(time, np.array([0]), np.array([4]), 32)
+        assert dt[1:].tolist() == pytest.approx([0.01, 0.015, 0.02])
+
+    def test_it_is_causal(self):
+        time = self._bunched(200)
+        later = time.copy()
+        later[150:] += 0.3
+        a = frame_periods(time, np.array([0]), np.array([200]), 32)
+        b = frame_periods(later, np.array([0]), np.array([200]), 32)
+        assert np.array_equal(a[:150], b[:150]) and not np.array_equal(a[150:], b[150:])
+
+    def test_recordings_are_independent_and_their_first_frame_has_no_elapsed_time(self):
+        first, second = self._bunched(90), np.arange(50) * 0.1
+        dt = frame_periods(np.concatenate([first, second]), np.array([0, 90]), np.array([90, 50]), 32)
+        alone = frame_periods(second, np.array([0]), np.array([50]), 32)
+        assert np.array_equal(dt[90:], alone)
+        assert dt[0] == dt[90] == MIN_DT_S
+
+    def test_the_mean_period_pools_elapsed_time_over_frames(self):
+        time = np.concatenate([np.arange(11) * 0.025, 50.0 + np.arange(21) * 0.1])
+        assert mean_frame_period(time, np.array([0, 11]), np.array([11, 21])) == pytest.approx((0.25 + 2.0) / 30)
+
+    def test_gather_hands_stage_3_the_running_period(self):
+        n = 60
+        seq = SequenceCandidates(
+            xy=np.zeros((n, 1, 2), np.float32), score=np.zeros((n, 1), np.float32), valid=np.zeros((n, 1), bool), target=np.zeros((n, 1), bool),
+            pose=np.zeros((n, 3), np.float32), time=self._bunched(n), annotated=np.ones(n, bool), gt_xy=np.zeros((n, 1, 2), np.float32),
+            gt_valid=np.zeros((n, 1), bool), gt_covered=np.zeros((n, 1), bool), features=np.zeros((n, 1, 0), np.float16))
+        split = pack([seq])
+        got = gather(split, np.zeros((1, n), dtype=int), np.arange(n)[None], "cpu")["dt"][0].numpy()
+        assert got == pytest.approx(frame_periods(seq.time, np.array([0]), np.array([n]), DT_AVERAGE_FRAMES).astype(np.float32))
+
+
 class TestJointFrameLoss:
 
     def _frame(self):
@@ -494,6 +583,43 @@ class TestScoreDetections:
         assert result["fp_per_frame"] == pytest.approx(0.5)
         assert result["fn_per_frame"] == pytest.approx(0.5)
 
+    def test_the_match_radius_decides_whether_a_nearby_detection_counts(self):
+        person = np.array([[0.0, 1.0]], np.float32)
+        frames = [(np.array([0.9], np.float32), np.array([[0.4, 1.0]], np.float32), person)]
+        assert score_detections(frames, radius=0.5)["recall"] == pytest.approx(1.0)
+        assert score_detections(frames, radius=0.3)["recall"] == pytest.approx(0.0)
+
+    def test_the_own_operating_point_is_the_lowest_threshold_within_the_false_positive_budget(self):
+        # two frames, one person each; scores 0.9 hit, 0.25 hit, 0.2 miss, 0.1 miss: a budget of 0 false positives stops at 0.25
+        person = np.array([[0.0, 1.0]], np.float32)
+        on, off = np.array([[0.0, 1.0]], np.float32), np.array([[5.0, 5.0]], np.float32)
+        frames = [(np.array([0.9, 0.2], np.float32), np.concatenate([on, off]), person),
+                  (np.array([0.25, 0.1], np.float32), np.concatenate([on, off]), person)]
+        result = score_detections(frames, fp_budget=0.0)
+        assert result["own_threshold"] == pytest.approx(0.25)
+        assert result["own_recall"] == pytest.approx(1.0)
+        assert result["own_fp_per_frame"] == pytest.approx(0.0)
+        assert result["own_fn_per_frame"] == pytest.approx(0.0)
+
+
+class TestCoastingHits:
+    """A coasting report is only worth something on a person no kept candidate already covers (`TODO.md` A51 0c)."""
+
+    def test_a_report_on_an_uncovered_person_is_a_hit_and_on_a_covered_one_is_not(self):
+        gt = np.array([[0.0, 1.0], [3.0, 3.0]], np.float32)
+        candidates = np.array([[0.0, 1.05]], np.float32)
+        reports = np.array([[0.05, 1.0], [3.0, 3.1]], np.float32)
+        assert coasting_hits(reports, candidates, gt, 0.5) == 1
+
+    def test_one_hit_per_person(self):
+        gt = np.array([[3.0, 3.0]], np.float32)
+        reports = np.array([[3.0, 3.1], [3.1, 3.0]], np.float32)
+        assert coasting_hits(reports, np.zeros((0, 2), np.float32), gt, 0.5) == 1
+
+    def test_no_reports_or_no_people_hit_nothing(self):
+        assert coasting_hits(np.zeros((0, 2), np.float32), np.zeros((0, 2), np.float32), np.array([[1.0, 1.0]], np.float32), 0.5) == 0
+        assert coasting_hits(np.array([[1.0, 1.0]], np.float32), np.zeros((0, 2), np.float32), np.zeros((0, 2), np.float32), 0.5) == 0
+
 
 class TestPlateauSchedule:
 
@@ -507,6 +633,115 @@ class TestPlateauSchedule:
         assert rates[:4] == pytest.approx([1e-3] * 4)       # a new best, then two stalled evaluations are tolerated
         assert rates[4] == pytest.approx(3e-4)             # the third stalled evaluation cuts the rate
         assert min(rates) == pytest.approx(1e-4)           # and it never goes below the floor
+
+
+class TestResume:
+    """A driver bugcheck took a healthy 3.5 h run with it on 2026-09-22 (`memory/gotchas.md`), and every interruption this week cost
+    a whole run. A resumed run is not bit-identical to an uninterrupted one -- GPU nondeterminism already means a seed does not
+    reproduce a run -- but it continues from the last evaluation instead of from nothing."""
+
+    def test_the_random_state_round_trips(self):
+        rng = np.random.default_rng(3)
+        torch.manual_seed(3)
+        snapshot = rng_snapshot(rng)
+        first = (torch.rand(4), rng.random(4))
+        rng_restore(snapshot, rng)
+        second = (torch.rand(4), rng.random(4))
+        assert torch.equal(first[0], second[0]) and np.array_equal(first[1], second[1])
+
+    def test_a_run_state_round_trips_through_disk(self, tmp_path):
+        path = tmp_path / "resume.pth"
+        save_resume(path, stage=2, epoch=7, history=[{"val_ap": 0.5}])
+        state = load_resume(path, resume=True)
+        assert state["stage"] == 2 and state["epoch"] == 7 and state["history"] == [{"val_ap": 0.5}]
+
+    def test_nothing_to_resume_from(self, tmp_path):
+        assert load_resume(tmp_path / "absent.pth", resume=True) is None
+        save_resume(tmp_path / "present.pth", stage=0)
+        assert load_resume(tmp_path / "present.pth", resume=False) is None       # the flag decides, not the file
+
+    def test_a_truncated_file_is_ignored_rather_than_crashing_the_run(self, tmp_path):
+        path = tmp_path / "resume.pth"
+        save_resume(path, stage=1)
+        path.write_bytes(path.read_bytes()[: 32])                                # a crash during the save itself
+        assert load_resume(path, resume=True) is None
+
+    def test_the_stopper_keeps_its_patience_across_a_resume(self):
+        stopper = EarlyStopping(patience_evals=2, min_epochs=0, max_epochs=99, max_hours=99)
+        for metric in (0.5, 0.4):
+            stopper.update(metric)
+        restored = EarlyStopping(patience_evals=2, min_epochs=0, max_epochs=99, max_hours=99)
+        restored.__dict__.update(stopper.state())
+        assert restored.state() == stopper.state()
+        assert not restored.should_stop(epoch=1, hours=0)
+        restored.update(0.3)
+        assert restored.should_stop(epoch=1, hours=0)                            # the second bad evaluation, not a fresh count
+
+    def test_the_best_checkpoint_keeps_its_bar_across_a_resume(self, tmp_path):
+        best = BestCheckpoint(tmp_path / "best.pth")
+        best.offer(0.8, {"model": 1})
+        restored = BestCheckpoint(tmp_path / "best.pth")
+        restored.__dict__.update(best.state())
+        assert not restored.offer(0.7, {"model": 2})                             # a worse epoch after the crash cannot overwrite it
+        assert restored.offer(0.9, {"model": 3})
+
+
+class TestNonFiniteSummary:
+    """When a stage-3 run goes NaN, the epoch-level guard fires up to 151 iterations later and its traceback points at the guard
+    itself. This names what was already non-finite at the iteration that broke (`TODO.md` A51, O1's two failures)."""
+
+    def test_it_names_only_the_non_finite_entries_with_their_kind(self):
+        named = {"good": torch.ones(3), "nan": torch.tensor([1.0, float("nan")]), "inf": torch.tensor([float("inf")])}
+        out = non_finite_summary(named)
+        assert "good" not in out
+        assert "nan" in out and "inf" in out
+
+    def test_everything_finite_gives_nothing(self):
+        assert non_finite_summary({"a": torch.zeros(2), "b": torch.ones(2)}) == ""
+
+    def test_it_survives_an_empty_or_non_float_tensor(self):
+        assert non_finite_summary({"empty": torch.zeros(0), "ints": torch.tensor([1, 2])}) == ""
+
+
+class TestTrainingFault:
+    """A stage-3 run on this machine has twice had its device state go bad mid-run (`memory/gotchas.md`): the candidates' own
+    validation AP, which is read from the cache and cannot depend on the model, fell from 72.85% to 3.40% while the loss went to
+    exactly zero, and six more epochs ran before the process died. The guard stops at the first such evaluation."""
+
+    def test_a_steady_run_reports_no_fault(self):
+        assert training_fault(0.7285, 0.7290, 0.83) is None
+
+    def test_candidate_ap_moving_means_the_cached_data_is_corrupt(self):
+        fault = training_fault(0.7285, 0.0340, 0.0)
+        assert fault is not None and "candidate" in fault.lower()
+
+    def test_a_non_finite_or_dead_loss_is_a_fault(self):
+        assert training_fault(0.7285, 0.7285, float("nan")) is not None
+        assert training_fault(0.7285, 0.7285, 0.0) is not None
+
+    def test_an_undefined_candidate_ap_is_not_read_as_corruption(self):
+        # a validation window with nothing annotated gives NaN; that is a known case, not a device fault
+        assert training_fault(float("nan"), float("nan"), 0.83) is None
+
+
+class TestMemorySchedule:
+    """Stage 3's learning rate (`TODO.md` A51 T2). Its cosine schedule spans `--max-epochs` per chunk length, so in the 9-37 epochs
+    a stage actually runs it barely decays; the plateau schedule steps once per evaluation on val AP instead, as step 2 does."""
+
+    def _optimizer(self):
+        return torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
+
+    def test_the_cosine_schedule_steps_every_iteration(self):
+        schedule, per_iteration = memory_schedule(self._optimizer(), "cosine", max_epochs=10, iterations=5, factor=0.3, patience=2, min_lr=1e-5)
+        assert per_iteration and isinstance(schedule, torch.optim.lr_scheduler.CosineAnnealingLR)
+
+    def test_the_plateau_schedule_steps_on_the_evaluation_metric_and_cuts_the_rate(self):
+        optimizer = self._optimizer()
+        schedule, per_iteration = memory_schedule(optimizer, "plateau", max_epochs=10, iterations=5, factor=0.5, patience=1, min_lr=1e-3)
+        assert not per_iteration
+        for metric in (0.5, 0.4, 0.4, 0.4, 0.4):
+            schedule.step(metric)
+        assert optimizer.param_groups[0]["lr"] < 1.0
 
 
 class TestFirstRecordings:
@@ -549,6 +784,34 @@ class TestEvaluate:
         for part in ("candidates", "memory"):
             for key in ("ap", "fp_per_frame", "fn_per_frame", "frames", "people"):
                 assert sliced[part][key] == pytest.approx(whole[part][key], nan_ok=True)
+
+    def test_an_untrained_memory_reports_no_rescoring_shift_and_no_coasting(self):
+        # the rescore gate starts closed and the coasting head silent, so stage 3 starts as exactly stage 2
+        split, model = self._split(), self._model()
+        split.data.target[:] = split.data.valid & (np.arange(6) < 3)
+        result = evaluate(model, split, torch.device("cpu"), 1, 2, evaluation_segments(split, 0, 0, 0))
+        memory = result["memory"]
+        assert memory["rescore_shift_person"] == pytest.approx(0.0, abs=1e-4)
+        assert memory["rescore_shift_other"] == pytest.approx(0.0, abs=1e-4)
+        assert memory["coast_per_frame"] == 0.0
+        # identical scores, so the own operating point spends the same false-positive budget and cannot recall less
+        assert memory["own_fp_per_frame"] <= result["candidates"]["fp_per_frame"] + 1e-9
+        assert memory["own_recall"] >= memory["recall"] - 1e-9
+
+    def test_extra_match_radii_are_scored_for_both_stages(self):
+        split, model = self._split(), self._model()
+        result = evaluate(model, split, torch.device("cpu"), 1, 2, evaluation_segments(split, 0, 0, 0), extra_radii=(0.3,))
+        for part in ("candidates", "memory"):
+            assert 0.0 <= result[part]["ap_0.3m"] <= 1.0
+
+
+class TestMemoryMsPerFrame:
+
+    @pytest.mark.parametrize("device", ["cpu", torch.device("cpu")])
+    def test_it_times_single_stream_steps_for_either_form_of_device(self, device):
+        # `detect_device` returns a string, not a `torch.device`, and timing it crashed the first A51 smoke run
+        ms = memory_ms_per_frame(TestEvaluate()._model(), TestEvaluate()._split(), device, frames=10)
+        assert 0.0 < ms < 10_000.0
 
 
 class TestReplaySort:

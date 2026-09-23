@@ -60,7 +60,7 @@ sys.path.insert(0, str(_HERE))
 from follow_the_drow.detectors.three_horizon import ObjectMemory, SlotRules  # noqa: E402
 from motion_analysis import build_tracks, to_world  # noqa: E402
 from train_three_horizon import (  # noqa: E402
-    MATCH_RADIUS_M, MIN_REPORTED_SCORE, OPERATING_THRESHOLD, Split, candidate_targets, detect_device, evaluation_segments, gather, load_split,
+    MATCH_RADIUS_M, MIN_REPORTED_SCORE, OPERATING_THRESHOLD, Split, candidate_targets, detect_device, evaluation_segments, gather, load_split, object_memory,
 )
 
 BRIDGES_S = (0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 60.0)
@@ -179,8 +179,7 @@ def main() -> None:
     checkpoint = torch.load(args.memory, map_location=device, weights_only=False)
     slots = args.slots or int(checkpoint["args"]["slots"])
     split = load_split("test", args.limit_recordings, args.stage2, device)
-    model = ObjectMemory(SlotRules(capacity=slots), feature_dim=split.data.features.shape[-1]).to(device)
-    model.load_state_dict(checkpoint["model"])
+    model = object_memory(checkpoint, split.data.features.shape[-1], capacity=slots).to(device)
     print(f"memory: {args.memory.name}, {slots} slots, epoch {checkpoint['epoch']}, chunks of {checkpoint['chunk_s']:g} s", flush=True)
 
     cand_cov, mem_cov = coverage(model, split, device, args.streams, args.threshold)

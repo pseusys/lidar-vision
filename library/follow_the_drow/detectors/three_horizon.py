@@ -4,7 +4,7 @@ Design and reasoning in `docs/PROPOSAL.md` (§5.3 input, §5.4 calibration horiz
 Conventions: beam angle 0 is forward, counterclockwise positive, increasing with beam index;
 poses are world odometry `(x, y, theta)` with x forward at theta = 0, y left, theta counterclockwise.
 """
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from math import log, radians, sqrt
 from typing import List, Optional, Sequence, Tuple
 
@@ -140,7 +140,11 @@ def world_to_sensor(xy: Tensor, pose: Tensor) -> Tensor:
 
 @dataclass(frozen=True)
 class SlotRules:
-    """Fixed rules for creating, matching, replacing and retiring object slots (`docs/PROPOSAL.md` §5.5 and §6.3)."""
+    """Fixed rules for creating, matching, replacing and retiring object slots (`docs/PROPOSAL.md` §5.5 and §6.3).
+
+    `latest_value` is the ablation of the design's value rule (`TODO.md` A51 D2): a matched slot takes the candidate's score
+    instead of accumulating towards certainty, so a person hidden for a moment no longer keeps their slot.
+    """
     capacity: int = 256
     floor: float = 0.01
     margin: float = 0.1
@@ -148,6 +152,7 @@ class SlotRules:
     gain: float = 0.1
     gate_m: float = 0.6
     velocity_smoothing: float = 0.1
+    latest_value: bool = False
 
 
 @dataclass
@@ -217,7 +222,9 @@ def manage_slots(slots: Slots, cand_xy: Tensor, cand_score: Tensor, cand_valid: 
 
     match_xy = cand_xy.gather(1, nearest_candidate[..., None].expand(-1, -1, 2))
     fade = exp(-step * log(1.0 / rules.floor) / rules.fade_time_s)
-    value = where(matched, slots.value + rules.gain * (1.0 - slots.value) * cand_score.gather(1, nearest_candidate), slots.value * fade)
+    observed = cand_score.gather(1, nearest_candidate)
+    raised = observed if rules.latest_value else slots.value + rules.gain * (1.0 - slots.value) * observed
+    value = where(matched, raised, slots.value * fade)
     velocity = where(matched[..., None], slots.velocity + rules.velocity_smoothing * ((match_xy - slots.position) / step[..., None] - slots.velocity), slots.velocity)
     position = where(matched[..., None], match_xy, predicted)
     hit_rate = slots.hit_rate + (1.0 - exp(-step / HIT_RATE_TIME_S)) * (matched.float() - slots.hit_rate)
@@ -309,13 +316,24 @@ def _proximity(a: Tensor, b: Tensor, sigma_m: float) -> Tensor:
 class ObjectMemory(nn.Module):
     """Stage 3, the short and long horizons (`docs/PROPOSAL.md` §5.5): object slots in world coordinates, learned matching of
     candidates to slots, exchange between slots, selective recurrence in real time, rule-based slot bookkeeping, candidate
-    rescoring through a gate that starts closed, and coasting slots that report people no candidate covers.
+    rescoring that starts silent, and coasting slots that report people no candidate covers.
+
+    The ablations of A51 phase 3b, each off by default: `room_frame` false keeps slots in the sensor frame, where a static object
+    drifts with the robot; `SlotRules.latest_value` replaces accumulated value with the latest score; `fixed_decay_s` gives every
+    slot one time constant instead of a learned one; `learn_value` turns the value rule's two constants into parameters.
+
+    Rescoring starts silent either way (`TODO.md` A51): through a scalar gate initialised at zero, or -- with `rescore_gate` false --
+    through a zero-initialised last layer, which leaves the head's own gradient unscaled. `rescore_limit`, when set, bounds the
+    correction to +-`rescore_limit` logits through a tanh, against the signed correction that shifted the whole score distribution
+    down.
     """
 
     def __init__(self, rules: SlotRules = SlotRules(), dim: int = 128, heads: int = 4, sigma_m: float = 0.6, decay_init_s: Tuple[float, float] = (1.0, 60.0),
-                 feature_dim: int = 0):
+                 feature_dim: int = 0, rescore_gate: bool = True, rescore_limit: float = 0.0, room_frame: bool = True,
+                 fixed_decay_s: float = 0.0, learn_value: bool = False):
         super().__init__()
         self.rules, self.dim, self.sigma_m, self.feature_dim = rules, dim, sigma_m, feature_dim
+        self.rescore_limit, self.room_frame, self.fixed_decay_s = rescore_limit, room_frame, fixed_decay_s
         self.encode = nn.Sequential(nn.Linear(CANDIDATE_FEATURES + feature_dim, dim), nn.GELU(), nn.Linear(dim, dim))
         self.spawn = nn.Linear(dim, dim)
         self.statistics = nn.Linear(SLOT_STATISTICS, dim)
@@ -323,18 +341,44 @@ class ObjectMemory(nn.Module):
         self.exchange = _BiasedAttention(dim, heads)
         self.exchange_norm = nn.LayerNorm(dim)
         self.update = nn.Linear(dim + SLOT_STATISTICS, dim)
-        self.decay = nn.Linear(dim + SLOT_STATISTICS, dim, bias=False)
-        times = exp(linspace(log(decay_init_s[0]), log(decay_init_s[1]), dim))
-        self.decay_bias = nn.Parameter(tlog(expm1(1.0 / times)))
+        if fixed_decay_s:
+            self.decay, self.decay_bias = None, None        # one time constant for every slot, the ablation of selective recurrence
+        else:
+            self.decay = nn.Linear(dim + SLOT_STATISTICS, dim, bias=False)
+            times = exp(linspace(log(decay_init_s[0]), log(decay_init_s[1]), dim))
+            self.decay_bias = nn.Parameter(tlog(expm1(1.0 / times)))
+        if learn_value:                                      # the value rule's two constants, as parameters the loss can reach
+            self.value_gain = nn.Parameter(tlog(full((), rules.gain / (1.0 - rules.gain))))
+            self.value_fade = nn.Parameter(tlog(expm1(full((), rules.fade_time_s))))
         self.recall = _BiasedAttention(dim, heads)
         self.rescore = nn.Sequential(nn.Linear(2 * dim, dim), nn.GELU(), nn.Linear(dim, 1))
-        self.rescore_gate = nn.Parameter(zeros(()))
+        if rescore_gate:
+            self.rescore_gate = nn.Parameter(zeros(()))
+        else:
+            self.register_parameter("rescore_gate", None)       # the head starts silent through its own last layer instead
+            nn.init.zeros_(self.rescore[-1].weight), nn.init.zeros_(self.rescore[-1].bias)
         self.coast = nn.Linear(dim + SLOT_STATISTICS, 1)
         nn.init.zeros_(self.coast.weight)
         nn.init.constant_(self.coast.bias, SILENT_COAST_LOGIT)
 
     def initial_state(self, batch: int, device=None) -> Slots:
         return initial_slots(batch, self.rules, self.dim, device)
+
+    def slot_rules(self) -> SlotRules:
+        """The bookkeeping rules for this frame. With `learn_value` the value rule's two constants come from parameters, so the
+        rule itself moves as they train, while the discrete decisions inside `manage_slots` stay under `no_grad`."""
+        if not hasattr(self, "value_gain"):
+            return self.rules
+        return replace(self.rules, gain=self.value_gain.detach().sigmoid().item(), fade_time_s=softplus(self.value_fade.detach()).item())
+
+    def _value_with_gradient(self, previous: Slots, slots: Slots, events: SlotEvents, cand_score: Tensor, dt: Tensor) -> Tensor:
+        """The same value the rule just computed, recomputed so the loss reaches `value_gain` and `value_fade` (`TODO.md` A51 D4).
+        The bookkeeping keeps its own detached value; this one is what the network reads."""
+        gain, fade_time = self.value_gain.sigmoid(), softplus(self.value_fade)
+        observed = cand_score.gather(1, events.match_index.clamp(min=0))
+        raised = observed if self.rules.latest_value else previous.value + gain * (1.0 - previous.value) * observed
+        faded = previous.value * exp(-dt[:, None] * log(1.0 / self.rules.floor) / fade_time)
+        return where(events.source >= 0, slots.value, where(events.matched, raised, faded))
 
     def step(self, cand_xy: Tensor, cand_score: Tensor, cand_valid: Tensor, pose: Tensor, dt: Tensor, slots: Slots, reset: Optional[Tensor] = None,
              cand_features: Optional[Tensor] = None) -> MemoryOutput:
@@ -343,8 +387,11 @@ class ObjectMemory(nn.Module):
         detector's own features of each candidate, when the memory was built with `feature_dim`."""
         if reset is not None:
             slots = _where_slots(reset, self.initial_state(len(reset), cand_xy.device), slots)
-        world = sensor_to_world(cand_xy, pose)
-        slots, events = manage_slots(slots, world, cand_score, cand_valid, dt, self.rules)
+        world = sensor_to_world(cand_xy, pose) if self.room_frame else cand_xy
+        previous = slots
+        slots, events = manage_slots(slots, world, cand_score, cand_valid, dt, self.slot_rules())
+        if hasattr(self, "value_gain"):
+            slots = replace(slots, value=self._value_with_gradient(previous, slots, events, cand_score, dt))
 
         features = stack([cand_score, _logit(cand_score) / FEATURE_SCALE, cand_xy[..., 0] / FEATURE_SCALE, cand_xy[..., 1] / FEATURE_SCALE, cand_xy.norm(dim=-1) / FEATURE_SCALE], dim=-1)
         if self.feature_dim:
@@ -361,15 +408,20 @@ class ObjectMemory(nn.Module):
         found = self.match(state + self.statistics(stats), encoded, _proximity(slots.position, world, self.sigma_m), cand_valid)
         mixed = self.exchange_norm(found + self.exchange(found, found, _proximity(slots.position, slots.position, self.sigma_m), slots.alive))
         u = cat([mixed, stats], dim=-1)
-        keep = exp(-dt[:, None, None] * softplus(self.decay(u) + self.decay_bias))
+        rate = 1.0 / self.fixed_decay_s if self.decay is None else softplus(self.decay(u) + self.decay_bias)
+        keep = exp(-dt[:, None, None] * rate)
         state = (keep * state + (1.0 - keep) * tanh(self.update(u))) * slots.alive[..., None]
         slots = Slots(slots.alive, slots.value, slots.position, slots.velocity, slots.origin, slots.age_s, slots.since_match_s, slots.hit_rate, state)
 
         recalled = self.recall(encoded, state, _proximity(world, slots.position, self.sigma_m), slots.alive)
-        candidate_logit = _logit(cand_score) + self.rescore_gate * self.rescore(cat([encoded, recalled], dim=-1))[..., 0]
+        correction = self.rescore(cat([encoded, recalled], dim=-1))[..., 0]
+        if self.rescore_limit:
+            correction = self.rescore_limit * tanh(correction)
+        candidate_logit = _logit(cand_score) + (correction if self.rescore_gate is None else self.rescore_gate * correction)
         slot_logit = self.coast(cat([state, stats], dim=-1))[..., 0]
         coasting = slots.alive & ~events.matched & ~refill
-        return MemoryOutput(candidate_logit, slot_logit, world_to_sensor(slots.position, pose), coasting, slots)
+        slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
+        return MemoryOutput(candidate_logit, slot_logit, slot_xy, coasting, slots)
 
 
 class ConvNeXtBlock(nn.Module):

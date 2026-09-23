@@ -27,8 +27,27 @@ Platform and environment traps that have cost real debugging time.
   DROW's timestamps are rounded to 0.05 s, so its intervals are a mix of 0.05 s and 0.10 s, and the median lands on 0.10.
   FROG's scans are stamped in bunches: about 0.038 s, 0.038 s, then under 0.1 ms. No two consecutive scans are identical, and the mean over linked intervals is 25.0 ms in every file, matching the UTM-30LX's 25 ms per scan. The median lands on 0.038 s.
   Use scans over elapsed time per unbroken sequence (`utils/scan_anomalies.py` reports both).
-  **Never divide by a stamped FROG interval:** about a quarter of them are under 1 ms. `manage_slots` does exactly that for slot velocity (TODO A50).
+  **Never divide by a stamped FROG interval:** about a fifth of them are under 1 ms. `manage_slots` divides by its `dt`, and with stamped intervals it made matched slots' velocity median 4.0 m/s near people against 0.56 m/s measured over >= 1 s, and sent unmatched slots coasting at ~11 m/s (TODO A51 0a). The stage-3 trainer now passes `frame_periods`, a running average of the intervals; anything new that needs a time step should use it.
   Scripts still on the median or on `1/26.2` are listed in TODO A49.
+- **The GPU's state can go bad mid-run, and the giveaway is a number the model cannot influence.**
+  2026-09-21, `a51_d1_sensor_s1`: at epoch 12 the *candidates'* validation AP fell from 72.85% to 3.40% while the training loss went to exactly 0.0000 and the rescore gate to +0.000. Those candidates are read from the cache, so no model state can change them -- the data on the device was corrupt. Six more epochs ran on garbage, then the process died with `HIP out of memory: tried to allocate 2.00 MiB` while reporting **14.87 GiB free**, which is itself a sign of a broken HIP context rather than real exhaustion. A sanity check afterwards (matmul against CPU, attention-shaped ops, `mem_get_info`) passed cleanly, so the fault is transient, not a dead card.
+  `train_memory` now stops at the first evaluation where the candidates' AP drifts by more than `CANDIDATE_AP_TOLERANCE` or the loss is zero or non-finite (`training_fault`). Reboot before the next long run, and do not read any result from a run that logged this.
+
+- **The GPU driver can bugcheck the whole machine under a long run.**
+  2026-09-22 23:52: `0x7E SYSTEM_THREAD_EXCEPTION_NOT_HANDLED`, exception `0xc0000005` at `fffff803'3b8d4f50`, and Windows named the driver itself in event 1019: **`amdkmdag.sys`** (32.0.31041.1004, dated 2026-08-17). It killed a healthy 3.5 h stage-3 run at 42 epochs. It is the only bugcheck in eight days and there are **no** TDR/display-reset events, so the driver is not chronically resetting -- it hard-failed once under sustained ROCm load. The dump is at `C:\Windows\Minidump\092226-17203-01.dmp`; reading it needs an elevated shell and a debugger, neither of which is installed here, so the call stack is unavailable.
+  Every trainer now takes `--resume` (`save_resume` / `load_resume`), which is the only defence available from inside the repo.
+
+- **Running `pytest` beside a live training run kills the run, and it has now happened twice.**
+  The rule is already below ("do not run the test suite against a live training run"), and on 2026-09-22 an agent broke it anyway: two `pytest` invocations during `a51_d1_sensor_s1` ended it after 3 h with `_ArrayMemoryError: Unable to allocate 64.0 MiB` inside `gather`, the documented commit-pressure signature. The tell was visible beforehand -- test collection took 199 s instead of 3 s. **Check for a running `python.exe` before any test run**, and treat a slow collection as a warning that something else is holding memory.
+
+- **Stage 3 held all three candidate caches in RAM at once, and a 16 GB host cannot take it.**
+  2026-09-21: `a51_d1_sensor_s1` died 3.5 h in with `RuntimeError: bad allocation` inside `loss.backward()` -- a *host* allocation failure, not GPU (5.3 GB of 16 GB used there), on a run whose seed-0 twin had finished. The FROG `official` caches are 614 MB (train), 998 MB (val) and 254 MB (test) on disk, and `train_memory` loaded all three before training although test is only scored at the end. It now loads test after the training loop and frees train and val first. The machine has 16 GB with a 5 GB page file (max 15 GB), so the margin is thin either way: check free memory before starting a long stage-3 run, and do not run anything else beside it.
+
+- **`detect_device()` returns a string, not a `torch.device`.**
+  So `device.type` raises `AttributeError`; ask `str(device).startswith("cuda")` instead, and note that DirectML returns a device object rather than either.
+  2026-09-17: a `torch.cuda.synchronize()` guard written as `device.type == "cuda"` passed its unit test, which had handed it a real `torch.device`, and then crashed the A51 smoke run *after* training finished. A launcher chain stopped there and the GPU sat idle for 19 hours.
+  A unit test that constructs its own device does not cover this; the check is to run the path once against `detect_device()`'s own return value.
+
 - **The machine can go to sleep in the middle of a training run, with the plugged-in sleep timeout set to "never".**
   2026-09-15: step 1 stopped at 10:28 with no error in its log; the System log shows "shutdown transition" and "system initiated reboot from Sleeping (Idle)" at 10:29:54, and no out-of-memory or bugcheck record.
   `utils/train_three_horizon.py` now asks Windows to stay awake for as long as it runs (`SetThreadExecutionState`), which lasts only while the process lives and changes no power setting.
