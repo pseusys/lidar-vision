@@ -2,7 +2,8 @@
 
 A research project on **person detection from knee-height 2D LiDAR data**, of the kind carried by mobile service robots.
 Its contribution is **TAKHeLiPeD**, a streaming detector that carries an explicit, learned **object memory** across seconds to a minute of scans, so that a chair the robot has watched for half a minute stops looking like a person.
-It is benchmarked against the published DROW3, DR-SPAAM, Li2Former and LFE-Peaks/LFE-PPN detectors on FROG, and the surrounding pipeline (detection, tracking, a follow-me behaviour) also runs end-to-end on a real mobile robot (RobAIR) over ROS.
+It is benchmarked against the published DROW3, DR-SPAAM, Li2Former and LFE-Peaks/LFE-PPN detectors on FROG, and against a classical, non-learned reference point — `AlgorithmicDetector`, **prof. O. Aycard's** leg+chest clustering-and-tracking algorithm, which this repo ports and runs but did not devise.
+The surrounding pipeline (detection, tracking, a follow-me behaviour) also runs end-to-end on a real mobile robot (RobAIR) over ROS.
 
 ## The name
 
@@ -104,6 +105,12 @@ The complete, current reference — every flag, every phase — is [`memory/comm
 The ROS pipeline reaches RobAIR via a manually-triggered Docker rebuild, not a CI auto-deploy: `make launch-docker-local` (laptop) or `make launch-docker-robot` (the real robot).
 **Only `DrowDetector` is currently wired into it** — TAKHeLiPeD, the tracker and the real-odometry pipeline have never been integrated into a ROS node.
 See [`memory/deployment.md`](memory/deployment.md) for what runs, what doesn't, and why.
+
+## Credits
+
+- **`AlgorithmicDetector`** — the classical leg+chest clustering-and-tracking detector in `library/cpp_core/` is **prof. O. Aycard's** algorithm and implementation (`sources/detector.cpp`, *"Person detector using 2 lidar data — Written by O. Aycard"*). It must be credited to him in anything published from this repository; only the pybind11 binding, the Python wrapper and the evaluation harness around it are this project's.
+- **DROW3, DR-SPAAM, Li2Former, LFE-Peaks and LFE-PPN** are their authors' work, reproduced here from published weights or descriptions; each is credited with its papers in [§3 of the research write-up](docs/RESEARCH.md#3-previous-research-and-baselines).
+- **TAKHeLiPeD, and the evaluation and training pipeline around all of the above**, are this project's own.
 
 ## License
 

@@ -85,6 +85,7 @@ That's a structural gap, not a pending deploy — see §E below.
 | | **A51** stage-3 slots: performance, trainability and output, on the no-temporal stage 2 | **owner confirmed the plan 2026-09-17; phase 0 in progress** | phase 0 ~1 day of GPU; each later screen one short step 3a run |
 | | **A52** finish the migration to the name **TAKHeLiPeD** | docs done 2026-09-23; the code half waits for a gap between training runs | mechanical renames, one commit per step |
 | | **A53** rewrite `docs/RESEARCH.md` around TAKHeLiPeD | header note added 2026-09-23; the body still argues the superseded framing | a day of writing, no compute |
+| | **A54** a formal citation for prof. O. Aycard's `AlgorithmicDetector` | credit stated everywhere 2026-09-23; **blocked on the owner** for a reference | one question |
 
 **Stage-3 slot experiments (owner's call 2026-09-17) are planned in A51**, which supersedes the backbone choice below: the owner chose the **no-temporal** stage 2, not `default_s0`. Start from these facts:
 
@@ -801,6 +802,18 @@ Left to rename, in the order that minimises breakage:
 **Why.** One name, one spelling. Two spellings for one detector is exactly the kind of drift that makes a grep for past evidence miss half of it — and the reason to do it as staged renames rather than a single sweep is that a checkpoint directory rename during a training run costs a run.
 
 **Why not now.** Steps 1-3 are safe at any time; step 4 is not, and doing 1-3 without 4 leaves a third spelling in play. Worth batching behind the A51 slot experiments.
+
+### A54. Get a formal citation for `AlgorithmicDetector` from prof. O. Aycard — **owner's to answer**
+
+**What.** The rule-based detector this repo ports is **prof. O. Aycard's** algorithm and implementation; the only attribution that exists is the header comment in `library/cpp_core/sources/detector.cpp` ("Person detector using 2 lidar data / Written by O. Aycard"). The credit is now stated in `README.md`, `AGENTS.md`, `docs/RESEARCH.md` §2.1 and §2.2, `memory/performance-log.md` (footnote 0), `memory/detector-architectures.md`, `memory/deployment.md`, `detector.hpp` and the Python wrapper's docstring.
+
+**What is missing:** a bibliographic reference — a paper, a technical report, a thesis, or an explicit "unpublished, cite as personal communication". Nothing of the sort is in the repository, and inventing one would be worse than having none.
+
+**How.** Ask him. Then put the reference in `docs/RESEARCH.md` §2.1 and §9, and replace the "still to be obtained" notes that point here.
+
+**Why.** Every other detector in the comparison is cited to its paper; this one is cited to a source-file comment. That asymmetry is fine internally and not fine in anything published.
+
+**Blocked on the owner**, not on effort.
 
 ### A53. Rewrite `docs/RESEARCH.md` around TAKHeLiPeD
 

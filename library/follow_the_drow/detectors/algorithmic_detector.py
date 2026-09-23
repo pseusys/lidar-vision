@@ -11,6 +11,12 @@ from .detector import Detector
 
 
 class AlgorithmicDetector(Detector):
+    """Rule-based leg+chest clustering and tracking, by O. Aycard.
+
+    The algorithm and its C++ implementation (`cpp_core/sources/detector.cpp`) are his;
+    this class is the Python wrapper around the pybind11 binding. Credit him when reporting it.
+    """
+
     _FREQUENCY_INIT=5
     _FREQUENCY_MAX=25
     _UNCERTAINTY_MAX=3

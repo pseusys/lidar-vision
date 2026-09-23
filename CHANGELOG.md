@@ -38,6 +38,18 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## `AlgorithmicDetector` is credited to prof. O. Aycard, wherever it is reported (2026-09-23)
+
+*keywords:* Aycard, AlgorithmicDetector, attribution, credit, citation, provenance, A54
+
+Owner's call. The rule-based leg+chest clustering-and-tracking detector this repository ports is **prof. O. Aycard's** algorithm and implementation; the only attribution that existed was the header comment in `library/cpp_core/sources/detector.cpp` and one parenthetical in `docs/RESEARCH.md` §2.1, which read as a provenance note rather than as a credit.
+
+- **Credit added** to `README.md` (intro plus a new *Credits* section), `AGENTS.md`'s repo layout, `memory/performance-log.md` (the `Kind` column now reads *rule-based, O. Aycard*, with a new footnote 0), `memory/detector-architectures.md`, `memory/deployment.md`'s node table, `library/cpp_core/include/follow_the_drow/detector.hpp` and `AlgorithmicDetector`'s Python docstring.
+- **`docs/RESEARCH.md` §2.1 rewritten** from "the C++ source attributes the algorithm to O. Aycard" to a statement that the algorithm is his, that it must be credited to him in any write-up, and that only the pybind11 binding, the wrapper and the harness are this project's. §2.2's mention now names him too.
+- **What is deliberately absent: a bibliographic reference.** No paper, report or thesis for this detector exists anywhere in the repository, and inventing a plausible one would be worse than having none, so every place that credits him says the formal reference is still to be obtained. That is `TODO.md` A54, blocked on the owner.
+
+No behaviour changed; 533 tests pass.
+
 ## The detector is named TAKHeLiPeD, and the docs are refreshed onto the current chain (2026-09-23)
 
 *keywords:* TAKHeLiPeD, naming, three-horizon, README, RESEARCH.md, SHOWCASE.md, PROPOSAL.md, performance-log, A52, A53

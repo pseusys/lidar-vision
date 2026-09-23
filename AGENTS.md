@@ -96,7 +96,7 @@ lidar-vision/
 │   │   ├── datasets/           ← DROW_Dataset, FROG_Dataset, JRDB_Dataset, LiveDataset — memory/data-model.md
 │   │   ├── utils/              ← preprocessing, odometry estimation, tracking, torch device selection
 │   │   └── include/            ← gitignored: datasets + bundled weights, downloaded on first install
-│   ├── cpp_core/                ← C++ AlgorithmicDetector + pybind11 binding
+│   ├── cpp_core/                ← C++ AlgorithmicDetector (prof. O. Aycard's algorithm — credit him) + pybind11 binding
 │   └── setup.py                 ← downloads datasets/weights the first time include/ is missing
 │
 ├── utils/                       ← train.py, evaluate.py, render_video.py, one-off research scripts

@@ -59,7 +59,7 @@ stateDiagram-v2
 | `live_loader` | Ingests `scan`/`scan2`/`odom` topics, aggregates top+bottom lidar, publishes `raw_data`. | Disabled by default (`LIVE_LOADER=false`) — a robot session with it off silently has no live sensor input, only file replay. |
 | `file_loader` | Replays a DROW-format split (default `test`) as `raw_data` + annotations every 5th scan. | — |
 | `visualizer` | Publishes everything to RVIZ; `flatten` zeroes the z-coordinate. | — |
-| `algorithmic_detector` | Runs the C++ `AlgorithmicDetector`. 13 tunable constructor params in `conf.env`. | Its source is duplicated between `library/cpp_core/` and `deploy/follow_the_drow/src/` — see `dos-and-donts.md`. |
+| `algorithmic_detector` | Runs the C++ `AlgorithmicDetector`, **prof. O. Aycard's algorithm** (`detector-architectures.md`). 13 tunable constructor params in `conf.env`. | Its source is duplicated between `library/cpp_core/` and `deploy/follow_the_drow/src/` — see `dos-and-donts.md`. |
 | `DROW_detector` | Runs the published DROW network. `threshold` (default 0.80) + `persons_only`. | No GPU on the laptop or RobAIR -> runs at ~1 Hz, not the paper's real-time rate. |
 | `data_annotator` | RVIZ-driven manual re-annotation. | Must run exclusive of every other node. |
 | `tracker` (`PersonTracker`) | Tracks one person from one detector's output; policies `first`/`closest`/`tracked`/`none`. | Always publishes a position — falls back to robot-local `(0,0)` when nothing is tracked, which looks like a valid detection if not checked. |

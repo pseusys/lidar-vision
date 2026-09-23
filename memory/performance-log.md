@@ -1,6 +1,6 @@
 # Performance log
 
-*keywords:* wp-AUC, AP, ms/frame, SOTA, comparison table, published baseline, PeTra, Li2Former, LFE, DR-SPAAM, DROW3, state of the art
+*keywords:* wp-AUC, AP, ms/frame, SOTA, comparison table, published baseline, PeTra, Li2Former, LFE, DR-SPAAM, DROW3, state of the art, Aycard, AlgorithmicDetector, attribution, credit
 
 The standing comparison: published state of the art against this project's own architectures, **one row per model, latest measurement only**.
 
@@ -28,7 +28,7 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 | Model | Kind | DROW | FROG | JRDB |
 | --- | --- | --- | --- | --- |
 | ROS `leg_detector` | classical | check paper | 20.2% | check paper |
-| AlgorithmicDetector | ours, rule-based | **F1 55.7%** | **F1 1.7%** | n/a |
+| AlgorithmicDetector | rule-based, **O. Aycard**⁰ | **F1 55.7%** | **F1 1.7%** | n/a |
 | PeTra | published | gap | 50.1% *(PeTra\* 59.0%)* | gap |
 | LFE-Peaks | published | gap¹ | 65.6% | gap¹ |
 | LFE-PPN | published | gap¹ | 69.2% *(ours 69.6%)* | gap¹ |
@@ -69,6 +69,10 @@ Every FROG figure this project quoted before 2026-09-10 (15.8, 49.6, 64.9, 66.5,
 
 The table above now carries the **d = 0.5 m** column, which is what our numbers are comparable to.
 When quoting FROG, always say which `d`.
+
+⁰ **The algorithm is not this project's**: `AlgorithmicDetector` is the two-tier leg+chest clustering-and-tracking detector written by **prof. O. Aycard**, ported here from his C++ (`library/cpp_core/sources/detector.cpp`, "Written by O. Aycard").
+Credit it as his in anything published from this repo; only the pybind11 binding, the Python wrapper and the evaluation harness around it are ours.
+It is a classical reference point, not a baseline taken from any of the papers compared here (`../docs/RESEARCH.md` §2.1), and the formal reference to cite is `../TODO.md` §A.
 
 ¹ The LFE paper only ever evaluates on FROG's 720-beam scans.
 This project *has* run LFE cross-dataset by zero-padding shorter scans to 720 (DROW: 24.0% / 11.7%), but that padding is our own invention, is not described in the paper, and does not resample to FROG's 0.25°/beam angular resolution — beam index stops meaning the same physical angle.

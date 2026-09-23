@@ -1,3 +1,6 @@
+// Person detector using 2 lidar data
+// Algorithm and original implementation by O. Aycard
+
 #pragma once
 
 #include <vector>

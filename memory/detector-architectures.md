@@ -1,6 +1,6 @@
 # Detector architectures — how each one turns a scan into detections
 
-*keywords:* detector, cutout, full-scan, TAKHeLiPeD, three-horizon, calibration network, object memory, SpaceTimeCNN, FullScanTCN, TemporalUNet, DrowDetector, DrSpaamDetector, LFE, DETECTOR_REGISTRY, source of truth
+*keywords:* detector, cutout, full-scan, TAKHeLiPeD, three-horizon, calibration network, object memory, SpaceTimeCNN, FullScanTCN, TemporalUNet, DrowDetector, DrSpaamDetector, LFE, AlgorithmicDetector, Aycard, DETECTOR_REGISTRY, source of truth
 
 The full research write-up — literature review, citations, and the fidelity audit against each paper — is [`../docs/RESEARCH.md`](../docs/RESEARCH.md).
 This file is the short, operational version: what an agent needs to predict a detector's behaviour without reading that whole document.
@@ -83,6 +83,7 @@ A detector class not in this dict cannot be trained or evaluated through `train.
 - **`li2former.py`** — `Li2FormerDetector` (cutout + temporal Transformer); no published weights exist, and training has never completed on this project's hardware (`gotchas.md` I4).
 - **`lfe_detector.py`** — `LFEPeaksDetector`/`LFEPPNDetector`, ONNX inference only, single-scan (no temporal window at all); the closest prior art to Architectures A-C.
 - **`algorithmic_detector.py`** — wraps the C++ `AlgorithmicDetector` (rule-based leg+chest clustering + tracking); the only detector with no confidence score, so it reports F1/precision/recall instead of AUC.
+  **The algorithm is prof. O. Aycard's, not this project's** (`cpp_core/sources/detector.cpp`, "Written by O. Aycard") — credit it as his wherever it is reported; only the binding, the wrapper and the harness are ours (`performance-log.md` footnote 0).
 - **`odometry_estimation.py`** — trimmed-ICP scan matching, used only as a fallback when a dataset has no real odometry file; see `data-model.md` for when that fallback actually triggers.
 - **`tracking.py`** — `SimpleTracker`, the SORT-style post-hoc tracker described in the lifecycle above.
 
