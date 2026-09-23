@@ -38,6 +38,181 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The detector is named TAKHeLiPeD, and the docs are refreshed onto the current chain (2026-09-23)
+
+*keywords:* TAKHeLiPeD, naming, three-horizon, README, RESEARCH.md, SHOWCASE.md, PROPOSAL.md, performance-log, A52, A53
+
+**The name, owner's call.** **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector), pronounced *TA-KHé-Li-PeD*.
+It names what every earlier entry calls *the three-horizon detector*. **Documentation only for now**: every identifier still says `three_horizon`, so no checkpoint, cache or log path moved. The code half is `TODO.md` A52.
+
+**The docs were further behind than the name.** `README.md` still advertised the three full-scan architectures as the contribution and quoted `SpaceTimeCNN` at 80.7% wp-AUC; `memory/performance-log.md`'s own rows for this detector were the 2026-09-15 chain, four backbone changes stale.
+
+- **`memory/performance-log.md`**: the two rows are now **77.7%** (stages 1-2, the no-temporal seed-0 backbone the memory sits on) and **83.3%** (stages 1-3, B0's three-seed mean, sd 0.47), with footnotes 4 and 5 rewritten from the B0 and diagnosis entries of 2026-09-19 and 2026-09-21. The retired 76.9% / 80.10% are marked **retired, not corrected** -- different backbone, and both predate the running time step and the limit-beam decoding. Added a speed row for stage 3 alone (4.4-4.6 ms) and a seventh footnote for it.
+- **`DR-SPAAM T=5 at 75.6% is the number to beat`** becomes *was*, cleared by 7.7 pp, with the "ours measured, theirs published" caveat kept beside it.
+- **Two figures were stale in the same way in three places** and are fixed: the sensor is ~40 Hz (a scan every ~25 ms), not 26.2 Hz, corrected 2026-09-17; and the test suite is 533 tests in ~60 s, not 347 in ~30 s (`memory/commands.md`) or 63 in ~6 s (`README.md`).
+- **`memory/detector-architectures.md` had no section on this detector at all** -- it described only the superseded trio. It now leads with TAKHeLiPeD's three stages, parameter counts, per-frame cost and the `no_grad` slot boundary, states that its absence from `DETECTOR_REGISTRY` is deliberate (it is stateful, so it does not fit the registry's contract), and retitles the old table *superseded*.
+- **`README.md`** rewritten: the name and its pronunciation, the streaming `step()` interface, the FROG table above with false positives and ms/frame beside it, what the gain is *not* (SORT, capacity), and a documentation table of deep links into `docs/RESEARCH.md`. The three legacy architectures appear once, as provenance.
+- **`docs/SHOWCASE.md`** retitled and re-measured onto the B0 chain; its "history is used: shuffling costs 1.3 points" bullet is replaced, because the backbone this result sits on is single-frame and the temporal one ties it -- the horizon that pays is the memory's, not the convolution's. Its feature count was also 11, which has been 10 since the validity channel was dropped on 2026-09-17.
+- **`docs/PROPOSAL.md`** and **`docs/PAPER.md`** carry the name; `PROPOSAL.md`'s status line no longer says "nothing described here is built or trained yet".
+- **`docs/RESEARCH.md`** gets a header note saying its title names the superseded line of work, which of its sections stay authoritative (§1, §3, §4, §7) and which are provenance (§2, §5, §6). Rewriting the body is `TODO.md` A53.
+- **`AGENTS.md`** gains a paragraph on why this detector is the standing exception to its own six-stage pipeline list.
+
+No code changed; 533 tests pass and `verify_memory.py` is clean.
+
+## The four slot-design ablations, off by default: coordinates, value rule, decay, and a trainable value rule (2026-09-20)
+
+*keywords:* A51, D1, D2, D3, D4, room_frame, latest_value, fixed_decay_s, learn_value, --no-room-frame, --latest-value, --fixed-decay-s, --learn-value
+
+Owner-approved (2026-09-20) after asking whether the slot bookkeeping should be trainable at all. `manage_slots` runs under `no_grad`, so association, value accumulation, spawn, replacement and retirement are fixed rules and only what reads them learns. Each ablation is one flag, each default reproduces B0.
+
+- **D1 `--no-room-frame`**: slots in the sensor frame. Its test shows the ablation costs more than the velocity feature: at 0.2 m of robot travel a static object gains velocity, and at 1 m per frame it leaves the 0.6 m association gate and the slot is lost outright.
+- **D2 `--latest-value`**: a matched slot takes the candidate's score instead of accumulating. Both rules create a slot at the candidate's score; accumulation then climbs past it towards certainty.
+- **D3 `--fixed-decay-s T`**: one decay time for every slot, removing the decay layer and its bias (1,312 parameters at dim 32).
+- **D4 `--learn-value`**: the value rule's `gain` and `fade_time_s` become parameters (+2). The discrete decisions stay under `no_grad` and take the constants as detached floats, while the value the network reads is recomputed with gradient, so the rule moves as they train.
+- **Interaction, found by D4's test:** with T1's zero-initialised rescoring head no gradient reaches anything the head reads at initialisation, value constants included, so D4 must be run on whichever rescoring parameterisation wins T1.
+- `object_memory` carries all four through a checkpoint round trip. Tests: 5 in `TestObjectMemory`, 1 in `TestObjectMemoryFor`.
+
+## Every trainer can resume, after an AMD driver bugcheck took a healthy run (2026-09-23)
+
+*keywords:* A51, resume, --resume, save_resume, load_resume, rng_snapshot, rng_restore, EarlyStopping.state, BestCheckpoint.state, amdkmdag.sys, bugcheck
+
+- **The crash.** 2026-09-22 23:52, bugcheck `0x7E` with exception `0xc0000005`; event 1019 names **`amdkmdag.sys`**, the AMD kernel-mode graphics driver (32.0.31041.1004, 2026-08-17). It killed `a51_d1_sensor_s1` at 42 epochs and 3.5 h, with validation AP 77.91% and still improving. Only bugcheck in eight days, no TDR events. The minidump needs elevation and a debugger, neither available here, so no call stack.
+- **`--resume` on every step** (`step1`, `step2`, `step3a`, `step3b`), off by default. After each evaluation a run writes `<step>_resume.pth` next to its checkpoints: weights, optimizer, scheduler, early-stopping counters, the best-checkpoint bar, the periodic-checkpoint schedule, history, elapsed hours and both random streams. The file is written beside the target and renamed, so a crash during the save cannot leave rubble in its place, and a file that will not load is ignored rather than fatal.
+- A resumed run is **not** bit-identical to an uninterrupted one -- GPU nondeterminism already means a seed does not reproduce a run -- but it continues from the last evaluation instead of from nothing, and the stopper and best-checkpoint bars survive, so a worse epoch after a crash cannot overwrite a better model.
+- Tests: `TestResume` (6), covering the random-state round trip, the disk round trip, both "nothing to resume" paths, a truncated file, and the two bookkeeping bars; 84 pass in the trainer file.
+
+## Capacity is not the limit, reporting is; O1 failed twice with no established cause (2026-09-22)
+
+*keywords:* A51, recovery, --recovery, label_coasting_reports, coast threshold, coast_weight, O1, O2, S3, a51_o1_bounded_s0, a51_o1_bounded_s0b, training_fault
+
+- **`memory_diagnosis.py --recovery`** (new, tests first) settles where the remaining work goes. Of the 26,996 people stage 3 does not report at 0.3, **a live slot already sits on 25,778 (95.5%)** with a median value of 0.986, while the memory uses a median of **24 slots of 256** (max 107). **Spare capacity and more candidates are not the lever**, so A51 S3 is deprioritised.
+- **Coasting cannot be fixed by thresholding**: 3.0 false positives per person recovered at 0.3, 4.6 at 0.2, 11.1 at 0.1. The learned head already beats ranking the same reports by the rule's accumulated value (5.1 each at 2,946 recovered), so it is not ignoring the memory -- it cannot separate a remembered person from a remembered phantom. `step3a --coast-weight` is O2's first lever.
+- **O1 failed twice and the cause is not established.** Both attempts died of a NaN loss in the 10 s chunk stage (4.4 h with the scalar gate, 2.4 h without) after the 1 s stage ran cleanly at val AP 77-80%. Dropping the gate did **not** fix it, so the "two multiplicative scales" reading was wrong; the decay layer does not separate the arms either (norm 16.06 against B0's 14.52 at the same stage, near-identical implied decay times). O1 is 2 of 2 failures against 8 of 8 completions elsewhere, but the same window held two genuine hardware failures, so attribution stays open and the next known-good runs decide it.
+- **The `training_fault` guard earned its place**: it stopped both runs at the first bad epoch, and its candidate-AP check showed the data was sound (72.85% throughout) where the 2026-09-21 fault had corrupted it.
+- A relaunch was also lost when a tool call timed out and killed the launcher's process tree; two minutes, not hours.
+
+## Diagnosis and oracle refreshed on the current model, and `memory/slot-design-evidence.md` (2026-09-21)
+
+*keywords:* A51, slot-design-evidence, memory_diagnosis, three_horizon_oracle, object_memory, capacity override, a51_b0_memory_diagnosis.json, a51_b0_oracle.json
+
+- **New doc `memory/slot-design-evidence.md`**: every stage-3 design decision with the measurement that supports it, or an explicit note that nothing does, plus how to read the numbers (screening threshold, missing calibration-metric threshold, one seed each). Indexed in `README.md` and `keywords.md`.
+- **Bug found by running them:** `object_memory()` took `rules` positionally and also accepted it as an override, so every caller that replays a trained memory at another slot count (`memory_diagnosis.py`, `three_horizon_oracle.py`, `run_ablations`) raised `TypeError`. It now takes `capacity=` and keeps the checkpoint's own slot rules, which the naive fix would have dropped silently for a `latest_value` checkpoint. Regression test added; 75 pass.
+- **Diagnosis on B0's best seed** (`a51_b0_memory_diagnosis.json`): at the shared 0.3 threshold stage 3 covers 128,895 of 153,655 people against stage 2's 136,417, at **1.092 false positives per frame against 2.628**. Of the 10,197 it loses, **99.1% were pushed under by rescoring** and **100% had a live slot inside the gate** (median value 0.966, matched 0.0 s earlier). The head pushes people down harder (-3.526 logits, 97.3%) than candidates covering nobody (-0.729, 69.6%).
+- **Oracle on the same checkpoint** (`a51_b0_oracle.json`): at a 2 s bridge 10,171 people are recoverable and stage 3 takes **21.7%**; at 10 s, 13,067 and 17.6%. Stage 2 mostly tracks 71.1% of trajectories, mostly loses 7.4%, and only 0.7% of people sit on trajectories it never detects.
+- Both scripts had last run on the old chain, so their previous figures are retired.
+
+## A transient device fault, and a guard that catches it in one epoch (2026-09-21)
+
+*keywords:* A51, training_fault, CANDIDATE_AP_TOLERANCE, HIP out of memory, bad allocation, a51_d1_sensor_s1
+
+D1's confirmation seed failed twice, in two different ways, and neither was the arm's doing.
+
+- **Host memory.** The first attempt died 3.5 h in with `RuntimeError: bad allocation` inside `loss.backward()`. `train_memory` held the train, val and test candidate caches (614 + 998 + 254 MB on disk) in RAM at once on a 16 GB machine, although test is only scored at the end. It now loads test after training and frees the other two first.
+- **Device state.** The relaunch diverged at epoch 12: the *candidates'* val AP fell from 72.85% to 3.40% -- a number read from the cache that no model state can change -- with the loss at exactly 0.0000. Six epochs ran on garbage before a HIP OOM that claimed 14.87 GiB was free. A GPU sanity check (matmul against CPU, attention-shaped ops) passed afterwards, so the card is fine and the fault was transient.
+- **Guard.** `training_fault` stops a run at the first evaluation whose candidate AP drifts past `CANDIDATE_AP_TOLERANCE` or whose loss is zero or non-finite. Tests: `TestTrainingFault` (4); 74 pass in the trainer file.
+- **D1 still rests on seed 0 alone.** Reboot before retrying the seeds.
+
+## Slot-design ablation D3: a fixed decay costs 0.90 pp and 17,536 parameters less (2026-09-21)
+
+*keywords:* A51, D3, a51_d3_fixeddecay_s0, fixed_decay_s, selective recurrence, decay
+
+`step3a --fixed-decay-s 8`, one seed, 352 min, 288,907 parameters against B0's 306,443 -- exactly the decay layer and its bias.
+
+- Test AP **82.44% against B0's 83.34% mean (-0.90 pp)**; recall at the candidates' false-positive rate **92.1%**, below every B0 seed (92.2 / 92.5 / 92.7); coasting 0.084 per frame at 25.4% precision.
+- The direction supports the learned, input-dependent decay, but the gap is inside the ~1.5 pp threshold on one seed.
+- **Phase 3b at one seed each: D1 -1.32, D2 +0.60, D3 -0.90.** The memory as a whole is worth +5.68 pp over its own candidates, yet no single design choice inside it clears the threshold. D1, the central claim, gets the confirmation seeds first.
+
+## Slot-design ablations D1 and D2: room coordinates earn 1.3 pp, accumulated value earns nothing (2026-09-21)
+
+*keywords:* A51, D1, D2, a51_d1_sensor_s0, a51_d2_latest_s0, room_frame, latest_value, value rule
+
+One seed each on the no-temporal stage 2, short curriculum, against B0's 83.34% mean and a ~1.5 pp threshold.
+
+- **D1, slots in sensor coordinates: 82.02% (-1.32 pp)**, recall at the candidates' false-positive rate 92.2%, B0's lowest seed; 431 min. The design's central claim is supported, though by less than the threshold on one seed, and the number bundles the lost association that the sensor frame also causes when the robot moves further than the gate in a frame.
+- **D2, a slot held by the latest score instead of accumulated value: 83.94% (+0.60 pp)**, recall 92.7% (B0's best), coasting precision 31.7%; 700 min. **The ablation does not lose.** Accumulated value, argued in `docs/PROPOSAL.md` §5.5, earns nothing measurable on FROG -- consistent with S1's finding that the bookkeeping rules do not bind, and suggesting the learned slot state already covers a briefly hidden person. It also weakens D4's prospects.
+- D2's mid-run slowdown (1,383 s epochs against ~640 s) was transient and returned to 629 s; inference is unchanged at 4.44 ms per frame.
+
+## T2 screened: the plateau schedule matches T1's calibration gain, which makes both readings ambiguous (2026-09-20)
+
+*keywords:* A51, T2, a51_t2_s0, plateau, schedule, own_threshold, coast_precision, calibration threshold
+
+`step3a --schedule plateau`, no-temporal stage 2, seed 0, short curriculum, 500 min.
+
+- Test AP **83.89%** against B0's 83.34% mean, inside the ~1.5 pp threshold and inside B0's own 82.96-83.88 range.
+- Recall at the candidates' false-positive rate **93.2%** and coasting precision **32.0%**, both above every B0 seed -- almost exactly T1's 93.4% and 32.2%.
+- **Two unrelated changes producing the same calibration lift is ambiguous**: either anything that lets the rescoring head train harder does this, or the calibration metrics vary more across runs than B0's three seeds show. No threshold was pre-registered for them, so neither arm is adopted; T1's confirmation seeds move to phase 4.
+- 516 tests pass (full suite, run with the GPU idle).
+
+## T1 screened: dropping the scalar rescore gate buys calibration, not AP (2026-09-20)
+
+*keywords:* A51, T1, a51_t1_s0, rescore_gate, own_threshold, coast_precision
+
+`step3a --no-rescore-gate`, no-temporal stage 2, seed 0, short curriculum, 367 min, 306,442 parameters (B0: 306,443 -- exactly the dropped scalar).
+
+- Test AP **84.39%** against B0's 83.34% mean (82.96 / 83.17 / 83.88). **+1.05 pp is inside the ~1.5 pp screening threshold**, so by the pre-registered rule this is not a win on AP.
+- **Recall at the candidates' own false-positive rate: 93.4%**, above every B0 seed (92.2 / 92.5 / 92.7), at a lower own threshold (0.140).
+- **Coasting precision 32.2%** against 22.3-27.4% for B0, also above every seed, at 0.225 reports per frame.
+- The rescoring shift on non-people moved from about +0.2 to **-0.87 logits**, i.e. the head now pushes phantoms down rather than nudging everything, which is what removing the zero-scaled gradient was meant to allow.
+- One seed. The arms that follow are judged the same way, and the calibration metrics -- not AP -- are the ones T1 and O1 aim at.
+
+## Stage 3 gets a plateau schedule and single-pass test scoring; T1 and T2 screening (2026-09-20)
+
+*keywords:* A51, T1, T2, T4, memory_schedule, --schedule plateau, --test-strides, a51_t1_s0, a51_t2_s0
+
+- `memory_schedule` gives `step3a` the choice between its cosine schedule (the default, which spans `--max-epochs` per chunk length and so hardly decays in the epochs a stage runs) and step 2's plateau schedule on val AP, with `--lr-factor`, `--lr-patience` and `--min-lr`.
+- `--test-strides` scores the test split once rather than twice, saving ~25 min per screening run with no effect on training.
+- Shrinking validation was considered and deferred: it changes checkpoint selection, so it would cost a 3-seed re-baseline of B0 before any arm could be compared with it.
+- T1 (`--no-rescore-gate`) started screening at 03:22, verified by its parameter count, 306,442 against B0's 306,443; T2 (`--schedule plateau`) follows. Both: no-temporal stage 2, seed 0, short curriculum, judged against B0's 83.34% mean with a ~1.5 pp threshold.
+- Tests: `TestMemorySchedule` (2); 122 pass in the two three-horizon files.
+
+## B0: the stage-3 baseline on the no-temporal backbone, +5.68 pp over its candidates, seed spread 0.47 pp (2026-09-19)
+
+*keywords:* A51, B0, a51_b0_short_s0, a51_b0_short_s1, a51_b0_short_s2, noise floor, screening threshold, own_threshold, coast_precision
+
+Three seeds of `step3a --chunk-s 1 10` on the no-temporal stage 2 (seed 0), scored on the whole FROG `official` test split against identical candidates (77.66% AP, 88.8% recall at 2.620 FP/frame).
+
+- Memory AP **82.96 / 83.17 / 83.88%** (mean **83.34**, sd 0.47); AP at 0.3 m 81.36 / 81.52 / 82.17%; recall at the candidates' own false-positive rate 92.2 / 92.5 / 92.7% against 88.8%.
+- **The A51 screening threshold is ~1.5 pp of test AP**, half of stage 2's ~0.95 pp per-run spread.
+- Stage 3 alone runs at 4.5-4.6 ms per frame, one stream.
+- The rescoring shift persists at every seed (-2.8 to -3.5 logits on people), and coasting reports 0.08-0.29 per frame at 22-27% precision, where the 1-epoch smoke had 0.002 at 0%.
+- Runs cost 4.1-9.7 h through early stopping alone; validation is ~70% of a 1 s epoch, which moves the validation-cost item to the front of phase 1.
+- The full-curriculum run (with 30 s chunks) was stopped 1.9 h in, inside its first stage, by the owner's call; whether the long chunks add anything is still open.
+- Not comparable with the old 80.10%: different backbone, and that number predates the running time step and the limit-beam decoding.
+
+## Two stage-3 rescoring arms, off by default: no scalar gate (T1) and a bounded correction (O1) (2026-09-18)
+
+*keywords:* A51, T1, O1, rescore_gate, rescore_limit, --no-rescore-gate, --rescore-limit, object_memory
+
+`ObjectMemory` takes `rescore_gate` and `rescore_limit`; `step3a` exposes them as `--no-rescore-gate` and `--rescore-limit`. Both defaults reproduce the current model exactly, so B0 is unaffected and each arm is screened separately.
+
+- **T1.** `candidate_logit = logit(score) + gate * mlp(...)` with the gate starting at zero scales the head's own gradient by zero: a test asserts the rescoring head's gradient is 0 over the first steps with the gate and non-zero without it. `--no-rescore-gate` drops the scalar and zero-initialises the head's last layer instead, which starts equally silent.
+- **O1.** `--rescore-limit L` bounds the correction to +-L logits through a tanh, against the signed correction that shifted the whole distribution down.
+- **Loading.** A T1 checkpoint has no `rescore_gate` parameter, so `object_memory(checkpoint, feature_dim, **overrides)` now rebuilds a stage-3 memory the way it was trained, as `calibration_network` does for stage 2. `train_joint`, `run_ablations`, `memory_diagnosis.py` and `three_horizon_oracle.py` all go through it.
+- Tests: 3 in `TestObjectMemory`, 2 in `TestObjectMemoryFor`; 508 pass.
+
+## Slot bookkeeping is not the bottleneck: a matched slot sits on 97% of annotated people at every gate and fade (2026-09-18)
+
+*keywords:* A51, slot-rules, replay_slot_rules, covered_people, retirement_gap, gate_m, fade_time_s, GATES_M, FADE_TIMES_S, slot_rules.json
+
+`memory_diagnosis.py --slot-rules` (new, tests first: `TestCoveredPeople`, `TestRetirementGap`) replays `manage_slots` with no trained model over the whole FROG `official` test split on the no-temporal seed-0 candidates, sweeping 3 association gates x 3 fade times.
+
+- **Nothing binds.** People with a live slot within 0.5 m: 99.0-99.3% across gates 0.3-1.0 m and fades 2-30 s; people whose slot also matched a candidate that frame: 96.9-97.0%. Matches per annotated frame 9.33-9.47.
+- **So the remaining loss is downstream of the rules**, in the learned head, which extends A50 phase 1b item 1 from the lost people to all of them. S4 (ablating the hand-coded association) is dropped as not worth a training run, and A51's priority moves to calibration and coasting.
+- **Returns are rare and short.** At the default 0.6 m / 10 s a slot is lost 0.10 times per frame and something reappears within 0.5 m of it 0.02 times per frame, median gap 3.0 s, 17.8% beyond the fade. Carrying state across retirement would address a thin slice, so S2 stays parked.
+- **Capacity note:** 0.3 m / 30 s reaches 242 live slots of 256 at p99, the first setting where capacity would bind.
+- Coverage counts any live slot within the radius, so it is an upper bound (`docs/PROPOSAL.md` §5.5), and FROG has no identities, so a return is evidence rather than proof that the same person came back.
+
+## Stage-3 time step: stamped intervals corrupted slot velocity, now a running average; stage-3 evaluation reports calibration, coasting and 0.3 m AP (2026-09-17)
+
+*keywords:* A51, slot-speed, windowed_speed, mean_frame_period, frame_periods, DT_AVERAGE_FRAMES, Split.dt, manage_slots, MIN_DT_S, FRAME_PERIOD_S, own_threshold, rescore_shift_person, coast_precision, coasting_hits, memory_ms_per_frame, extra_radii, ap_0.3m
+
+The owner confirmed a stage-3 slot plan, now `TODO.md` A51, on the no-temporal stage 2.
+
+- **0a, measured.** `memory_diagnosis.py --slot-speed` replays the rule-based `manage_slots` on the old test candidate cache (50,088 frames, no model). Mean frame period is 24.99 ms; 20.2% of stamped intervals are clipped to 1 ms. With stamped `dt`, matched slots near people carry a velocity of p50 3.97 / p90 8.63 m/s (63.9% above 3 m/s) against a displacement-over-1-s reference of 0.66 / 1.67 m/s, and slots elsewhere drift at p50 10.83 m/s. With the mean period the state reads 0.58 / 1.16 m/s against a reference of 0.56 / 1.10 m/s, and matches per annotated frame rise 8.51 -> 8.84. Every stage-3 result so far, 80.10% included, was trained and scored with this corruption. Tests: `TestWindowedSpeed` (4).
+- **0c, implemented.** `evaluate` adds stage 3's own operating point at the candidates' FP per frame, the median rescoring shift on person and other candidates, coasting reports at 0.3 per frame and their precision (`coasting_hits`), and AP at extra match radii; `memory_ms_per_frame` times one stream. Step 3a's test report prints them. Validation selection is unchanged, so no checkpoint or cache is invalidated. Tests: 2 in `TestScoreDetections`, `TestCoastingHits` (3), 2 in `TestEvaluate`, `TestMemoryMsPerFrame`.
+- **The first B0 launch failed and cost a night.** `memory_ms_per_frame`'s `torch.cuda.synchronize()` guard read `device.type`, but `detect_device()` returns the string `"cuda"`; the unit test passed a real `torch.device` and so missed it. It crashed after the smoke run's training, the chain stopped by design, and the GPU idled for 19 hours. Fixed to `str(device).startswith("cuda")`, the test now covers both forms, and the whole end-of-run block was re-run against `detect_device()`'s own value on the GPU before relaunching (stage 3 alone: 4.42 ms per frame). Recorded in `memory/gotchas.md`.
+- **0b, fixed.** The planned rule (time since last match) would not have worked, since for a slot matched every frame it equals the stamped step. The owner chose a running average instead: `frame_periods` is the plain mean of the intervals for the first `DT_AVERAGE_FRAMES` = 32 frames of a recording and an exponential average with rate 1/32 after, stored as `Split.dt` and used in the joint path too. `FRAME_PERIOD_S = 1/26.2` is gone; chunk and validation lengths use `mean_frame_period` of their split, so they are 1.53x longer in frames than before. Replayed on the test split, velocity reads p50 / p90 0.58 / 1.17 m/s near people against a 0.56 / 1.10 reference, matches per frame 8.84, and `dt` stays in 24.23-25.82 ms (p0.1-p99) after warm-up. Tests: `TestFramePeriods` (7). Nothing trained is invalidated that was still loadable: every stage-3 checkpoint already predated the current stage 2.
+
 ## Fresh controls turn the limit-beam "loss" into a tie, and show seeds do not pair runs (2026-09-17)
 
 The default architecture was retrained on current code at seeds 0-2 (`checkpoints_three_horizon/default_s*`, 1,177,923 parameters). Test wp-AUC was **78.19 / 76.64 / 75.13%** (mean 76.65, sd 1.53; shuffled history 77.52 / 76.05 / 74.48).

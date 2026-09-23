@@ -3,6 +3,7 @@
 **Working draft.** Started 2026-09-10.
 Every number here is measured in this repository and traceable to a `CHANGELOG.md` entry; published numbers are cited, never re-derived (`memory/performance-log.md`).
 This document holds the argument. The evidence behind each claim lives in `memory/`, the history in `CHANGELOG.md`, the open work in `TODO.md`.
+The detector this argument leads to is **TAKHeLiPeD** — **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector), *TA-KHé-Li-PeD*, named 2026-09-23 and called *the three-horizon detector* everywhere written before that date. Its design is [`PROPOSAL.md`](PROPOSAL.md).
 
 ---
 

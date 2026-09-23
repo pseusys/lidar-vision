@@ -49,6 +49,10 @@ A research project on person detection from knee-height 2D LiDAR data, structure
 5. **(optional) Track**: a SORT-style tracker (`SimpleTracker`, training/eval side) or `PersonTracker` (the ROS node) turns per-frame detections into one persistent, ID-stable position.
 6. **(ROS deployment only)** the follow-me behaviour consumes the tracked position.
 
+**The project's own detector is `TAKHeLiPeD`** — **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector), *TA-KHé-Li-PeD*, named 2026-09-23 and called *the three-horizon detector* in everything written before that date; the code still spells it `three_horizon`.
+It does not fit the stage list above and is the standing exception to it: one scan per call, no `T`-scan window, no post-hoc tracker, and a learned object memory carried as state instead of stages 5-6.
+It is absent from `DETECTOR_REGISTRY` and is trained and scored by `utils/train_three_horizon.py`, not `train.py`/`evaluate.py` — see [`memory/detector-architectures.md`](memory/detector-architectures.md).
+
 **Storage** is files, not a database: datasets and published weights are downloaded into `library/follow_the_drow/include/` (gitignored, populated by `pip install ./library`); trained checkpoints go to `checkpoints*/` directories (gitignored); evaluation logs go to `results/` (gitignored).
 **Working directory** is the repo root for most commands, but `cd utils` first for `train.py` / `evaluate.py` / `render_video.py` — their relative paths (`../checkpoints`, `../results`) assume it.
 **Runtime**: Python 3.12, in the `.venv` virtualenv — activate with `.venv/Scripts/activate` (Windows) or call `.venv/Scripts/python.exe` directly.

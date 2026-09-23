@@ -1,6 +1,9 @@
-# Proposed architecture: a streaming person detector built on three temporal horizons
+# TAKHeLiPeD: a streaming person detector built on three temporal horizons
 
-**Status:** design settled for review, 2026-09-14. Nothing described here is built or trained yet.
+**T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector) — *TA-KHé-Li-PeD*, named 2026-09-23.
+Everything written before that date, this document included, calls it *the three-horizon detector*, and the code still spells it `three_horizon`.
+
+**Status:** design settled for review, 2026-09-14, and since built, trained and measured — see [`../memory/performance-log.md`](../memory/performance-log.md) for what it scores and [`../CHANGELOG.md`](../CHANGELOG.md) for where the design moved after this document was written. The sections below are the design as proposed, not a description of the current code.
 **Readers:** the project owner, collaborating researchers, and anyone new to 2D LiDAR person detection.
 **Companion documents:** [`PAPER.md`](PAPER.md) holds the measurements this design rests on; [`../TODO.md`](../TODO.md) item A43 holds the work plan.
 

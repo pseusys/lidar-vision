@@ -34,7 +34,7 @@ python train.py --detector temporal_unet --dataset frog --resume ../checkpoints/
 python train.py --detector spacetime_cnn --dataset frog --init-weights ../checkpoints/spacetime_cnn.best.pth --lr 1e-4   # fine-tune from another checkpoint's weights only (fresh optimiser/epoch count, unlike --resume)
 ```
 
-**The three-horizon detector** (`TODO.md` A43) trains with its own script, because it streams recordings rather than sampling frames:
+**TAKHeLiPeD**, the three-horizon detector (`TODO.md` A43, A51), trains with its own script, because it streams recordings rather than sampling frames:
 
 ```bash
 python train_three_horizon.py step2        # stages 1-2, phase A; clips of max(coarse_lags) + 1 = 33 frames; --max-range-m sets the model range (default 10 m); 24 h cap
@@ -42,10 +42,13 @@ python train_three_horizon.py step3a --stage2 ../checkpoints_three_horizon/step2
 python train_three_horizon.py step3b --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth   # whole detector with feedback
 python train_three_horizon.py step4 --stage2 ... --memory ... --joint ../checkpoints_three_horizon/step3b_joint.best.pth   # SORT and slot-count ablations, no training
 python scan_anomalies.py --dataset frog    # raw-scan noise report: no-return encodings, invalid runs, spikes, jitter, timestamps (also drow; A49)
+python memory_diagnosis.py --slot-speed --cache .three_horizon_cache/<test cache>.pkl   # slot velocity against a >= 1 s displacement reference, stamped dt vs the trainer's running average; no model (A51 0a)
 python three_horizon_oracle.py             # the interpolation bound on OUR candidates: recall headroom above stage 2, and how much of it stage 3 takes (A50 phase 1)
 python duration_curve.py --dir ../checkpoints_three_horizon/step2_control ../checkpoints_three_horizon/step2_dropout01   # test AP against training duration, from `step2 --checkpoint-every`'s checkpoints (A50 phase 1)
 python train_three_horizon.py step1        # stage 3 on cached LFE-Peaks candidates, the memory in isolation (dropped from the plan 2026-09-15)
 ```
+
+Every step takes `--resume`, which continues from `<step>_resume.pth` in `--out-dir` -- written after each evaluation, so a crash costs the time since it rather than the whole run. Relaunch the identical command with `--resume` added; it is off by default, so a fresh run never picks up an old state by accident.
 
 Each writes `../checkpoints_three_horizon/<step>_*.best.pth` (the run's best, whatever epoch or stage produced it) and `<step>_results.json`; every budget flag is in `--help`, defaults as in `TODO.md` A43. `--limit-recordings N` makes a smoke run. Launch long runs as a detached process, not as a child of an agent session, which ends with the session.
 
@@ -145,12 +148,12 @@ Methodology, citations and the current grid: `informational-capacity-proxy.md`.
 ## Checks
 
 ```bash
-.venv/Scripts/python.exe -m pytest tests -q               # 347 tests, ~30s, CPU-only, no GPU or dataset needed — run after every edit
+.venv/Scripts/python.exe -m pytest tests -q               # 533 tests, ~60s, CPU-only, no GPU or dataset needed — run after every edit
 python memory/scripts/verify_memory.py                    # docs: links, indexes, markdown rules
 python memory/scripts/verify_memory.py --strict            # same, but style warnings fail the run too
 ```
 
-There is no typecheck/parse step faster than the test suite itself — 6 seconds already is the cheap check here.
+There is no typecheck/parse step faster than the test suite itself — a minute already is the cheap check here.
 The test suite runs by hand only; there is no CI job invoking `pytest` yet (`TODO.md`).
 
 ## Linting

@@ -2,6 +2,11 @@
 
 > Formalized research statement and literature review for this repository. For a client-facing overview, see the [top-level README](../README.md); for a map of the codebase, see [AGENTS.md](../AGENTS.md).
 
+> **This document's title names the earlier line of work, not the current one.**
+> Since 2026-09-14 the project's contribution is **TAKHeLiPeD** — **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector), *TA-KHé-Li-PeD*, called *the three-horizon detector* in everything written before 2026-09-23 — which deliberately lifts constraint 1 of §2 in favour of an object-level recurrent memory, and holds the current result (83.3% AP on FROG against DR-SPAAM's published 75.6%; [`../memory/performance-log.md`](../memory/performance-log.md)).
+> Its design is [`PROPOSAL.md`](PROPOSAL.md), the measurements it is argued from are [`PAPER.md`](PAPER.md), and the result on one page is [`SHOWCASE.md`](SHOWCASE.md).
+> **What stays authoritative here**: §1 (the problem and the metric), §3 (the published baselines and the fidelity audit against each paper), §4 (preprocessing), §7 (related work). §2's constraints, §5's three architectures and §6's design history are kept as provenance — every accuracy number they carried is retracted (`../memory/performance-log.md`). Rewriting this document around TAKHeLiPeD is [`../TODO.md`](../TODO.md) §A.
+
 ---
 
 ## 1. Problem Statement

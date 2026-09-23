@@ -38,10 +38,13 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 | **SpaceTimeCNN** | ours, novel | re-measuring | re-measuring³ | n/a |
 | **FullScanTCN** | ours, novel | re-measuring | re-measuring | n/a |
 | **TemporalUNet** | ours, novel | re-measuring | re-measuring | n/a |
-| **Three-horizon detector, stages 1-2** | ours, novel | gap | **76.9%**⁴ | n/a |
-| **Three-horizon detector, stages 1-3** | ours, novel | gap | **80.1%**⁵ | n/a |
+| **TAKHeLiPeD, stages 1-2** (calibration network) | ours, novel | gap | **77.7%**⁴ | n/a |
+| **TAKHeLiPeD, stages 1-3** (+ object memory) | ours, novel | gap | **83.3%**⁵ | n/a |
 
-**DR-SPAAM `T=5` at 75.6% on FROG is the number to beat.**
+**DR-SPAAM `T=5` at 75.6% on FROG was the number to beat, and the object memory clears it by 7.7 pp.**
+That is ours measured here, three seeds, against theirs published, one paper figure — read footnote 5 and [`interpreting-evaluation.md`](interpreting-evaluation.md) before quoting it.
+
+**TAKHeLiPeD** (`T`emporal `A`daptive `K`nee-`He`ight `Li`dar `Pe`rson `D`etector, named 2026-09-23) is what earlier entries in this file, `CHANGELOG.md` and `TODO.md` call *the three-horizon detector*; the code still spells it `three_horizon`.
 
 ### The FROG column is AP @ d = 0.5 m, and it did not used to be
 
@@ -72,8 +75,16 @@ This project *has* run LFE cross-dataset by zero-padding shorter scans to 720 (D
 Degraded by construction, so it is recorded here as a footnote rather than reported as a result.
 ² Li2Former was never evaluated on FROG by its authors, and training it here has never completed (DirectML crashes, impractical CPU-only speed — `gotchas.md` I4).
 ³ In progress: `T=5, dtime=10` on the fixed pipeline (`TODO.md` A1).
-⁴ `TODO.md` A43 step 2, measured 2026-09-15: one run, weights of epoch 1.0 selected on val AP, every annotated frame of the test recording; **75.6%** with each clip's history shuffled; 1.91 false positives and 0.39 missed people per frame at 0.3. No object memory yet (stage 3). 1.3 pp above DR-SPAAM's published `T=5` is ours measured against theirs published, on one seed -- inside the range where a harness difference or a second seed could reverse it (`interpreting-evaluation.md`). A continuation from these weights with a plateau-decayed learning rate did not improve val AP (73.0% best, then falling to 69.2% by epoch 3.25) and tested at 76.9% / shuffled 75.6% with 1.43 FP / 0.49 FN, so these remain the stage 1-2 weights. Scored before the vote-grid NaN fix of 2026-09-15; re-scored without the 2 non-finite detections among 800,856 it is 76.9218% instead of 76.9227%.
-⁵ `TODO.md` A43 step 3a, measured 2026-09-15: stage 3 (object memory, 256 slots) trained on stage 2's cached candidates with stage 2 frozen, one run; checkpoint selected on val AP (30 s chunks, epoch 5, val 77.32% against 73.19% for its candidates). Every test recording played from empty memory, every annotated frame: **80.10%**, with 1.29 false positives and 0.47 missed people per frame at 0.3, against 76.92% / 1.91 / 0.39 for stage 2's candidates on the same frames (identical to step 2's own test result) -- an exchange rate of 7.6 false positives removed per person lost. Every 5th annotated frame: 80.15%. At the 0.3 operating point its precision is 66.8% and recall 84.7%, against 58.4% and 87.3% for the candidates alone -- the memory buys 8 points of precision for 2.6 of recall. **That trade is an artefact of scoring both stages at 0.3, corrected 2026-09-16** (`utils/memory_diagnosis.py`): the rescore head shifts stage 3's whole score distribution downward, so a threshold calibrated for stage 2's distribution understates stage 3. Scored at its own operating point, stage 3 **strictly dominates its input** — at 0.22 it covers 135,520 of 153,655 annotated people against stage 2's 134,196 *and* emits 1.767 false positives per frame against 1.910, better on both axes; at 0.20, where false positives match (1.925 against 1.910), it covers 136,643, or 2,447 more people. AP, being threshold-free, already reflected this; only the operating-point comparison was misleading. SORT replayed on the same candidates loses AP at every setting (76.7% / 75.7% / 74.9% at `min_hits` 1/3/5), so the gain is the learned memory, not temporal filtering as such; 64 slots score within 0.1 points of 256 (`CHANGELOG.md` 2026-09-16). Joint training with feedback (step 3b, 3 epochs, both models at 1e-4) did **not** improve on this: 78.84% test AP with 1.24 FP / 0.55 FN, and its stage 2 came out at 75.68%, below the 76.92% it started from -- so these frozen-stage-2 weights stay the best model. Against DR-SPAAM's published `T=5` it is ours measured against theirs published, on one seed.
+⁴ `TODO.md` A51's backbone, measured 2026-09-19 over the whole FROG `official` test split: **77.66%**, the no-temporal stage 2 (seed 0) whose decoded candidates the object memory in the row below rescores, at 2.620 false positives per frame and 88.8% recall at the 0.3 operating point.
+That backbone's own three-seed mean is **77.23%**; the default architecture, which keeps the coarse temporal convolution, means **77.92%** over three seeds. The pooled per-run spread across five three-seed arms is ~0.95 pp (`interpreting-evaluation.md`), so those two are a tie, not a ranking.
+Both are scored under the limit-beam decoding rule and the running time step adopted 2026-09-17.
+**The 76.9% this row used to carry is retired, not corrected**: a different backbone, measured before both of those changes (`CHANGELOG.md`, 2026-09-15 to 2026-09-17).
+⁵ `TODO.md` A51's B0 baseline, measured 2026-09-19: stage 3 (object memory, 256 slots) trained by `step3a --chunk-s 1 10` on footnote 4's cached candidates with stage 2 frozen, **three seeds**; every test recording played from empty memory, every annotated frame.
+Test AP **82.96 / 83.17 / 83.88%** (mean **83.34**, sd **0.47**), AP at 0.3 m 81.36 / 81.52 / 82.17%, and recall at the candidates' own false-positive rate 92.2 / 92.5 / 92.7% against 88.8% -- **+5.68 pp over its own input**.
+On the best seed at the shared 0.3 threshold it covers 128,895 of 153,655 annotated people at **1.092 false positives per frame**, against the candidates' 136,417 at 2.628 (`a51_b0_memory_diagnosis.json`, 2026-09-21); precision there is 70.2%.
+A51's screening threshold is set from this spread at **~1.5 pp**, and no design arm has cleared it in either direction yet (T1 +1.05, D2 +0.60, D3 -0.90, D1 -1.32, one seed each).
+**What the gain is not.** SORT replayed on the same candidates loses AP at every setting, so it is the learned memory rather than temporal filtering as such; and capacity is not the lever -- the memory uses a median of 24 of its 256 slots (107 at most), and in the recovery diagnosis of 2026-09-22, of the 26,996 people it does not report at 0.3, **95.5% already have a live slot on them** at a median value of 0.986. The remaining loss is in the reporting head.
+**The 80.10% this row used to carry is retired, not corrected**: a different backbone, and it predates the running time step and the limit-beam decoding. Joint training with feedback (step 3b) reached 78.84% on that older chain and has not been repeated on this one, so training the memory on a frozen stage 2 remains the best configuration.
 
 ### Reading our FROG row against a published one
 
@@ -206,7 +217,8 @@ The paper's own figures in parentheses are **GPU** numbers and are not comparabl
 | **SpaceTimeCNN** | **8.7 ms** | **12.1 ms** | **12.5 ms** |
 | **FullScanTCN** | **2.1 ms** | **2.6 ms** | **3.1 ms** |
 | **TemporalUNet** | **2.0 ms** | **2.7 ms** | **2.3 ms** |
-| **Three-horizon detector, stages 1-2 + decode** | n/a | **~10.4 ms**⁶ | n/a |
+| **TAKHeLiPeD, stages 1-2 + decode** | n/a | **~10.4 ms**⁶ | n/a |
+| **TAKHeLiPeD, stage 3 alone** (object memory) | n/a | **4.4-4.6 ms**⁷ | n/a |
 
 ⁴ Was **315.5 / 243.8 / 278.3 ms** here until 2026-09-10, and blamed on the Python decode loop.
 It was not the loop: the decoder applied a second sigmoid to a channel `lfe_ppn.onnx` had already sigmoided, so every one of the 3,600 anchors cleared any threshold and entered an O(n²) greedy merge, 182 survivors per frame on scenes holding ~3 people.
@@ -217,7 +229,9 @@ Both LFE rows are otherwise real-data measurements (300 scans each) taken after 
 
 ⁶ Derived 2026-09-16 from step 3a's candidate caches, which stream the trained stages 1-2 one frame at a time (batch 1) and decode candidates with DROW's vote grid: 1,269 s for 120,396 train frames, 2,010 s for 195,058 val, 521 s for 50,088 test -- 10.3-10.5 ms per frame, consistently.
 **Not comparable with the rows above**: those are CPU measurements on this machine, while this one runs on the RX 9060 XT under ROCm, carries a Python decode loop, and leaves out stage 3 (the object memory).
-It is quoted only against the sensor: FROG delivers a scan every 38 ms at 26.2 Hz, so this sizing streams in real time with room to spare. A proper single-frame latency benchmark of the whole detector, on one machine with the other rows, is `TODO.md` A50 phase 1.
+It is quoted only against the sensor: FROG's measured mean frame period is 24.99 ms (~40 Hz, corrected 2026-09-17 from a long-standing 26.2 Hz), so stages 1-2 plus the memory's 4.4 ms still stream in real time, with roughly a third of the budget spare. A proper single-frame latency benchmark of the whole detector, on one machine with the other rows, is `TODO.md` A50 phase 1.
+
+⁷ Measured 2026-09-17 and confirmed across B0's three seeds (2026-09-19) by `memory_ms_per_frame`, timing one stream on the RX 9060 XT under ROCm: **4.42 ms** on the fixed end-of-run block, 4.5-4.6 ms across the seeds. Same caveat as footnote 6 -- not comparable with the CPU rows above.
 
 **Exact parameter counts**, counted from the ONNX initializers now that `onnx` is installed, replacing the file-size estimates this table used to carry (~65K / ~180K): **LFE-Peaks 53,258**, **LFE-PPN 170,903**.
 For scale, `SpaceTimeCNN` is 476,262 — **2.8x LFE-PPN, for +0.5pp on the benchmark and no use of temporal order at all.**

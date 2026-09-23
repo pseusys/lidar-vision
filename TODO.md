@@ -81,14 +81,17 @@ That's a structural gap, not a pending deploy — see §E below.
 | | **A47** our `DrSpaamDetector` re-encodes a `T`-scan window per call; the official detector keeps its template across calls | found 2026-09-14 by the A43 survey | one streaming evaluation |
 | | **A48** re-run everything downstream of the two heading-wrap fixes | found 2026-09-14 by A43 step 0's real-data check | minutes per script; cutout evaluations longer |
 | | **A49** the three-horizon detector on FROG, DROW and JRDB, with its parameters stated for each | owner's goal 2026-09-15; starts after A43's FROG results | settings in physical units, a dataset-agnostic training harness, two more training chains |
-| | **A50** post-processing of A43's FROG result, then the deferred heavy ablations, then architecture experiments | owner's plan 2026-09-16, in that order | phase 1 cheap to one short retrain each; phases 2-3 one training chain per variant |
+| | **A50** post-processing of A43's FROG result, then the deferred heavy ablations, then architecture experiments | owner's plan 2026-09-16, in that order; **stage-3 work moved to A51** | phase 1 cheap to one short retrain each; phases 2-3 one training chain per variant |
+| | **A51** stage-3 slots: performance, trainability and output, on the no-temporal stage 2 | **owner confirmed the plan 2026-09-17; phase 0 in progress** | phase 0 ~1 day of GPU; each later screen one short step 3a run |
+| | **A52** finish the migration to the name **TAKHeLiPeD** | docs done 2026-09-23; the code half waits for a gap between training runs | mechanical renames, one commit per step |
+| | **A53** rewrite `docs/RESEARCH.md` around TAKHeLiPeD | header note added 2026-09-23; the body still argues the superseded framing | a day of writing, no compute |
 
-**Next session (owner's call 2026-09-17): stage-3 slot experiments** (A50 phase 1b). Start from these facts:
+**Stage-3 slot experiments (owner's call 2026-09-17) are planned in A51**, which supersedes the backbone choice below: the owner chose the **no-temporal** stage 2, not `default_s0`. Start from these facts:
 
 - **Stage 3 needs a new stage 2.** The fine convolution is gone, and `step2_calibration.best.pth` (3 taps), with every stage-3 checkpoint built on it, no longer loads. Use `checkpoints_three_horizon/default_s0/step2_calibration.best.pth` (78.19% test, trained on current code 2026-09-17; `default_s1`/`default_s2` are its sister seeds). Stage-3 candidate caches are now keyed `-limit-silenced`, so they rebuild with the new decoding.
 - **Naming from 2026-09-17:** with `--fine-lags` gone, the runs formerly called "no-fine" are the **default** architecture (coarse convolution only), and "static" is **no-temporal** (`--coarse-lags 0`). Directory names (`step2_no_fine`, `confirm_nofine_s*`, `step2_static`, `confirm_static_s*`) keep the old words because the logs refer to them.
 - **Measure the time-step suspect first.** It is cheap and needs no stage-2 training. FROG timestamps are bunched, stage 3 clips `dt` to 1 ms, and `manage_slots` divides displacement by it. Log slot speeds against walking speed.
-- **FROG is 40 Hz, not 26.2** (A49): `FRAME_PERIOD_S` sets step 3's chunk and validation window lengths 1.53x shorter than their flags say. Decide whether to fix that before or after the slot experiments, because either order changes step-3a numbers.
+- **FROG is 40 Hz, not 26.2** (A49): fixed in the stage-3 trainer 2026-09-17, before the slot experiments (A51 0b).
 - The slots-versus-coarse-convolution hypothesis is parked in §D, and it needs a working stage 3 first.
 - Single runs must differ by ~2.5 pp to count; confirm with 3 seeds.
 
@@ -191,6 +194,166 @@ Trained `--align-scans` checkpoints saw the bad headings in the windows touching
 
 **Why.** `AGENTS.md` rule 3 and the evidence rules: the paper's exchange-rate tables and the §2.4 numbers the proposal is argued from must be measured on correct odometry before they are quoted.
 
+### A51. Stage-3 slots: performance, trainability and output
+
+**Owner's plan, confirmed 2026-09-17.** It takes over A50 phase 1b and the stage-3 rows of A50 phase 3; A50 keeps the rest for later.
+
+**What.** Make stage 3 (`ObjectMemory`) train reliably, report well-calibrated detections, and take more of the room the oracle leaves: +6.5 pp coverage at a 2 s bridge above stage 2, of which stage 3 took 17.5% (A50 phase 1 item 1).
+
+**Scope decisions (owner, 2026-09-17):**
+
+- **Backbone: the no-temporal stage 2** (`step2_static`, `--coarse-lags 0`; seeds 0/1/2 at 77.60 / 77.40 / 76.68% under current decoding). Coarse convolutions stay out of every run in this item, because their benefit is not established. The §D slots-versus-coarse-convolution comparison is therefore out of scope here.
+- **The 40 Hz frame rate and `dt` are fixed before any experiment.** No stage-3 result exists on this backbone yet, so fixing now costs no comparability.
+- **Joint training and feedback (step 3b) are out of scope.** They need stage 2 retrained. With a no-temporal backbone, feedback is the only way memory reaches stage 2, so it is the natural follow-up.
+- **Screening uses a shortened curriculum** (1 s + 10 s chunks), and confirmation uses the full one, provided B0 shows the 30 s stage buys nothing beyond noise.
+
+**How every arm is judged:** A50's screening-then-confirmation procedure, against the **stage-3 noise floor measured in B0**, not stage 2's ~0.95 pp per run. Each arm reports wp-AUC at 0.5 m and 0.3 m, ms/frame, FP and FN per frame at 0.3 **and** at stage 3's own threshold (the one matching stage 2's FP per frame), coasting detections and their precision, and the rescoring shift on true positives against the rest. Changes are adopted cumulatively: each screen runs against the best configuration so far.
+
+**Phase 0 -- harness and baseline**
+
+| # | item | how | why |
+| --- | --- | --- | --- |
+| 0a | ~~measure the `dt` suspect~~ **done 2026-09-17: confirmed, and worse than suspected** | `memory_diagnosis.py --slot-speed` replays the rule-based `manage_slots` on the old test cache (50,088 frames) with stamped `dt` and with the mean period; reference speed is each slot's displacement over >= 1 s | see the result below the table |
+| 0b | ~~fix the frame rate and `dt`~~ **done 2026-09-17** | `FRAME_PERIOD_S` removed. Chunk and validation lengths come from `mean_frame_period` (elapsed time over frames) of their own split. Stage 3's `dt` is `frame_periods`: a causal running average of the stamped intervals, the plain mean for the first `DT_AVERAGE_FRAMES` = 32 and an exponential average with rate 1/32 after (owner's choice over a last-N-frames window: one number per stream), computed once per recording in `pack` and in the joint path. Speed clamping moved to T3, since a sane `dt` gives sane speeds | chunk and validation lengths were 1.53x off; velocity and its input were corrupted |
+| 0c | ~~extend stage-3 evaluation~~ **done 2026-09-17** | `evaluate` returns `own_threshold` / `own_recall` / `own_fp_per_frame` / `own_fn_per_frame` (budget: the candidates' FP per frame), `rescore_shift_person` / `_other`, `coast_per_frame` / `coast_precision`, and `ap_0.3m` via `extra_radii`; `memory_ms_per_frame` at one stream; step 3a's test report prints all of them. Val selection is unchanged | calibration and coasting are unmeasured; AGENTS rule 2b needs ms/frame |
+| 0d | ~~candidate cache for `step2_static` seed 0~~ **done 2026-09-17**: test 402 s, train 976 s, val 1,535 s (log `results/cache_static_s0.log`) | `load_split` with `--stage2` (~1 h) | the old caches belong to a stage 2 that no longer loads |
+| 0e | ~~B0 baseline and noise floor~~ **done 2026-09-19 at three seeds** (`checkpoints_three_horizon/a51_b0_short_s*`); the full-curriculum run was stopped 1.9 h in, inside its first stage, by the owner's call. Two nights of GPU were lost first: one to the `device.type` crash, one because the run was scheduled for an evening and never launched, so the relaunch was stopped after its smoke step passed and the chain is queued for the evening; the cheap phase-3 sweeps run in the meantime. **First launch died in its smoke step 2026-09-17 19:05** (`memory_ms_per_frame` read `device.type` on a string; `memory/gotchas.md`), so the chain stopped and the GPU idled overnight; **relaunched 2026-09-18 14:12** as a detached chain (session scratchpad `run_b0.ps1`, progress in `checkpoints_three_horizon/progress.txt`): it waits for 0d, runs a smoke step (`a51_smoke`), then `a51_b0_short_s0/s1/s2` (`--chunk-s 1 10`) and `a51_b0_full_s0`, all `--max-hours 24` so early stopping, not the old 6 h cap that ended the first step 3a, decides; each writes to `checkpoints_three_horizon/<name>/` | one full-curriculum step 3a run, then short-curriculum runs at stage-3 seeds 0/1/2 on the same cache (~13 h) | the noise floor every screen is judged against; decides whether 30 s chunks earn their 3.5 h |
+
+**0a result** (`checkpoints_three_horizon/slot_speed.json`; mean frame period 24.99 ms, 20.2% of stamped intervals clipped to 1 ms):
+
+| `dt` | slot matches per annotated frame | velocity state near a person, p50 / p90 / p99 | windowed reference near a person, p50 / p90 | windowed, slots elsewhere, p50 / p90 |
+| --- | --- | --- | --- | --- |
+| stamped (training today) | 8.51 | 3.97 / 8.63 / 15.22 m/s, 63.9% over 3 m/s | 0.66 / 1.67 m/s | **10.83 / 25.27 m/s** |
+| mean period | 8.84 | 0.58 / 1.16 / 1.66 m/s, 0.0% over 3 m/s | 0.56 / 1.10 m/s | 0.59 / 1.75 m/s |
+
+With stamped `dt`, a matched slot's velocity is ~7x a walking pace. Unmatched slots then coast away at ~11 m/s, so a slot that misses one frame is predicted metres off and loses its object. With the mean period, velocity agrees with the displacement reference to 0.02 m/s and matches rise 3.9%. The earlier stage-3 results (80.10%) were trained and scored with this corruption.
+
+**0b result.** Replayed the same way, the running average gives 8.84 matches per frame and velocity p50 / p90 0.58 / 1.17 m/s near people against the reference's 0.56 / 1.10, indistinguishable from the constant mean period. On the test split its `dt` stays within 24.23-25.82 ms (p0.1-p99) once 32 intervals have passed; a recording that starts with a sub-ms interval begins at the 1 ms floor for its first few frames. The first slot-speed replay's "mean period" row is superseded by this "running average" row in `checkpoints_three_horizon/slot_speed.json`.
+
+**B0 result, 2026-09-19.** Short curriculum (1 s + 10 s chunks), no-temporal stage 2 seed 0, whole `official` test split, every 5th annotated frame. Every row shares the same candidates: 77.66% AP, 88.8% recall at 2.620 false positives per frame.
+
+| seed | memory AP | vs candidates | AP at 0.3 m | recall at the candidates' FP rate | own threshold | coasting | hours |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | 82.96% | +5.30 | 81.36% | 92.2% | 0.178 | 0.083/frame, 27.4% | 4.1 |
+| 1 | 83.17% | +5.51 | 81.52% | 92.5% | 0.227 | 0.292/frame, 22.3% | 5.0 |
+| 2 | 83.88% | +6.22 | 82.17% | 92.7% | 0.156 | 0.153/frame, 26.6% | 9.7 |
+| **mean** | **83.34%** (sd 0.47) | **+5.68** | 81.68% | 92.5% | — | — | — |
+
+- **The screening threshold for A51 is ~1.5 pp of test AP** (three seeds, sd 0.47, range 0.92), about half of stage 2's ~0.95 pp per-run spread. State it with every later arm.
+- **The memory pays on both axes now**: +5.68 pp of AP over its own candidates against +3.2 pp for the old chain, and +3.7 pp of recall at matched false positives. 83.34% against the old 80.10% is **not** a clean comparison -- different backbone, and the old number predates the running time step and the limit-beam decoding.
+- **Stage 3 alone costs 4.5-4.6 ms per frame** at one stream, inside FROG's 25 ms budget beside stage 2's 6.5 ms.
+- **The rescoring shift survives training** at every seed (people -2.8 to -3.5 logits), so T1 and O1 still have a target; **coasting is alive** (0.08-0.29 reports per frame at 22-27% precision) where it was dead at one epoch, so O2 is about improving it rather than starting it.
+- **Cost varies 2.4x across seeds** (4.1-9.7 h) through early stopping alone, and validation is 160 s against 70 s of training per epoch in the 1 s stage -- about 70% of the run is scoring. **T4 now covers cutting that** before the screens.
+- **Open, deliberately:** whether 30 s chunks add anything over 1 s + 10 s. The full-curriculum run is ~1 GPU day and was stopped; revisit only if an arm looks chunk-length sensitive.
+
+**Phase 1 -- trainability**, one screening run each:
+
+| # | item | why |
+| --- | --- | --- |
+| T1 | replace the scalar `rescore_gate` with a zero-initialised last rescore layer | **screened 2026-09-20: 84.39% against B0's 83.34% mean** (+1.05, inside the ~1.5 pp threshold, so no win on AP), but **recall at matched false positives 93.4% against 92.2 / 92.5 / 92.7%** and **coasting precision 32.2% against 22.3-27.4%**, both above every B0 seed. One seed. 367 min, 306,442 parameters against B0's 306,443 -- exactly the dropped scalar. **Implemented 2026-09-18** as `step3a --no-rescore-gate`; the default keeps the gate, so B0 is unaffected. A test pins the reason: with the gate, the rescoring head's own gradient is exactly zero over the first steps; without it, it is not. The gate stayed at +0.03-0.05 through step 3a, so a -3 logit shift needed MLP outputs near -70 |
+| T2 | plateau learning-rate schedule, as in step 2 | **screened 2026-09-20: 83.89% against B0's 83.34% mean** (+0.55, inside the threshold and inside B0's own range), recall at matched false positives **93.2%** and coasting precision **32.0%**, both above every B0 seed; 500 min, the longest screen yet. **Implemented 2026-09-20** as `step3a --schedule plateau` (`--lr-factor`, `--lr-patience`, `--min-lr`; `memory_schedule` picks it and says whether it steps per iteration), running after T1 as `a51_t2_s0`. Cosine over `--max-epochs` hardly decays in the 9-37 epochs a stage runs (A50 phase 1 item 5) |
+| T3 | normalise slot statistics: log-scale age and time since match, clamp speed | unscaled inputs to the learned update. **Demoted 2026-09-20**: the running time step (0b) already brought slot speeds to 0.6 m/s, so the input that most needed clamping is no longer extreme |
+| T4 | cut the screening cost | **partly done 2026-09-20**: `--test-strides` lets a screen score the test split once (stride 5) instead of twice, saving ~25 min per run and changing nothing about training. **Shrinking validation is deliberately not done yet**: it changes checkpoint selection, so arms would stop being comparable with B0 unless B0 is re-run under the cheap protocol (3 runs, ~8 h). Owner's call 2026-09-20 -- screen broad sweeps on a smaller fraction first, full evaluation for the finalists -- so re-baseline once if more than about four arms are queued at once. 30 s chunks at several streams only if the long chunks come back |
+
+**Phase 1 read, 2026-09-20.** Both screens behave the same way, which is itself the finding:
+
+| arm | test AP | recall at the candidates' FP rate | coasting precision | shift on non-people | hours |
+| --- | --- | --- | --- | --- | --- |
+| B0, 3 seeds | 82.96 / 83.17 / 83.88 (mean 83.34) | 92.2 / 92.5 / 92.7 | 22.3 / 26.6 / 27.4 | about +0.2 | 4.1-9.7 |
+| T1, no scalar gate | 84.39 (+1.05) | **93.4** | **32.2** | -0.87 | 6.1 |
+| T2, plateau schedule | 83.89 (+0.55) | **93.2** | **32.0** | -0.71 | 8.3 |
+
+- **Neither moves AP past the ~1.5 pp threshold**, and T2's 83.89 sits inside B0's own range.
+- **Both beat every B0 seed on the calibration metrics**, by almost the same amount, from two unrelated changes. Two readings, and this session cannot separate them: either any change that lets the rescoring head train harder produces this, or the two metrics are noisier across runs than B0's three seeds suggest (their B0 range is only 0.5 pp for recall and 5.1 pp for coasting precision). **No threshold was ever pre-registered for the calibration metrics**, which is the gap to close before either arm is adopted.
+- **What follows:** neither is adopted yet. Confirmation seeds for T1 -- the arm with a mechanism behind it, and the cheaper of the two -- belong in phase 4 alongside the winner's re-run, not in a bespoke pair of runs now. T3 stays demoted.
+
+**Phase 2 -- output**
+
+| # | item | why |
+| --- | --- | --- |
+| O1 | bounded rescoring against the signed one | **failed twice 2026-09-22, cause not established.** Both attempts reached the 10 s chunk stage and went NaN there (4.4 h with the gate, 2.4 h without), while the 1 s stage ran 29-62 epochs cleanly at val AP 77-80%. The gate explanation is **wrong**: the gateless arm diverged too. The decay-layer explanation is **also weak**: at the 10 s stage O1's `decay.weight` norm is 16.06 against B0's 14.52, with near-identical implied decay times. **The honest state: O1 failed 2 of 2 while eight other runs completed, but the machine also had two genuine hardware failures in the same window, and those stories are not separable from this evidence.** The discriminating test is whether the known-good D1 seeds now complete, and **it has not answered yet**: the first attempt after O1 died at 3 h of host memory exhaustion because an agent ran `pytest` beside it (`memory/gotchas.md`), which is self-inflicted and says nothing about the machine or the arm. Relaunched 2026-09-22 20:07. Do not spend a third O1 attempt before it answers. First attempt detail: `--rescore-limit 3` with the scalar gate kept ran 62 epochs at val AP ~80%, during which **the gate grew to +1.55 against B0's +0.05**, then the loss went NaN at 4.4 h. Bounding the correction removes what kept the gate small, leaving two multiplicative scales (`gate x limit x tanh`), so it is re-run with T1's parameterisation (`--no-rescore-gate --rescore-limit 3`). The candidates' AP held at 72.85% throughout, so this was the model diverging, not the device fault of 2026-09-21. **Implemented 2026-09-18** as `step3a --rescore-limit L`, which bounds the correction to +-L logits through a tanh; 0, the default, is today's unbounded correction. The head shifts the whole score distribution down (A50 phase 1b item 1), by -3.36 logits on people against +0.04 on everything else in the 2026-09-18 smoke run |
+| O2 | coasting: make the head separate a remembered person from a remembered phantom | **measured 2026-09-22** (`--recovery`): a live slot sits on 95.5% of the people stage 3 fails to report, median value 0.986, while only 24 of 256 slots are in use -- so capacity is not the limit and reporting is. Thresholding cannot fix it: 3.0 FP per person recovered at 0.3, 4.6 at 0.2, 11.1 at 0.1, and the learned head already beats ranking by the rule's value. `step3a --coast-weight` is implemented as the first lever; **run it after O1**, since the pool is measured at a threshold stage 3 is miscalibrated against |
+| O3 | position refinement: slots regress a correction to the candidate's position, L1 loss (`docs/PROPOSAL.md` §8) | outputs are raw candidate positions; should show in AP at 0.3 m |
+
+**Phase 3 -- slot mechanics**, evaluation-only sweeps before any retraining:
+
+| # | item | why |
+| --- | --- | --- |
+| S1 | ~~sweep `gate_m` and `fade_time_s`~~ **done 2026-09-18, and nothing binds** (`memory_diagnosis.py --slot-rules`, `checkpoints_three_horizon/slot_rules.json`) | see the table below |
+| S2 | ~~re-detections after gaps over 10 s~~ **done 2026-09-18, and the case is thin** | see below |
+| S3 | higher creation threshold or confirmation; more than 64 candidates | **deprioritised 2026-09-22**: the memory uses a median of 24 slots of 256 and already holds 95.5% of the people it fails to report, so more candidates would fill capacity that is not scarce. Only worth revisiting if a later result shows people the memory never learns about at all |
+| S4 | ablate the hand-coded association -- **not worth a training run** on S1's evidence: association already puts a live slot on 99.2% of annotated people, and a *matched* one on 97.0%, so there is nothing for a learned association to recover | A50 phase 1b item 4 |
+
+**S1 and S2 result, 2026-09-18** (rule-only replay over the whole FROG `official` test split, 153,655 annotated people, no trained model; the no-temporal seed-0 candidates):
+
+| gate / fade | people with a live slot within 0.5 m | of those, matched this frame | matches/frame | spawns/frame | losses/frame | slots p50/p99 | returns/frame | return gap p50 / p90 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0.3 m / 2 s | 99.1% | 96.9% | 9.33 | 0.25 | 0.23 | 20/47 | 0.14 | 0.79 / 5.65 s |
+| **0.6 m / 10 s (default)** | **99.2%** | **97.0%** | 9.44 | 0.13 | 0.10 | 40/89 | 0.02 | 2.99 / 14.08 s |
+| 1.0 m / 30 s | 99.2% | 97.0% | 9.47 | 0.11 | 0.05 | 67/172 | 0.00 | 2.86 / 14.94 s |
+
+**Neither rule binds.** Coverage moves 0.2 pp across a 3x range of gate and a 15x range of fade, and the matched share never leaves 96.9-97.0%. This extends A50 phase 1b item 1 (a live slot sat within the gate for 100% of the people stage 3 lost) from the lost people to all of them: **the bookkeeping already places a matched slot on 97% of annotated people, so every remaining loss is downstream, in what the learned head does with that slot.** Priority therefore moves to phase 2 (O1 calibration, O2 coasting) and phase 1.
+Coverage counts any live slot within 0.5 m, so it is an upper bound, as in `docs/PROPOSAL.md` §5.5; with 40 slots alive at the default some coincidence is included.
+**Returns are rare and short** (S2): at the default, a slot is lost 0.10 times per frame and something reappears where it stood 0.02 times per frame, with a median gap of 3.0 s and 17.8% of returns beyond the 10 s fade. Against ~3 annotated people per frame, carrying state across retirement addresses a very thin slice, which agrees with the oracle finding that little is recoverable past 10 s. **S2 stays parked unless a later result points back at it.**
+**One capacity note for later:** at 0.3 m / 30 s the memory reaches 242 live slots of 256 at p99, so a longer fade with a tight gate would start to hit the capacity that 64/128/256 never did.
+
+**Phase 3b -- the design decisions the write-up has to defend (proposed 2026-09-20, awaiting the owner).** The owner's reason for
+prioritising slots is that the mechanism is the novel part, so every choice in it needs a stated reason and a measurement. Phases 1
+and 2 are implementation quality; these are the choices themselves. Each is one training run behind a flag, and each is expected to
+*lose* -- that is what makes it evidence for the decision.
+
+| # | the decision | the ablation | why it is the one to run |
+| --- | --- | --- | --- |
+| D1 | slots live in room coordinates, so a chair keeps zero velocity and a person does not (`docs/PROPOSAL.md` §5.5) | **run 2026-09-21: 82.02% against B0's 83.34% mean, -1.32 pp**, recall at matched false positives 92.2% (B0's lowest seed), 431 min. The decision is supported, but by less than the ~1.5 pp threshold on one seed, so it is suggestive rather than settled. `step3a --no-room-frame` | the central claim of the design, and the reason memory sits inside the model rather than behind a tracker; never ablated. **A test found the first consequence already**: in the sensor frame the robot's own motion moves every object, so at 0.2 m of travel a static object gains velocity, and at 1 m per frame it leaves the 0.6 m gate entirely and the slot is lost. The ablation therefore costs association as well as the velocity feature |
+| D2 | a slot is held by its accumulated value, not the latest score, so a hidden person keeps their slot | **run 2026-09-21: 83.94% against B0's 83.34% mean, +0.60 pp**, recall at matched false positives 92.7% (B0's best seed), coasting precision 31.7%, 700 min. **The ablation does not lose: accumulated value earns nothing measurable on FROG.** `step3a --latest-value` | argued in §5.5 and never tested; the replay only showed capacity is ample (A50). Both rules create a slot at the candidate's score; from there accumulation climbs past it towards certainty while the ablation copies each frame's score |
+| D3 | each slot decays at a learned, input-dependent rate over 1-60 s | **run 2026-09-21 at 8 s: 82.44% against B0's 83.34% mean, -0.90 pp**, recall at matched false positives 92.1%, below every B0 seed; 288,907 parameters against 306,443, exactly the decay layer and its bias; 352 min. Direction supports the learned decay, inside the threshold. `step3a --fixed-decay-s T` | prices the selective recurrence, the part closest to published recurrent memories. Pick `T` as the geometric middle of the initial range, ~8 s, and state it |
+
+**The bookkeeping itself is not trainable (owner's question 2026-09-20), and that choice has never been measured.** `manage_slots`
+runs under `@no_grad`: association (mutual nearest within `gate_m`), value accumulation, spawn, replacement, retirement, velocity and
+hit rate are all fixed rules. What learns is everything that *reads* them -- the candidate encoder, the matching, exchange and recall
+attention, the selective decay and state update, rescoring and coasting. The rules' outputs enter the learned path as inputs (value,
+age, time since match, displacement, speed, hit rate, matched flag, observed score, and slot positions as an attention bias), but as
+constants, so the loss cannot shape which slots survive.
+
+| # | what could become trainable | how, without breaking the discrete parts | expected |
+| --- | --- | --- | --- |
+| D4 | the **value rule's constants**: `gain` and `fade_time_s` | **implemented 2026-09-20** as `step3a --learn-value`: `manage_slots` keeps its discrete decisions under `no_grad` and takes the constants as detached floats, while the value the network reads is recomputed with gradient, so the rule moves as the parameters train (+2 parameters) | one run; tests whether the two hand-set constants are the right ones |
+| D5 | the **association width** | the 0.6 m gate is a hard cut inside a discrete assignment, so it has no gradient; give the *value* update a distance weight `exp(-d^2 / 2 sigma^2)` with learned `sigma` while the assignment stays discrete | one run; only worth it if D4 moves |
+| -- | the spawn and eviction decisions themselves | `argmin`/`argsort` over slots, so a relaxation (Gumbel, straight-through) or a soft assignment would be needed -- a research-scale change, and `docs/PROPOSAL.md` §12 already lists the MOTR-style alternative | not now |
+
+**Phase 3b read so far, 2026-09-21** (one seed each, B0 mean 83.34%, threshold ~1.5 pp):
+
+| ablation | test AP | vs B0 | recall at matched FP | reading |
+| --- | --- | --- | --- | --- |
+| D1, sensor coordinates | 82.02% | **-1.32** | 92.2% | room coordinates earn their place, but inside the threshold on one seed |
+| D2, latest score | 83.94% | **+0.60** | 92.7% | **accumulated value earns nothing measurable**; the ablation is, if anything, ahead |
+| D3, one fixed 8 s decay | 82.44% | **-0.90** | 92.1% (below every B0 seed) | direction supports the learned decay; 17,536 parameters cheaper |
+
+**The honest summary of phase 3b: the memory as a whole is worth +5.68 pp over its own candidates, but no single design choice
+inside it clears the threshold on one seed.** D1 is closest and is the claim the write-up most needs, so it gets the confirmation
+seeds first. D2's null and D3's small loss are reported as they are.
+**Seed 1 has now failed four times** -- twice on 2026-09-21 (host memory, then device-side corruption), once on 2026-09-22 when an agent ran `pytest` beside it, and once at 23:52 that night when the **AMD driver bugchecked the machine** (`amdkmdag.sys`, `memory/gotchas.md`) 3.5 h into a healthy run. `--resume` was built on 2026-09-23 in response; the owner asked to hold the relaunch. Detail on the first two: **2026-09-21** (`memory/gotchas.md`): first a host allocation failure 3.5 h in (stage 3 held the train, val and test caches at once on a 16 GB machine; test now loads only after training), then, on the relaunch, device-side corruption at epoch 12 -- the candidates' own val AP fell from 72.85% to 3.40% with the loss at exactly zero, and it died with a HIP OOM that reported 14.87 GiB free. A GPU sanity check afterwards passed, so the fault is transient. `training_fault` now stops a run at the first such evaluation. **D1 therefore still rests on seed 0 alone**, and the machine should be rebooted before the seeds are attempted again.
+
+- **D2 is the more interesting result, and it is a null.** It agrees with S1 (the bookkeeping rules do not bind) and suggests the learned slot state already carries what the value rule was designed to protect -- a person hidden for a moment. Before the write-up claims the value rule, either confirm the null at more seeds or state the rule as a design choice that measurement does not support on this dataset.
+- **It also weakens D4's prospects**: learning the constants of a rule that does not matter is unlikely to matter either.
+- **D1's number bundles two effects** (the test found the sensor frame also breaks association when the robot moves further than the gate in one frame), so it is a lower bound on the value of room coordinates, not a clean isolation of the velocity feature.
+- **The mid-run slowdown was transient**: D2's 10 s-chunk epochs reached 1,383 s at one point against ~640 s for B0, then returned to 629 s, and its inference cost is unchanged at 4.44 ms per frame. Nothing about the rule is slower.
+
+**An interaction worth knowing before reading D4 (found by its test, 2026-09-20).** With T1's zero-initialised rescoring head, the
+head's last layer starts at zero, so at initialisation *no* gradient reaches anything it reads -- the slot statistics, and therefore
+the value constants, included. D4's parameters only start moving once the head itself has. So D4 is run on whichever rescoring
+parameterisation wins T1, and a null D4 result on an untrained head would mean nothing.
+
+S1 predicts little headroom on FROG -- the rules already put a matched slot on 97.0% of annotated people -- so the likely outcome is
+that learning them changes nothing, which is itself the evidence the write-up needs for keeping them fixed.
+
+Already-strong companion evidence, for the same section: SORT on the same candidates loses at every setting (A43 step 4), 64/128/256
+slots tie within 0.1 pp (A50), the bookkeeping rules do not bind (A51 S1), and the time step does (A51 0a).
+
+**Phase 4 -- confirmation.** The final configuration against B0 on `confirm_static_s1` and `s2` (two more caches). Settings stay in seconds, so the result carries over to A49.
+
+**Why.** Stage 3 is the part of the design that should show temporal information pays, and its only result (80.10%, on a stage 2 that no longer loads) came from one run with a badly conditioned gate, a corrupted time step and a miscalibrated threshold.
+
 ### A50. After the first FROG result: post-processing, deferred ablations, architecture experiments
 
 **Owner's plan (2026-09-16), in three phases in this order.** Phase 1 explains and cleans up what A43's chain produced; phase 2 runs the §9 ablations that were delayed because each needs a training run; phase 3 tries the alternatives `docs/PROPOSAL.md` §12 kept for experiments, which are now comparatively cheap because each stage has a measured baseline of its own.
@@ -207,7 +370,7 @@ Trained `--align-scans` checkpoints saw the bad headings in the windows touching
 | 6 | remove the time budget | owner's call: runs are bound by epoch budgets and early stopping anyway (`--max-hours` and its checks, every step) |
 | 7 | report the remaining §9 **metrics** (these are measurements, not ideas; the architecture ideas are phase 3 below) | AP at 0.3 m as well as 0.5 m; milliseconds per frame for each arm (none of the 2026-09-16 ablations has one, which AGENTS.md rule 2b treats as an incomplete answer); the 72,533 person-free frames; people standing still, reported separately |
 
-**Phase 1b -- why stage 3 underperforms** (owner's call 2026-09-16, after item 1: "stage 3 underperforming is exactly what we should put an effort into ... do the slots preserve enough information? Is the slot invalidation rule enough? Are there enough slots?").
+**Phase 1b -- why stage 3 underperforms** (**its open items continue in A51**; owner's call 2026-09-16, after item 1: "stage 3 underperforming is exactly what we should put an effort into ... do the slots preserve enough information? Is the slot invalidation rule enough? Are there enough slots?").
 
 *Already settled, do not re-run.* **Slot count is not the limit**: step 4 scored 64 / 128 / 256 slots at 80.12 / 80.20 / 80.10%, a 0.1-point spread, and A48's occupancy work found the memory never fills at 256, so **no slot is ever evicted for capacity** — which is also why `docs/PROPOSAL.md` §5.5's rule-versus-oracle comparison stopped testing anything. The invalidation rule therefore cannot be failing through eviction; only through **retirement** (value fades to `floor` in `fade_time_s` = 10 s, then the slot dies) or **association** (mutual-nearest within a fixed `gate_m` = 0.6 m of the velocity-predicted position).
 
@@ -327,7 +490,7 @@ Every quoted number states how many seeds it rests on, and single-seed numbers a
 
 **What the current code ties to FROG** (checked 2026-09-15):
 
-- `utils/train_three_horizon.py` hard-codes `FROG_Dataset`, `frog_laser_angles(720)` and `FRAME_PERIOD_S = 1/26.2`, which sets chunk lengths, validation windows and the first frame's time step.
+- `utils/train_three_horizon.py` hard-codes `FROG_Dataset` and `frog_laser_angles(720)`. Its frame period is measured from the data since 2026-09-17 (A51 0b).
 - Stage 2's temporal lags are counted in frames (fine 0, 1, 2; coarse 0, 8, 16, 24, 32): 0.08 s and 1.22 s at 26.2 Hz, but 0.16 s and 2.5 s at DROW's 12.7 Hz. `docs/PROPOSAL.md` principle 9 asks for seconds.
 - The resampling of every scan to one angular spacing (`docs/PROPOSAL.md` §5.3) is not built, so a kernel spans 0.25° per beam on FROG and 0.5° on DROW.
 - Stage 3 already uses the real time step, and its slots live in metres.
@@ -375,7 +538,7 @@ Examples accompany each category. Output is JSON plus a printed report grouped b
 
 **FROG runs at 40 Hz, not 26.2 Hz (found 2026-09-17 by `utils/scan_anomalies.py`).** **What:** FROG's scans are stamped in bunches, roughly 38 ms, 38 ms, then under 0.1 ms. The median interval gives 26.2 Hz; the mean over linked intervals is 25.0 ms in all five files, matching the sensor's 25 ms per scan, and no two consecutive scans are identical. **Blast radius:**
 
-- `train_three_horizon.FRAME_PERIOD_S = 1/26.2` sets chunk lengths and validation windows, so every one is 1.53x shorter in real time than its flag says.
+- ~~`train_three_horizon.FRAME_PERIOD_S = 1/26.2` set chunk lengths and validation windows 1.53x short~~ fixed 2026-09-17 (A51 0b).
 - The coarse lags span 0.80 s, not 1.22 s. The "~1.5 s" in the temporal hypothesis is really ~0.8 s.
 - Stage 3's time step comes from the stamps, clipped to 1 ms, and the slot velocity divides by it (see A50, stage 3 time step).
 - `evaluate._frame_period_s` takes the median, so every FROG `fp_per_s` is 1.53x too low.
@@ -618,6 +781,34 @@ Candidates for deletion depending on results: the `dtime`/`time_frame` sweep ent
 
 **Why it is an item rather than an afterthought.** This session has already reorganised twice on new measurements, and both times the reorganisation was worth more than the work it replaced.
 Budget for it.
+
+### A52. Finish the migration to the name TAKHeLiPeD
+
+**What.** The owner named the detector on 2026-09-23: **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector), *TA-KHé-Li-PeD*.
+The **documentation** half is done (`CHANGELOG.md` 2026-09-23): `README.md`, `AGENTS.md`, `memory/performance-log.md`, `memory/detector-architectures.md`, `memory/keywords.md`, `memory/commands.md`, `docs/SHOWCASE.md`, `docs/PROPOSAL.md`, `docs/PAPER.md` and `docs/RESEARCH.md`'s header.
+The **code** half is not, deliberately: every identifier still says `three_horizon`, so no checkpoint, cache or log path moved.
+
+Left to rename, in the order that minimises breakage:
+
+1. `library/follow_the_drow/detectors/three_horizon.py` -> `takheliped.py`, and its imports.
+2. `utils/train_three_horizon.py`, `utils/three_horizon_oracle.py`, and `utils/.three_horizon_cache/`.
+3. `tests/test_three_horizon.py`, `tests/test_three_horizon_oracle.py`, `tests/test_train_three_horizon.py`.
+4. `checkpoints_three_horizon/` -> `checkpoints_takheliped/` (gitignored, so this is a local move plus every documented command that names it).
+5. The prose in `CHANGELOG.md` and this file, which still say *three-horizon* throughout, and the `*keywords:*` lines that index them.
+
+**How.** One commit per numbered step, tests green between each. Steps 1-3 are mechanical renames with no behaviour change; step 4 breaks every `--stage2`/`--memory`/`--out-dir` path in flight, so it waits for a moment with no run going. Step 5 is prose only and is the one to do last, because the old word is what makes the history greppable until everything else has moved.
+
+**Why.** One name, one spelling. Two spellings for one detector is exactly the kind of drift that makes a grep for past evidence miss half of it — and the reason to do it as staged renames rather than a single sweep is that a checkpoint directory rename during a training run costs a run.
+
+**Why not now.** Steps 1-3 are safe at any time; step 4 is not, and doing 1-3 without 4 leaves a third spelling in play. Worth batching behind the A51 slot experiments.
+
+### A53. Rewrite `docs/RESEARCH.md` around TAKHeLiPeD
+
+**What.** `RESEARCH.md` is still titled and framed as *Full-Scan, Non-Recursive Convolutional Architectures*, which names the superseded line of work. A header note added 2026-09-23 says so and points at `PROPOSAL.md`/`PAPER.md`/`SHOWCASE.md`, but the body below it has not moved.
+
+**How.** Keep §1 (problem and metric), §3 (baselines and the fidelity audit), §4 (preprocessing) and §7 (related work), which are all still authoritative. Replace §2's goal and constraints with TAKHeLiPeD's, fold §5 and §6 into one provenance section, and fill §8 from `memory/performance-log.md` rather than restating numbers that will go stale.
+
+**Why.** It is the document a reader outside this repo is pointed at, and it currently argues for a design the project has moved past. It is also the only place where the fidelity audit against each published paper lives, so it cannot simply be retired.
 
 ---
 

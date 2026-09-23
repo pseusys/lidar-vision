@@ -1,6 +1,6 @@
 # Detector architectures — how each one turns a scan into detections
 
-*keywords:* detector, cutout, full-scan, SpaceTimeCNN, FullScanTCN, TemporalUNet, DrowDetector, DrSpaamDetector, LFE, DETECTOR_REGISTRY, source of truth
+*keywords:* detector, cutout, full-scan, TAKHeLiPeD, three-horizon, calibration network, object memory, SpaceTimeCNN, FullScanTCN, TemporalUNet, DrowDetector, DrSpaamDetector, LFE, DETECTOR_REGISTRY, source of truth
 
 The full research write-up — literature review, citations, and the fidelity audit against each paper — is [`../docs/RESEARCH.md`](../docs/RESEARCH.md).
 This file is the short, operational version: what an agent needs to predict a detector's behaviour without reading that whole document.
@@ -10,7 +10,8 @@ This file is the short, operational version: what an agent needs to predict a de
 Every detector in this project answers the same question — for each beam in a 2D LiDAR scan, is there a person/wheelchair/walker there, and where exactly — but takes one of two structurally different routes to it.
 **Cutout-based** detectors (`DrowDetector`, `DrSpaamDetector`, `Li2FormerDetector`) extract a fixed-width polar window around each beam and run a shared per-beam CNN over it independently, with no or only local cross-beam communication.
 **Full-scan** detectors (`SpaceTimeCNNDetector`, `FullScanTCNDetector`, `TemporalUNetDetector`, and the ONNX-only `LFEPeaksDetector`/`LFEPPNDetector`) process the entire raw scan at once, with dilated convolutions standing in for the cutout's fixed window.
-The research question this project exists to answer: can a full-scan, non-recursive (no RNN, no attention) design match or beat the cutout-based state of the art, while being far cheaper per frame.
+The research question this project started from: can a full-scan, non-recursive (no RNN, no attention) design match or beat the cutout-based state of the art, while being far cheaper per frame.
+**That framing was superseded on 2026-09-14.** `TAKHeLiPeD` (below) keeps the full-scan half and deliberately lifts the non-recursive constraint, because the evidence that separates a chair from a standing person only exists at a horizon of tens of seconds, which no feed-forward window can reach (`../docs/PAPER.md`).
 
 ## Lifecycle
 
@@ -24,7 +25,29 @@ The research question this project exists to answer: can a full-scan, non-recurs
 
 Every stage after preprocessing is shared by every detector; only the extraction (step 3) and the head (step 4) differ by family.
 
-## The three proposed architectures
+## TAKHeLiPeD — the current detector
+
+**T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector), named 2026-09-23 — *TA-KHé-Li-PeD*.
+Everything written before that date calls it **the three-horizon detector**, and the code still spells it `three_horizon`: `library/follow_the_drow/detectors/three_horizon.py`, `utils/train_three_horizon.py`, `checkpoints_three_horizon/`.
+It is the only detector here that is **stateful across frames**, so it does not go through `DETECTOR_REGISTRY`, `train.py` or `evaluate.py` at all — it has its own trainer with its own steps (`commands.md`).
+
+It breaks the lifecycle above in two places: there is no `T`-scan window (one scan per call), and there is no post-hoc tracker (the memory replaces it, and beats it — `performance-log.md`).
+
+| Stage | What it is | Parameters | Cost |
+| --- | --- | --- | --- |
+| 1, features | 10 pose-invariant per-beam features from one raw scan; `sanitize_ranges` maps non-finite, non-positive and beyond-`max_range_m` readings to `max_range_m`, so no dataset-specific preprocessing is needed | — | — |
+| 2, calibration network | 1D ConvNeXt U-Net over the whole scan, causal temporal convolutions per sector at the bottleneck with their caches odometry-re-aligned; a DROW vote head decodes 64 candidates, sub-threshold ones included | 1.18 M | ~10.4 ms/frame with decoding |
+| 3, object memory | 256 slots in **room** coordinates; cross-attention association, slot self-attention, and a Δt-aware selective diagonal recurrence (Mamba-style, decay 1-60 s). Rescores candidates, coasts briefly-missed people, optionally renders slots back into stage 2 | 0.31 M | ~4.4 ms/frame |
+
+`step()` carries `(CalibrationState, Slots)` between frames, ~1.8 MB, and the per-frame cost does not grow with how far back the memory reaches.
+**`manage_slots` runs under `no_grad`** — association, value accumulation, spawn, replacement and retirement are fixed rules; only what reads the slots learns.
+Design rationale: [`../docs/PROPOSAL.md`](../docs/PROPOSAL.md). Evidence for each slot decision, or an explicit note that there is none: [`slot-design-evidence.md`](slot-design-evidence.md). Numbers: [`performance-log.md`](performance-log.md).
+
+**Two architecture names appear in the logs.** With `--fine-lags` removed on 2026-09-17, the runs formerly called "no-fine" are the **default** architecture (coarse convolution only) and "static" is **no-temporal** (`--coarse-lags 0`); directory names keep the old words. The B0 chain and the A51 slot ablations sit on the no-temporal stage 2, by the owner's call.
+
+## The three earlier full-scan architectures — superseded
+
+Preceded TAKHeLiPeD and still in `DETECTOR_REGISTRY`; every accuracy number they carried is retracted (`performance-log.md`), so they are provenance, not results.
 
 | Detector | Beam communication | Temporal fusion order | Cost | Best FROG wp-AUC |
 | --- | --- | --- | --- | --- |
@@ -48,10 +71,12 @@ Two earlier designs (`FullScanTransformerDetector`, `FullScanCNNDetector`) used 
 
 `DETECTOR_REGISTRY` (`library/follow_the_drow/detectors/__init__.py`) is the authoritative list of what detectors exist and their canonical `--detector`/CLI key.
 A detector class not in this dict cannot be trained or evaluated through `train.py`/`evaluate.py`, regardless of whether the class itself exists — absence from the registry means "not wired up," not "does not exist."
+**TAKHeLiPeD is the standing exception** and is deliberately absent: it is stateful across frames, so it does not fit the registry's stateless `(scan, T) -> detections` contract, and it is trained and scored by `utils/train_three_horizon.py` instead.
 `library/follow_the_drow/utils/torch_utils.py` looks like it should own device selection and does not — see `gotchas.md`.
 
 ## Components
 
+- **`three_horizon.py`** — TAKHeLiPeD: `beam_features`/`sanitize_ranges`, `CalibrationNetwork` + `CalibrationState`, `ObjectMemory` + `Slots`/`SlotRules`/`manage_slots`, and `calibration_network()`/`object_memory()`, which rebuild either stage the way its checkpoint was trained. Not in `DETECTOR_REGISTRY` — it is stateful and has its own trainer.
 - **`architectures.py`** — `DrSpaamDetector` (cutout + auto-regressive spatial attention).
 - **`drow_detector.py`** — `DrowDetector` (cutout + fixed temporal sum); the only detector the ROS deployment currently runs (`deployment.md`).
 - **`full_scan.py`** — `SpaceTimeCNNDetector`, `FullScanTCNDetector`, `TemporalUNetDetector`; this project's own novel designs.
