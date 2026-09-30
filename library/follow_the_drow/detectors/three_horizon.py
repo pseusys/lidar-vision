@@ -318,9 +318,17 @@ class ObjectMemory(nn.Module):
     candidates to slots, exchange between slots, selective recurrence in real time, rule-based slot bookkeeping, candidate
     rescoring that starts silent, and coasting slots that report people no candidate covers.
 
-    The ablations of A51 phase 3b, each off by default: `room_frame` false keeps slots in the sensor frame, where a static object
-    drifts with the robot; `SlotRules.latest_value` replaces accumulated value with the latest score; `fixed_decay_s` gives every
-    slot one time constant instead of a learned one; `learn_value` turns the value rule's two constants into parameters.
+    The ablations of A51 phases 3b and 5, each off by default: `room_frame` false keeps slots in the sensor frame, where a static
+    object drifts with the robot; `SlotRules.latest_value` replaces accumulated value with the latest score; `fixed_decay_s` gives
+    every slot one time constant instead of a learned one; `learn_value` turns the value rule's two constants into parameters;
+    `exchange` false removes the slot-to-slot self-attention, the only O(K^2) term; `learned_match` false removes the
+    cross-attention, leaving each slot the candidate its hand-coded association matched. Both false together is the per-slot
+    recurrent memory a reviewer would ask for as a baseline; `recurrent` false removes the slot state itself, leaving the head a
+    candidate and the statistics of the slot matched to it -- the test of whether this is a learned memory or a tracker with a
+    learned scorer (A51 E10).
+
+    `rescore` false removes the correction entirely, so a candidate keeps its own score and the memory can reach the loss only
+    through the prior it draws into stage 2 -- the test of whether that feedback path works at all (A51 E12a).
 
     Rescoring starts silent either way (`TODO.md` A51): through a scalar gate initialised at zero, or -- with `rescore_gate` false --
     through a zero-initialised last layer, which leaves the head's own gradient unscaled. `rescore_limit`, when set, bounds the
@@ -330,19 +338,21 @@ class ObjectMemory(nn.Module):
 
     def __init__(self, rules: SlotRules = SlotRules(), dim: int = 128, heads: int = 4, sigma_m: float = 0.6, decay_init_s: Tuple[float, float] = (1.0, 60.0),
                  feature_dim: int = 0, rescore_gate: bool = True, rescore_limit: float = 0.0, room_frame: bool = True,
-                 fixed_decay_s: float = 0.0, learn_value: bool = False):
+                 fixed_decay_s: float = 0.0, learn_value: bool = False, exchange: bool = True, learned_match: bool = True,
+                 recurrent: bool = True, rescore: bool = True):
         super().__init__()
         self.rules, self.dim, self.sigma_m, self.feature_dim = rules, dim, sigma_m, feature_dim
         self.rescore_limit, self.room_frame, self.fixed_decay_s = rescore_limit, room_frame, fixed_decay_s
+        self.recurrent = recurrent
         self.encode = nn.Sequential(nn.Linear(CANDIDATE_FEATURES + feature_dim, dim), nn.GELU(), nn.Linear(dim, dim))
-        self.spawn = nn.Linear(dim, dim)
+        self.spawn = nn.Linear(dim, dim) if recurrent else None
         self.statistics = nn.Linear(SLOT_STATISTICS, dim)
-        self.match = _BiasedAttention(dim, heads)
-        self.exchange = _BiasedAttention(dim, heads)
-        self.exchange_norm = nn.LayerNorm(dim)
-        self.update = nn.Linear(dim + SLOT_STATISTICS, dim)
-        if fixed_decay_s:
-            self.decay, self.decay_bias = None, None        # one time constant for every slot, the ablation of selective recurrence
+        self.match = _BiasedAttention(dim, heads) if recurrent and learned_match else None
+        self.exchange = _BiasedAttention(dim, heads) if recurrent and exchange else None
+        self.exchange_norm = nn.LayerNorm(dim) if recurrent and exchange else None
+        self.update = nn.Linear(dim + SLOT_STATISTICS, dim) if recurrent else None
+        if fixed_decay_s or not recurrent:
+            self.decay, self.decay_bias = None, None        # one time constant for every slot, or no slot state at all
         else:
             self.decay = nn.Linear(dim + SLOT_STATISTICS, dim, bias=False)
             times = exp(linspace(log(decay_init_s[0]), log(decay_init_s[1]), dim))
@@ -350,16 +360,27 @@ class ObjectMemory(nn.Module):
         if learn_value:                                      # the value rule's two constants, as parameters the loss can reach
             self.value_gain = nn.Parameter(tlog(full((), rules.gain / (1.0 - rules.gain))))
             self.value_fade = nn.Parameter(tlog(expm1(full((), rules.fade_time_s))))
-        self.recall = _BiasedAttention(dim, heads)
-        self.rescore = nn.Sequential(nn.Linear(2 * dim, dim), nn.GELU(), nn.Linear(dim, 1))
-        if rescore_gate:
+        self.recall = _BiasedAttention(dim, heads) if recurrent else None
+        self.rescore = nn.Sequential(nn.Linear(2 * dim, dim), nn.GELU(), nn.Linear(dim, 1)) if rescore else None
+        if rescore and rescore_gate:
             self.rescore_gate = nn.Parameter(zeros(()))
         else:
             self.register_parameter("rescore_gate", None)       # the head starts silent through its own last layer instead
-            nn.init.zeros_(self.rescore[-1].weight), nn.init.zeros_(self.rescore[-1].bias)
+            if rescore:
+                nn.init.zeros_(self.rescore[-1].weight), nn.init.zeros_(self.rescore[-1].bias)
         self.coast = nn.Linear(dim + SLOT_STATISTICS, 1)
         nn.init.zeros_(self.coast.weight)
         nn.init.constant_(self.coast.bias, SILENT_COAST_LOGIT)
+
+    def _rescored(self, encoded: Tensor, recalled: Tensor, cand_score: Tensor) -> Tensor:
+        """A candidate's logit after the memory's correction, or its own logit untouched when `rescore` is false (A51 E12a),
+        which leaves the prior drawn into stage 2 as the memory's only remaining route to the loss."""
+        if self.rescore is None:
+            return _logit(cand_score)
+        correction = self.rescore(cat([encoded, recalled], dim=-1))[..., 0]
+        if self.rescore_limit:
+            correction = self.rescore_limit * tanh(correction)
+        return _logit(cand_score) + (correction if self.rescore_gate is None else self.rescore_gate * correction)
 
     def initial_state(self, batch: int, device=None) -> Slots:
         return initial_slots(batch, self.rules, self.dim, device)
@@ -398,15 +419,40 @@ class ObjectMemory(nn.Module):
             features = cat([features, cand_features], dim=-1)
         encoded = self.encode(features)
         refill = events.source >= 0
-        spawned = tanh(self.spawn(encoded.gather(1, events.source.clamp(min=0)[..., None].expand(-1, -1, self.dim))))
-        state = where(refill[..., None], spawned, slots.state)
+        if self.recurrent:
+            spawned = tanh(self.spawn(encoded.gather(1, events.source.clamp(min=0)[..., None].expand(-1, -1, self.dim))))
+            state = where(refill[..., None], spawned, slots.state)
+        else:
+            state = slots.state
 
         observed_score = where(refill, cand_score.gather(1, events.source.clamp(min=0)), cand_score.gather(1, events.match_index.clamp(min=0)) * events.matched)
         stats = stack([slots.value, slots.age_s / FEATURE_SCALE, slots.since_match_s / FEATURE_SCALE, (slots.position - slots.origin).norm(dim=-1),
                        slots.velocity.norm(dim=-1), slots.hit_rate, (events.matched | refill).float(), observed_score], dim=-1)
 
-        found = self.match(state + self.statistics(stats), encoded, _proximity(slots.position, world, self.sigma_m), cand_valid)
-        mixed = self.exchange_norm(found + self.exchange(found, found, _proximity(slots.position, slots.position, self.sigma_m), slots.alive))
+        if not self.recurrent:
+            # no slot state: the head reads each candidate beside the statistics of the slot its association gave it
+            # one row per candidate plus a discard row, so the slots that matched nothing cannot overwrite a real entry
+            candidates = cand_score.shape[1]
+            held = zeros(stats.shape[0], candidates + 1, SLOT_STATISTICS, device=cand_score.device)
+            taken = events.matched | refill
+            target = where(taken, where(refill, events.source, events.match_index), full_like(events.source, candidates))
+            held = held.scatter(1, target.clamp(min=0)[..., None].expand(-1, -1, SLOT_STATISTICS), stats)
+            recalled = self.statistics(held[:, :candidates])
+            slots = Slots(slots.alive, slots.value, slots.position, slots.velocity, slots.origin, slots.age_s, slots.since_match_s,
+                          slots.hit_rate, state)
+            candidate_logit = self._rescored(encoded, recalled, cand_score)
+            slot_logit = self.coast(cat([state, stats], dim=-1))[..., 0]
+            coasting = slots.alive & ~events.matched & ~refill
+            slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
+            return MemoryOutput(candidate_logit, slot_logit, slot_xy, coasting, slots)
+
+        queried = state + self.statistics(stats)
+        if self.match is None:                               # the slot reads only what the hand-coded association gave it
+            matched_encoding = encoded.gather(1, events.match_index.clamp(min=0)[..., None].expand(-1, -1, self.dim))
+            found = queried + matched_encoding * (events.matched | refill)[..., None]
+        else:
+            found = self.match(queried, encoded, _proximity(slots.position, world, self.sigma_m), cand_valid)
+        mixed = found if self.exchange is None else self.exchange_norm(found + self.exchange(found, found, _proximity(slots.position, slots.position, self.sigma_m), slots.alive))
         u = cat([mixed, stats], dim=-1)
         rate = 1.0 / self.fixed_decay_s if self.decay is None else softplus(self.decay(u) + self.decay_bias)
         keep = exp(-dt[:, None, None] * rate)
@@ -414,10 +460,7 @@ class ObjectMemory(nn.Module):
         slots = Slots(slots.alive, slots.value, slots.position, slots.velocity, slots.origin, slots.age_s, slots.since_match_s, slots.hit_rate, state)
 
         recalled = self.recall(encoded, state, _proximity(world, slots.position, self.sigma_m), slots.alive)
-        correction = self.rescore(cat([encoded, recalled], dim=-1))[..., 0]
-        if self.rescore_limit:
-            correction = self.rescore_limit * tanh(correction)
-        candidate_logit = _logit(cand_score) + (correction if self.rescore_gate is None else self.rescore_gate * correction)
+        candidate_logit = self._rescored(encoded, recalled, cand_score)
         slot_logit = self.coast(cat([state, stats], dim=-1))[..., 0]
         coasting = slots.alive & ~events.matched & ~refill
         slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position

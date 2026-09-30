@@ -221,8 +221,15 @@ def retirement_gap(spawn_xy: np.ndarray, lost_xy: np.ndarray, lost_t: np.ndarray
 @torch.no_grad()
 def recovery(model: ObjectMemory, split: Split, device, streams: int, threshold: float, slice_frames: int = 512) -> Dict[str, object]:
     """Per annotated person that no kept detection covers: does a live slot sit on them, and is it coasting? Plus every coasting
-    report's score, split by whether it would recover such a person, and the slots actually in use."""
+    report's score, split by whether it would recover such a person, and the slots actually in use.
+
+    Misses are also split by whether stage 2 produced **any** candidate near the person, at any score. That split is what says
+    how much headroom feeding the memory back into stage 2 could have (`TODO.md` A51 E12): where a candidate exists, rescoring
+    can already raise it and feedback is not needed; where none exists, no amount of rescoring invents one, and only feedback --
+    or a coasting report -- can reach that person. A live slot on such a person is the feedback-exclusive pool.
+    """
     missed, held, held_coasting, people, covered, frames = 0, 0, 0, 0, 0, 0
+    no_candidate, no_candidate_held, no_candidate_coasting = 0, 0, 0
     hit_scores, false_scores, in_use, held_value = [], [], [], []
     value_hit, value_false = [], []
     segments = sorted(evaluation_segments(split, 0, 0, 0), key=lambda seg: -seg[2])
@@ -267,6 +274,12 @@ def recovery(model: ObjectMemory, split: Split, device, streams: int, threshold:
                             held += 1
                             held_value.append(float(value[j][near].max()))
                             held_coasting += int((near & coasting[j]).any())
+                        # any candidate at all, whatever its score: if none, rescoring cannot reach this person and only
+                        # feedback into stage 2 (or a coasting report) can
+                        if not (valid[j] & (np.linalg.norm(xy[j] - person[None], axis=1) <= MATCH_RADIUS_M)).any():
+                            no_candidate += 1
+                            no_candidate_held += int(near.any())
+                            no_candidate_coasting += int((near & coasting[j]).any())
                     reports = coasting[j] & alive[j]
                     hits, falses = label_coasting_reports(slot_xy[j][reports], slot_p[j][reports], gaps, MATCH_RADIUS_M)
                     hit_scores.append(hits), false_scores.append(falses)
@@ -274,6 +287,7 @@ def recovery(model: ObjectMemory, split: Split, device, streams: int, threshold:
                     hits, falses = label_coasting_reports(slot_xy[j][reports], value[j][reports], gaps, MATCH_RADIUS_M)
                     value_hit.append(hits), value_false.append(falses)
     return dict(people=people, covered=covered, missed=missed, held=held, held_coasting=held_coasting, frames=frames,
+                no_candidate=no_candidate, no_candidate_held=no_candidate_held, no_candidate_coasting=no_candidate_coasting,
                 hit_scores=np.concatenate(hit_scores) if hit_scores else np.zeros(0),
                 false_scores=np.concatenate(false_scores) if false_scores else np.zeros(0),
                 in_use=np.asarray(in_use), held_value=np.asarray(held_value),
@@ -285,6 +299,12 @@ def summarise_recovery(data: Dict[str, object], threshold: float) -> Dict:
     """Whether the memory already holds the people it fails to report, and what reporting more of them would cost."""
     missed, held, frames = data["missed"], data["held"], max(data["frames"], 1)
     print(f"\n=== OF {data['people']:,} ANNOTATED PEOPLE, STAGE 3 AT {threshold} COVERS {data['covered']:,} ===")
+    gap, only_feedback = int(data["no_candidate"]), int(data["no_candidate_held"])
+    print(f"  of the {missed:,} missed, stage 2 produced **no candidate at all** for {gap:,} ({gap / max(missed, 1):.1%}); "
+          f"the other {missed - gap:,} have a candidate that rescoring can raise")
+    print(f"  the feedback-exclusive pool -- no candidate, but a live slot holding the person -- is **{only_feedback:,}** "
+          f"({only_feedback / max(data['people'], 1):.2%} of all annotated people), of which "
+          f"{int(data['no_candidate_coasting']):,} are already coasting and so reachable without feedback")
     print(f"  missed {missed:,}; of those a live slot already sits on **{held:,} ({held / max(missed, 1):.1%})**, "
           f"and it is coasting for {data['held_coasting']:,} ({data['held_coasting'] / max(missed, 1):.1%})")
     if len(data["held_value"]):
@@ -311,6 +331,8 @@ def summarise_recovery(data: Dict[str, object], threshold: float) -> Dict:
     return dict(threshold=threshold, people=int(data["people"]), covered=int(data["covered"]), missed=int(missed), held=int(held),
                 value_curve=value_rows,
                 held_coasting=int(data["held_coasting"]), frames=int(frames),
+                no_candidate=int(data["no_candidate"]), no_candidate_held=int(data["no_candidate_held"]),
+                no_candidate_coasting=int(data["no_candidate_coasting"]),
                 slots_in_use_median=float(np.median(data["in_use"])), slots_in_use_p99=float(np.percentile(data["in_use"], 99)),
                 slots_in_use_max=int(data["in_use"].max()), curve=rows)
 

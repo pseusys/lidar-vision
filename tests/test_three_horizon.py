@@ -504,6 +504,71 @@ class TestObjectMemory:
         model = ObjectMemory(SlotRules(capacity=8), dim=32, heads=4)
         assert not any(name.startswith("value_") for name, _ in model.named_parameters())
 
+    def test_without_the_exchange_its_parameters_are_gone_and_rescoring_still_starts_silent(self):
+        """E6 (`TODO.md` A51 phase 5): the slot-to-slot self-attention is one of the three learned mechanisms, has never been
+        ablated, and is the design's only O(K^2) term."""
+        torch.manual_seed(0)
+        full = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
+        torch.manual_seed(0)
+        without = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, exchange=False)
+        assert without.exchange is None and without.exchange_norm is None
+        removed = sum(p.numel() for p in full.exchange.parameters()) + sum(p.numel() for p in full.exchange_norm.parameters())
+        assert sum(p.numel() for p in full.parameters()) - sum(p.numel() for p in without.parameters()) == removed
+        for out, score, valid in self._run(without, 6):
+            assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-5)
+
+    def test_without_learned_matching_the_bookkeeping_still_carries_candidates_into_the_slots(self):
+        """E7: with the cross-attention gone, a slot reads only the candidate the hand-coded association gave it. The point is that
+        candidate information must still reach the slot state, or the ablation would be testing something else."""
+        torch.manual_seed(0)
+        full = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, feature_dim=6)
+        torch.manual_seed(0)
+        without = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, feature_dim=6, learned_match=False)
+        assert without.match is None
+        removed = sum(p.numel() for p in full.match.parameters())
+        assert sum(p.numel() for p in full.parameters()) - sum(p.numel() for p in without.parameters()) == removed
+
+        g = torch.Generator().manual_seed(5)
+        xy, score, valid = _memory_inputs(g)
+        pose, dt = torch.zeros(2, 3), torch.full((2,), 0.04)
+        features = torch.randn(2, 6, 6, generator=g)
+        first = without.step(xy, score, valid, pose, dt, without.initial_state(2), cand_features=features)
+        second = without.step(xy, score, valid, pose, dt, without.initial_state(2), cand_features=features + 2.0)
+        assert not torch.allclose(first.slots.state, second.slots.state)
+
+    def test_without_recurrence_only_the_bookkeeping_reaches_the_rescoring(self):
+        """E10 (`TODO.md` A51): with no slot state, the head sees a candidate and the statistics of the slot the hand-coded
+        association gave it -- value, age, time since match, displacement, speed, hit rate. If that matches the full model, the
+        memory is a tracker with a learned scorer rather than a learned memory."""
+        torch.manual_seed(0)
+        plain = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, recurrent=False)
+        for name in ("spawn", "match", "exchange", "exchange_norm", "update", "decay", "recall"):
+            assert getattr(plain, name) is None, name
+        assert plain.decay_bias is None
+        torch.manual_seed(0)
+        full = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
+        assert sum(p.numel() for p in plain.parameters()) < sum(p.numel() for p in full.parameters()) / 2
+        for out, score, valid in self._run(plain, 6):
+            assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-5)
+
+    def test_without_recurrence_the_slot_statistics_still_move_the_scores(self):
+        """The ablation must still be a memory of something: a slot that has been tracked for a while has to score differently
+        from one just created, or the arm would be testing an empty head."""
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, recurrent=False)
+        with torch.no_grad():                                  # a trained head, so the gate is not what silences it
+            model.rescore[-1].weight.normal_(0.0, 0.5)
+            model.rescore_gate.fill_(1.0)
+        xy, score = torch.tensor([[[0.0, 4.0]]]), torch.full((1, 1), 0.8)
+        valid, pose, dt = torch.ones(1, 1, dtype=torch.bool), torch.zeros(1, 3), torch.full((1,), 0.2)
+        slots = model.initial_state(1)
+        first = model.step(xy, score, valid, pose, dt, slots)   # the slot is created this frame
+        slots = first.slots
+        for _ in range(8):                                     # the same person, tracked for eight more frames
+            out = model.step(xy, score, valid, pose, dt, slots)
+            slots = out.slots
+        assert not torch.allclose(first.candidate_logit, out.candidate_logit, atol=1e-4)
+
     def test_decay_times_start_spread_over_the_short_and_long_horizons(self):
         model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, decay_init_s=(1.0, 60.0))
         times = 1.0 / torch.nn.functional.softplus(model.decay_bias)
@@ -684,6 +749,37 @@ class TestCalibrationDropout:
     def test_it_adds_no_parameters_so_existing_checkpoints_still_load(self):
         assert set(self._net(0.5).state_dict()) == set(self._net(0.0).state_dict())
         self._net(0.5).load_state_dict(_small_network().state_dict())
+
+
+class TestRescoringOff:
+    """A51 E12a: with the correction gone, the memory's only route to the loss is the prior it draws into stage 2."""
+
+    def _model(self, **kw):
+        torch.manual_seed(0)
+        return ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, **kw)
+
+    def test_the_candidate_keeps_its_own_logit_exactly(self):
+        # not "close to": with no correction term there is nothing to add, so the equality is exact bar the logit round trip
+        model = self._model(rescore=False)
+        for out, score, valid in TestObjectMemory()._run(model, 8):
+            assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-6)
+
+    def test_it_holds_no_rescoring_parameters(self):
+        off, on = self._model(rescore=False), self._model()
+        assert off.rescore is None and off.rescore_gate is None
+        assert not [name for name, _ in off.named_parameters() if name.startswith("rescore")]
+        assert [name for name, _ in on.named_parameters() if name.startswith("rescore")]
+        assert sum(p.numel() for p in off.parameters()) < sum(p.numel() for p in on.parameters())
+
+    def test_the_slots_and_the_coasting_head_are_untouched(self):
+        # only the rescoring path goes; everything the memory is for still has to run
+        off = self._model(rescore=False)
+        outs = TestObjectMemory()._run(off, 8)
+        assert any(out.slots.alive.any() for out, _, _ in outs)
+        assert all(torch.isfinite(out.slot_logit).all() for out, _, _ in outs)
+
+    def test_a_gate_is_never_created_even_when_one_is_asked_for(self):
+        assert self._model(rescore=False, rescore_gate=True).rescore_gate is None
 
 
 class TestRenderPrior:

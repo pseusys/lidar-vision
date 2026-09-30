@@ -17,9 +17,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 from follow_the_drow.detectors.three_horizon import MAX_RANGE_M, CalibrationNetwork, ObjectMemory, SlotRules
 from train_three_horizon import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, clip_frames, clip_length, coast_targets, decode_votes, evaluate, evaluation_segments,
-    FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates,
-    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, coasting_hits, load_resume, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
+    FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES,
+    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, coasting_hits, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
 )
+
+
+def _small_calibration():
+    """A calibration network small enough for a unit test, with no prior channels -- the shape E12a's control arm trains."""
+    torch.manual_seed(0)
+    angles = torch.from_numpy(np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32))
+    return CalibrationNetwork(angles, channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1)
 
 
 class TestCandidateTargets:
@@ -480,6 +487,92 @@ class TestJointStep:
         assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in net.parameters())
 
 
+class TestOraclePrior:
+    """A51 E12b: the prior a perfect memory would draw, to put a ceiling on what any feedback could buy."""
+
+    def _angles(self):
+        return torch.from_numpy(np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32))
+
+    def test_every_person_marks_its_own_sector_at_full_value(self):
+        # 6 sectors of 30 degrees from -90; straight ahead is sector 3, hard left is sector 5
+        prior = oracle_prior([np.array([[0.0, 2.0], [-2.0, 0.1]], np.float32)], self._angles(), 6, torch.device("cpu"))
+        assert prior.shape == (1, 2, 6)
+        assert prior[0, 0].tolist() == pytest.approx([0, 0, 0, 1, 0, 1])
+        assert torch.equal(prior[0, 0], prior[0, 1])       # a perfect memory is certain of both value and person
+
+    def test_an_unannotated_frame_draws_nothing_rather_than_something_stale(self):
+        # the decision recorded in TODO A51: absent beats stale, so the oracle is never wrong, only silent
+        prior = oracle_prior([np.zeros((0, 2), np.float32)], self._angles(), 6, torch.device("cpu"))
+        assert prior.shape == (1, 2, 6) and prior.abs().sum() == 0
+
+    def test_streams_are_padded_independently(self):
+        people = [np.array([[0.0, 2.0]], np.float32), np.zeros((0, 2), np.float32), np.array([[-2.0, 0.1], [0.0, 2.0]], np.float32)]
+        prior = oracle_prior(people, self._angles(), 6, torch.device("cpu"))
+        assert prior.shape == (3, 2, 6)
+        assert prior[0, 0].tolist() == pytest.approx([0, 0, 0, 1, 0, 0])
+        assert prior[1, 0].abs().sum() == 0
+        assert prior[2, 0].tolist() == pytest.approx([0, 0, 0, 1, 0, 1])
+
+    def test_a_person_outside_the_field_of_view_draws_nothing(self):
+        prior = oracle_prior([np.array([[0.0, -2.0]], np.float32)], self._angles(), 6, torch.device("cpu"))
+        assert prior.abs().sum() == 0
+
+
+class TestJointStepPriorOverride:
+    """A51 E12b: an explicit prior replaces the one the slots would have drawn, which is how the oracle is fed in."""
+
+    def test_the_given_prior_is_the_one_that_reaches_stage_2(self):
+        net, memory, scans, poses, dt = TestJointStep()._parts()
+        given = torch.full((1, 2, 6), 0.5)
+        with torch.no_grad():
+            joint, _ = joint_step(net, memory, scans[:, 0], poses[:, 0], dt, None, prior=given)
+        assert torch.equal(joint.prior, given)
+
+    def test_it_overrides_a_memory_that_would_have_drawn_its_own(self):
+        net, memory, scans, poses, dt = TestJointStep()._parts()
+        with torch.no_grad():
+            _, state = joint_step(net, memory, scans[:, 0], poses[:, 0], dt, None)
+            drawn, _ = joint_step(net, memory, scans[:, 1], poses[:, 1], dt, state)
+            given = torch.zeros(1, 2, 6)
+            forced, _ = joint_step(net, memory, scans[:, 1], poses[:, 1], dt, state, prior=given)
+        assert drawn.prior.abs().sum() > 0                  # the slots had something to say
+        assert forced.prior.abs().sum() == 0                # and the override silenced it
+
+    def test_a_different_prior_changes_stage_2_once_the_channels_are_trained(self):
+        net, memory, scans, poses, dt = TestJointStep()._parts()
+        with torch.no_grad():
+            net.aggregate.weight[:, -2:].normal_()          # the prior starts silent, so give it a voice first
+            quiet, _ = joint_step(net, memory, scans[:, 0], poses[:, 0], dt, None, prior=torch.zeros(1, 2, 6))
+            loud, _ = joint_step(net, memory, scans[:, 0], poses[:, 0], dt, None, prior=torch.ones(1, 2, 6))
+        assert not torch.allclose(quiet.logit, loud.logit, atol=1e-5)
+
+
+class TestPriorModes:
+    """A51 E12: which prior stage 2 is fed back is a three-way choice, and a typo must not silently pick the default."""
+
+    def test_an_unknown_mode_is_refused_before_any_work(self):
+        with pytest.raises(ValueError, match="unknown prior_mode"):
+            evaluate_joint(None, None, None, [], 1, torch.device("cpu"), 1, "oracel")
+
+    def test_the_three_known_modes_are_spelled_the_way_the_flag_sets_them(self):
+        assert PRIOR_MODES == ("slots", "oracle", "zero")
+
+
+class TestCalibrationNetworkWithoutPrior:
+    """A51 E12a's control arm: the same run with no feedback channels at all."""
+
+    def test_a_network_built_without_prior_channels_runs_and_ignores_one(self):
+        checkpoint = dict(model=_small_calibration().state_dict(), args={})
+        angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
+        net = calibration_network(checkpoint, angles, prior_channels=0, channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1)
+        assert net.prior_channels == 0
+        assert net.aggregate.weight.shape[1] == 2 * 32
+        ranges = torch.from_numpy((np.random.default_rng(0).random((1, 6, 48)) * 4 + 1).astype(np.float32))
+        with torch.no_grad():
+            logit, _, _ = net(ranges, torch.zeros(1, 6, 3))
+        assert logit.shape == (1, 48) and torch.isfinite(logit).all()
+
+
 class TestRecordingBounds:
 
     def test_offsets_and_lengths_come_from_each_frames_recording_start(self):
@@ -635,6 +728,48 @@ class TestPlateauSchedule:
         assert min(rates) == pytest.approx(1e-4)           # and it never goes below the floor
 
 
+class TestPeriodicReset:
+    """E1, the memory-horizon curve (`TODO.md` A51 phase 5): emptying the memory every `interval_s` at evaluation and scoring the
+    result says how long a memory the model actually uses. The project measured the convolution's horizon and never the slots'."""
+
+    def test_no_interval_never_resets(self):
+        due, since = periodic_reset(np.zeros(2), np.full(2, 0.5), None)
+        assert not due.any() and since.tolist() == [0.5, 0.5]
+
+    def test_a_stream_resets_once_its_interval_has_elapsed_and_starts_counting_again(self):
+        since = np.zeros(1)
+        seen = []
+        for _ in range(6):
+            due, since = periodic_reset(since, np.full(1, 0.4), 1.0)
+            seen.append(bool(due[0]))
+        assert seen == [False, False, True, False, False, True]      # 0.4, 0.8, 1.2 -> reset, 0.4, 0.8, 1.2 -> reset
+
+    def test_streams_are_independent(self):
+        due, since = periodic_reset(np.array([0.9, 0.1]), np.full(2, 0.2), 1.0)
+        assert due.tolist() == [True, False]
+        assert since.tolist() == pytest.approx([0.0, 0.3])
+
+
+class TestPerturbPoses:
+    """E2, odometry robustness: slots live in room coordinates, so the design's central claim is bought with odometry. A robot's
+    odometry drifts, and D1 so far answers only the perfect-odometry case."""
+
+    def test_no_noise_leaves_the_pose_alone(self):
+        pose = np.array([[1.0, 2.0, 0.5]], np.float32)
+        assert np.allclose(perturb_poses(pose, np.zeros(1), 0.0, 0.0), pose)
+
+    def test_drift_grows_with_elapsed_time_and_is_the_same_for_one_stream(self):
+        pose = np.zeros((1, 3), np.float32)
+        near = perturb_poses(pose, np.array([1.0]), 0.1, 0.0)
+        far = perturb_poses(pose, np.array([10.0]), 0.1, 0.0)
+        assert np.linalg.norm(far[0, :2]) > np.linalg.norm(near[0, :2])
+        assert np.allclose(perturb_poses(pose, np.array([1.0]), 0.1, 0.0), near)      # deterministic in elapsed time
+
+    def test_heading_drift_turns_the_pose(self):
+        pose = np.zeros((1, 3), np.float32)
+        assert abs(float(perturb_poses(pose, np.array([10.0]), 0.0, 1.0)[0, 2])) > 0.01
+
+
 class TestResume:
     """A driver bugcheck took a healthy 3.5 h run with it on 2026-09-22 (`memory/gotchas.md`), and every interruption this week cost
     a whole run. A resumed run is not bit-identical to an uninterrupted one -- GPU nondeterminism already means a seed does not
@@ -684,6 +819,26 @@ class TestResume:
         restored.__dict__.update(best.state())
         assert not restored.offer(0.7, {"model": 2})                             # a worse epoch after the crash cannot overwrite it
         assert restored.offer(0.9, {"model": 3})
+
+
+class TestGradientVerdict:
+    """What to do with one bad iteration. A gradient norm that overflows float32 is survivable -- `clip_grad_norm_` zeroes the
+    update and training continues -- and treating it as fatal cost a healthy 5 h run at its best epoch (`TODO.md` A51 E6,
+    2026-09-27). A non-finite loss is not survivable, and neither is an endless stream of overflowing steps."""
+
+    def test_a_healthy_iteration_takes_its_step(self):
+        assert gradient_verdict(0.8, 1.2, skipped=0) == "take"
+
+    def test_an_overflowing_gradient_norm_skips_the_step(self):
+        assert gradient_verdict(0.8, float("inf"), skipped=0) == "skip"
+        assert gradient_verdict(0.8, float("nan"), skipped=3) == "skip"
+
+    def test_too_many_skips_in_one_epoch_stop_the_run(self):
+        assert gradient_verdict(0.8, float("inf"), skipped=GRAD_SKIP_LIMIT) == "stop"
+
+    def test_a_non_finite_loss_always_stops(self):
+        assert gradient_verdict(float("nan"), 1.0, skipped=0) == "stop"
+        assert gradient_verdict(float("inf"), 1.0, skipped=0) == "stop"
 
 
 class TestNonFiniteSummary:

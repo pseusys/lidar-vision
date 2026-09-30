@@ -60,6 +60,7 @@ CANDIDATE_FLOOR = 0.01
 TOP_P = 64
 OPERATING_THRESHOLD = 0.3
 MIN_REPORTED_SCORE = 1e-3
+GRAD_SKIP_LIMIT = 10                # overflowing gradient norms tolerated in one epoch before a run is called broken
 CANDIDATE_AP_TOLERANCE = 0.01      # the candidates' val AP is fixed data; this much drift means the device state is bad
 PROBABILITY_EPS = 1e-6
 FP_BUDGET_TOLERANCE = 1e-9
@@ -302,6 +303,20 @@ def plateau_schedule(optimizer: torch.optim.Optimizer, factor: float, patience_e
     return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=factor, patience=patience_evals, min_lr=min_lr)
 
 
+def gradient_verdict(loss: float, grad_norm: float, skipped: int, limit: int = GRAD_SKIP_LIMIT) -> str:
+    """What to do with this iteration: `take` it, `skip` it, or `stop` the run.
+
+    A gradient norm that overflows float32 is survivable: `clip_grad_norm_` divides by it, so the update is zeroed and the next
+    iteration continues from the same weights. Treating that as fatal once ended a healthy run at its best epoch (`TODO.md` A51 E6).
+    A non-finite loss means the model itself is gone, and a stream of overflowing steps means it is going.
+    """
+    if not math.isfinite(loss):
+        return "stop"
+    if math.isfinite(grad_norm):
+        return "take"
+    return "stop" if skipped >= limit else "skip"
+
+
 def non_finite_summary(named: Dict[str, torch.Tensor]) -> str:
     """Which of these tensors hold a NaN or an infinity, and how many. The epoch-level guard fires up to 151 iterations after a run
     breaks and its traceback points at the guard itself, so this names what was already broken at the iteration that did it."""
@@ -373,6 +388,30 @@ def load_resume(path: Path, resume: bool) -> Optional[Dict[str, object]]:
     except Exception as error:
         print(f"ignoring {path}: {error}", flush=True)
         return None
+
+
+def periodic_reset(since_s: np.ndarray, dt: np.ndarray, interval_s: Optional[float]):
+    """Which streams `[B]` empty their memory this frame, and the updated time since each last did (`TODO.md` A51 E1). With no
+    interval nothing resets, which is how a run is scored normally."""
+    elapsed = since_s + dt
+    if not interval_s:
+        return np.zeros(len(elapsed), dtype=bool), elapsed
+    due = elapsed >= interval_s
+    return due, np.where(due, 0.0, elapsed)
+
+
+def perturb_poses(pose: np.ndarray, elapsed_s: np.ndarray, drift_m_per_s: float, heading_deg_per_s: float) -> np.ndarray:
+    """Odometry as a drifting estimate rather than ground truth (`TODO.md` A51 E2): a translation error growing at
+    `drift_m_per_s` and a heading error at `heading_deg_per_s`, both a deterministic function of how long each stream has been
+    running, so the error accumulates the way real odometry drifts instead of jittering frame to frame."""
+    if not drift_m_per_s and not heading_deg_per_s:
+        return pose
+    out = np.array(pose, dtype=np.float32, copy=True)
+    angle = 2.0 * np.pi * np.sin(elapsed_s)                      # a slow wander, not a straight bias
+    out[:, 0] += (drift_m_per_s * elapsed_s * np.cos(angle)).astype(np.float32)
+    out[:, 1] += (drift_m_per_s * elapsed_s * np.sin(angle)).astype(np.float32)
+    out[:, 2] += np.radians(heading_deg_per_s * elapsed_s * np.sin(0.5 * elapsed_s)).astype(np.float32)
+    return out
 
 
 def memory_schedule(optimizer: torch.optim.Optimizer, schedule: str, max_epochs: float, iterations: int, factor: float, patience: int,
@@ -459,7 +498,7 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
     The slot capacity and the rescoring arms (`TODO.md` A51: the scalar gate, and the correction's limit) change what parameters
     exist, so they are read from the checkpoint's `args` (stored as strings); a checkpoint written before a flag existed falls back
     to the constructor's own default. `capacity` replays the memory at another slot count while keeping every other rule the
-    checkpoint was trained with; `overrides` go straight to the constructor.
+    checkpoint was trained with; `overrides` go straight to the constructor and win over what the checkpoint recorded.
     """
     args = checkpoint.get("args", {})
     parameters = signature(ObjectMemory).parameters
@@ -467,12 +506,19 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
              "rescore_limit": parameters["rescore_limit"].default if args.get("rescore_limit") is None else float(args["rescore_limit"]),
              "room_frame": parameters["room_frame"].default if args.get("room_frame") is None else literal_eval(args["room_frame"]),
              "fixed_decay_s": parameters["fixed_decay_s"].default if args.get("fixed_decay_s") is None else float(args["fixed_decay_s"]),
-             "learn_value": parameters["learn_value"].default if args.get("learn_value") is None else literal_eval(args["learn_value"])}
+             "learn_value": parameters["learn_value"].default if args.get("learn_value") is None else literal_eval(args["learn_value"]),
+             "exchange": parameters["exchange"].default if args.get("exchange") is None else literal_eval(args["exchange"]),
+             "learned_match": parameters["learned_match"].default if args.get("learned_match") is None else literal_eval(args["learned_match"]),
+             "recurrent": parameters["recurrent"].default if args.get("recurrent") is None else literal_eval(args["recurrent"]),
+             "rescore": parameters["rescore"].default if args.get("rescore") is None else literal_eval(args["rescore"])}
     slots = capacity if capacity else (parameters["rules"].default.capacity if args.get("slots") is None else int(args["slots"]))
     rules = SlotRules(capacity=slots,
                       latest_value=SlotRules().latest_value if args.get("latest_value") is None else literal_eval(args["latest_value"]))
-    memory = ObjectMemory(rules, feature_dim=feature_dim, **shape, **overrides)
-    memory.load_state_dict(checkpoint["model"])
+    memory = ObjectMemory(rules, feature_dim=feature_dim, **{**shape, **overrides})
+    state = checkpoint["model"]
+    if memory.rescore is None:                           # A51 E12a drops the head, so its trained weights have nowhere to go
+        state = {k: v for k, v in state.items() if not k.startswith("rescore")}
+    memory.load_state_dict(state)
     return memory
 
 
@@ -614,14 +660,19 @@ def evaluation_segments(split, windows: int, window_frames: int, warmup_frames: 
 
 @torch.no_grad()
 def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: int, segments: List[Tuple[int, int, int, int]],
-             slice_frames: int = 512, extra_radii: Sequence[float] = ()) -> Dict[str, Dict[str, float]]:
+             slice_frames: int = 512, extra_radii: Sequence[float] = (), reset_every_s: Optional[float] = None,
+             drift_m_per_s: float = 0.0, heading_deg_per_s: float = 0.0) -> Dict[str, Dict[str, float]]:
     """Play each segment (recording, first frame, frames, warm-up) from empty memory, `streams` at a time, and score every
     `stride`-th annotated frame after its warm-up: the candidates alone, and the candidates rescored plus coasting slots.
     Frames are gathered `slice_frames` at a time, so memory is bounded by streams x slice rather than by the longest recording.
 
     The memory's scores also carry its own operating point at the candidates' false positives per frame, coasting reports at 0.3 per
     frame with the share landing on people no kept candidate covers, and the median rescoring shift in logits on candidates that are a
-    person and on the rest (`TODO.md` A51 0c); `extra_radii` adds AP at further match radii to both, as `ap_<radius>m`."""
+    person and on the rest (`TODO.md` A51 0c); `extra_radii` adds AP at further match radii to both, as `ap_<radius>m`.
+
+    `reset_every_s` empties every stream's memory on that period, which measures how long a memory the model actually uses (A51
+    E1); `drift_m_per_s` and `heading_deg_per_s` corrupt the odometry the slots are keyed on, which prices the room-frame design
+    against a robot whose odometry drifts (A51 E2)."""
     model.eval()
     raw, memory = [], []
     shift_person, shift_other = [], []
@@ -636,13 +687,20 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
             scored = np.nonzero(split.data.annotated[split.offsets[s] + first + warmup:split.offsets[s] + first + frames])[0] + warmup
             chosen[b, scored[::stride]] = True
         slots = model.initial_state(len(group), device)
+        since_reset, since_start = np.zeros(len(group)), np.zeros(len(group))
         for t0 in range(0, length, slice_frames):
             t1 = min(t0 + slice_frames, length)
             batch = gather(split, recording.repeat(t1 - t0, 1), frame[:, t0:t1], device)
             for t in range(t0, t1):
                 i = t - t0
-                out = model.step(batch["xy"][:, i], batch["score"][:, i], batch["valid"][:, i], batch["pose"][:, i], batch["dt"][:, i], slots,
-                                 reset=torch.full((len(group),), t == 0, dtype=torch.bool, device=device), cand_features=batch["features"][:, i])
+                step_s = batch["dt"][:, i].cpu().numpy()
+                due, since_reset = periodic_reset(since_reset, step_s, reset_every_s)
+                since_start = since_start + step_s
+                pose = batch["pose"][:, i]
+                if drift_m_per_s or heading_deg_per_s:
+                    pose = torch.from_numpy(perturb_poses(pose.cpu().numpy(), since_start, drift_m_per_s, heading_deg_per_s)).to(device)
+                out = model.step(batch["xy"][:, i], batch["score"][:, i], batch["valid"][:, i], pose, batch["dt"][:, i], slots,
+                                 reset=torch.from_numpy(due | (t == 0)).to(device), cand_features=batch["features"][:, i])
                 slots = out.slots
                 rows = np.nonzero(chosen[:, t])[0]
                 if not len(rows):
@@ -721,13 +779,16 @@ def train_memory(args) -> None:
 
     model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value), feature_dim=splits["train"].data.features.shape[-1],
                          rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame,
-                         fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value).to(device)
+                         fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value, exchange=args.exchange,
+                         learned_match=args.learned_match, recurrent=args.recurrent).to(device)
     print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}; rescoring "
           f"{'through a scalar gate' if args.rescore_gate else 'from a zero-initialised head'}, "
           f"{f'limited to +-{args.rescore_limit:g} logits' if args.rescore_limit else 'unlimited'}; slots in "
           f"{'room' if args.room_frame else 'sensor'} coordinates, value by "
           f"{'the latest score' if args.latest_value else 'accumulation'}{' (learned)' if args.learn_value else ''}, decay "
-          f"{f'fixed at {args.fixed_decay_s:g} s' if args.fixed_decay_s else 'learned per slot'}", flush=True)
+          f"{f'fixed at {args.fixed_decay_s:g} s' if args.fixed_decay_s else 'learned per slot'}"
+          f"{'' if args.exchange else ', no slot exchange'}{'' if args.learned_match else ', no learned matching'}"
+          f"{'' if args.recurrent else ', no slot state at all'}", flush=True)
     start = time.time()
     history, done_hours, first_stage, first_epoch = [], 0.0, 0, 0
     if resumed:
@@ -759,7 +820,7 @@ def train_memory(args) -> None:
             schedule.load_state_dict(resumed["schedule"])
             stopper.__dict__.update(resumed["stopper"])
         while True:
-            t_epoch, losses = time.time(), []
+            t_epoch, losses, skipped = time.time(), [], 0
             for _ in range(iterations):
                 seq, frame, reset = sampler.next_chunk(length, args.reset_prob)
                 batch = gather(splits["train"], seq, frame, device)
@@ -780,13 +841,19 @@ def train_memory(args) -> None:
                 loss.backward()
                 grad_norm = float(torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP))
                 value = loss.item()
-                if not math.isfinite(value) or not math.isfinite(grad_norm):
-                    # the epoch-level guard would fire up to `iterations` steps later, pointing at itself; stop where it broke
+                verdict = gradient_verdict(value, grad_norm, skipped)
+                if verdict != "take":
+                    # the epoch-level guard would fire up to `iterations` steps later, pointing at itself; report where it broke
+                    where = f"chunk {chunk_s:g} s, epoch {epoch + 1}, iteration {len(losses) + 1} of {iterations}"
+                    diagnosis = nan_diagnosis(model, out, value, grad_norm)
+                    if verdict == "skip":
+                        skipped += 1
+                        print(f"  skipped a step at {where} ({skipped} of {GRAD_SKIP_LIMIT} allowed this epoch): {diagnosis}", flush=True)
+                        continue
                     path = args.out_dir / f"{args.mode}_nan.pth"
                     torch.save(dict(model=model.state_dict(), chunk_s=chunk_s, epoch=epoch + 1, seq=seq, frame=frame, reset=reset,
                                     args={k: str(v) for k, v in vars(args).items()}), path)
-                    raise RuntimeError(f"not finite at chunk {chunk_s:g} s, epoch {epoch + 1}, iteration {len(losses) + 1} of {iterations}: "
-                                       f"{nan_diagnosis(model, out, value, grad_norm)}\n  chunk and weights saved to {path}")
+                    raise RuntimeError(f"not finite at {where}: {diagnosis}\n  chunk and weights saved to {path}")
                 optimizer.step()
                 if step_every_iteration:
                     schedule.step()
@@ -907,21 +974,47 @@ class JointOutput:
     memory: MemoryOutput
 
 
+NO_PEOPLE = np.zeros((0, 2), np.float32)
+PRIOR_MODES = ("slots", "oracle", "zero")       # what stage 2 is fed back: the memory's own, ground truth, or nothing
+
+
+def oracle_prior(people: Sequence[np.ndarray], angles: torch.Tensor, sectors: int, device) -> torch.Tensor:
+    """The prior a perfect memory would draw, `[B, 2, S]`: every annotated person marked in its sector at full value and full
+    person probability (A51 E12b), which bounds what any feedback design could buy.
+
+    A frame with no annotation draws nothing rather than carrying the last one forward: stale positions would stop this being an
+    upper bound, and it costs nothing here, because the oracle holds no state and every frame that is scored is annotated.
+    """
+    width = max((len(p) for p in people), default=0)
+    xy = torch.zeros(len(people), max(width, 1), 2, device=device)
+    alive = torch.zeros(len(people), max(width, 1), dtype=torch.bool, device=device)
+    for b, p in enumerate(people):
+        if len(p):
+            xy[b, :len(p)] = torch.as_tensor(np.asarray(p, np.float32), device=device)
+            alive[b, :len(p)] = True
+    ones = torch.ones(xy.shape[:2], device=device)
+    return render_prior(xy, ones, ones, alive, angles, sectors)
+
+
 def joint_step(net: CalibrationNetwork, memory: ObjectMemory, ranges: torch.Tensor, pose: torch.Tensor, dt: torch.Tensor,
-               state: Optional[JointState]) -> Tuple[JointOutput, JointState]:
+               state: Optional[JointState], prior: Optional[torch.Tensor] = None) -> Tuple[JointOutput, JointState]:
     """One frame `[B, N]` of the whole detector for streams that start together (`state` None starts all of them from empty memory):
     the slots' predicted positions drawn into stage 2's bottleneck, stage 2, candidates decoded with DROW's vote grid and their
-    features pooled from stage 2's decoder -- the path by which stage 3's loss reaches stage 2 -- and stage 3."""
+    features pooled from stage 2's decoder -- the path by which stage 3's loss reaches stage 2 -- and stage 3.
+
+    `prior` `[B, 2, N/8]` replaces what the slots would have drawn and skips drawing it, which is how A51 E12b feeds the oracle."""
     b, n = ranges.shape
     device = ranges.device
     sectors = n // 8
     if state is None:
         calibration, slots = None, memory.initial_state(b, device)
-        prior = torch.zeros(b, 2, sectors, device=device)
+        if prior is None:
+            prior = torch.zeros(b, 2, sectors, device=device)
     else:
         calibration, slots = state.calibration, state.slots
-        predicted = world_to_sensor(slots.position + slots.velocity * dt[:, None, None], pose)
-        prior = render_prior(predicted, slots.value, torch.sigmoid(state.slot_logit), slots.alive, net.angles, sectors)
+        if prior is None:
+            predicted = world_to_sensor(slots.position + slots.velocity * dt[:, None, None], pose)
+            prior = render_prior(predicted, slots.value, torch.sigmoid(state.slot_logit), slots.alive, net.angles, sectors)
     logit, votes, features, calibration = net.step(ranges, pose, calibration, prior)
     angles = net.angles.cpu().numpy()
     prob, votes_np, scans = torch.sigmoid(logit).detach().cpu().numpy(), votes.detach().cpu().numpy(), ranges.cpu().numpy()
@@ -1109,10 +1202,16 @@ def detach_joint(state: JointState) -> JointState:
 
 @torch.no_grad()
 def evaluate_joint(net: CalibrationNetwork, memory: ObjectMemory, split: FrameSplit, segments: List[Tuple[int, int, int, int]], stride: int,
-                   device, streams: int) -> Dict[str, Dict[str, float]]:
+                   device, streams: int, prior_mode: str = "slots") -> Dict[str, Dict[str, float]]:
     """Play each segment (recording, first frame, frames, warm-up) through the whole detector from empty memory, `streams` at a time,
     and score every `stride`-th annotated frame after its warm-up: stage 2's candidates alone (the memory's feedback already in them),
-    and the candidates rescored plus coasting slots."""
+    and the candidates rescored plus coasting slots.
+
+    `prior_mode` picks what stage 2 is fed back: `slots` is the memory's own, `oracle` a ground-truth one (A51 E12b's ceiling), and
+    `zero` nothing at all. Scoring one trained network at `zero` against the mode it was trained with is what measures the feedback
+    path's contribution, without a second training run that could compensate for the missing channels."""
+    if prior_mode not in PRIOR_MODES:
+        raise ValueError(f"unknown prior_mode {prior_mode!r}; expected one of {', '.join(PRIOR_MODES)}")
     net.eval(), memory.eval()
     offsets, lengths = recording_bounds(split.start)
     periods = frame_periods(split.time, offsets, lengths, DT_AVERAGE_FRAMES)
@@ -1130,8 +1229,13 @@ def evaluate_joint(net: CalibrationNetwork, memory: ObjectMemory, split: FrameSp
         for t in range(length):
             f = frame[:, t]
             dt = periods[f]
+            if prior_mode == "oracle":
+                prior = oracle_prior([split.people_xy[people_at[int(x)]] if int(x) in people_at else NO_PEOPLE for x in f],
+                                     net.angles, split.scans.shape[-1] // 8, device)
+            else:
+                prior = torch.zeros(len(f), 2, split.scans.shape[-1] // 8, device=device) if prior_mode == "zero" else None
             joint, state = joint_step(net, memory, torch.from_numpy(split.scans[f]).to(device), torch.from_numpy(split.poses[f]).to(device),
-                                      torch.from_numpy(dt.astype(np.float32)).to(device), state)
+                                      torch.from_numpy(dt.astype(np.float32)).to(device), state, prior=prior)
             rows = np.nonzero(chosen[:, t])[0]
             if not len(rows):
                 continue
@@ -1155,8 +1259,12 @@ def train_joint(args) -> None:
     device, _ = detect_device()
     splits = {name: first_recordings(load_frames(name), args.limit_recordings) for name in SPLITS}
     angles = frog_laser_angles(720)
-    net = calibration_network(torch.load(args.stage2, map_location="cpu"), angles, prior_channels=PRIOR_CHANNELS).to(device)
-    memory = object_memory(torch.load(args.memory, map_location=device, weights_only=False), net.head.in_channels).to(device)
+    net = calibration_network(torch.load(args.stage2, map_location="cpu"), angles, prior_channels=args.prior_channels).to(device)
+    memory = object_memory(torch.load(args.memory, map_location=device, weights_only=False), net.head.in_channels, rescore=args.rescore).to(device)
+    mode = "oracle" if args.oracle_prior else "slots"
+    route = "on" if args.rescore else "off, so the prior is the memory's only route to the loss"
+    print(f"stage 2 feedback channels: {args.prior_channels}"
+          f"{' (drawn from ground truth)' if args.oracle_prior else ''}; rescoring correction: {route}", flush=True)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     best = BestCheckpoint(args.out_dir / "step3b_joint.best.pth")
 
@@ -1199,9 +1307,11 @@ def train_joint(args) -> None:
                 state = None
             f = int(offsets[seq[0, t]] + frame[0, t])
             dt = float(periods[f])
-            joint, state = joint_step(net, memory, torch.from_numpy(train.scans[f][None]).to(device), torch.from_numpy(train.poses[f][None]).to(device),
-                                      torch.tensor([dt], dtype=torch.float32, device=device), state)
             i = people_at.get(f)
+            prior = oracle_prior([train.people_xy[i] if i is not None else NO_PEOPLE], net.angles,
+                                 train.scans.shape[-1] // 8, device) if args.oracle_prior else None
+            joint, state = joint_step(net, memory, torch.from_numpy(train.scans[f][None]).to(device), torch.from_numpy(train.poses[f][None]).to(device),
+                                      torch.tensor([dt], dtype=torch.float32, device=device), state, prior=prior)
             if i is not None:
                 loss = loss + joint_frame_loss(joint, anchor_ranges(train.scans[f][None], net.max_range_m), angles, [train.people_polar[i]], [train.people_xy[i]])
                 annotated += 1
@@ -1216,7 +1326,7 @@ def train_joint(args) -> None:
         if step % eval_every:
             continue
         epoch, train_s = step / iterations, time.time() - t_block
-        result = evaluate_joint(net, memory, val, val_segments, args.val_stride, device, args.val_windows)
+        result = evaluate_joint(net, memory, val, val_segments, args.val_stride, device, args.val_windows, mode)
         improved = stopper.update(result["memory"]["ap"])
         overall = best.offer(result["memory"]["ap"], dict(net=net.state_dict(), memory=memory.state_dict(), epoch=epoch, val=result,
                                                           args={k: str(v) for k, v in vars(args).items()}))
@@ -1239,12 +1349,20 @@ def train_joint(args) -> None:
     else:
         print("no validation score was ever defined, so no checkpoint was selected: testing the last weights", flush=True)
     test = splits["test"]
-    result = evaluate_joint(net, memory, test, evaluation_segments(SimpleNamespace(lengths=recording_bounds(test.start)[1]), 0, 0, 0), 1, device, args.val_windows)
+    segments = evaluation_segments(SimpleNamespace(lengths=recording_bounds(test.start)[1]), 0, 0, 0)
+    result = evaluate_joint(net, memory, test, segments, 1, device, args.val_windows, mode)
+    # the same trained network with the feedback channels fed nothing: the difference is what the prior actually contributes (A51 E12)
+    silent = evaluate_joint(net, memory, test, segments, 1, device, args.val_windows, "zero") if args.prior_channels else result
+    contribution = 100 * (result["candidates"]["ap"] - silent["candidates"]["ap"])
+    print(f"\nfeedback contribution: stage 2 AP {result['candidates']['ap']:.2%} with the {mode} prior against "
+          f"{silent['candidates']['ap']:.2%} with it silenced -- {contribution:+.2f} pp", flush=True)
     print(f"\ntest, every annotated frame: stage 2 with feedback AP {result['candidates']['ap']:.2%} P {result['candidates']['precision']:.1%} "
           f"R {result['candidates']['recall']:.1%} FP {result['candidates']['fp_per_frame']:.3f} FN {result['candidates']['fn_per_frame']:.3f}"
           f"  |  whole detector AP {result['memory']['ap']:.2%} P {result['memory']['precision']:.1%} R {result['memory']['recall']:.1%} "
           f"FP {result['memory']['fp_per_frame']:.3f} FN {result['memory']['fn_per_frame']:.3f}  exchange rate {result['memory']['exchange_rate']:.2f}", flush=True)
-    (args.out_dir / "step3b_results.json").write_text(json.dumps(dict(history=history, test=result), indent=1), encoding="utf-8")
+    (args.out_dir / "step3b_results.json").write_text(json.dumps(dict(history=history, test=result, test_prior_silenced=silent,
+                                                                      prior_mode=mode, prior_channels=args.prior_channels,
+                                                                      rescore=args.rescore), indent=1), encoding="utf-8")
     print(f"wrote {args.out_dir / 'step3b_results.json'}", flush=True)
 
 
@@ -1359,6 +1477,15 @@ def main() -> None:
         step1.add_argument("--coast-weight", type=float, default=1.0,
                            help="weight of the coasting loss against the candidate loss; the coasting head holds a live slot on 95.5%% of the "
                                 "people stage 3 fails to report, yet ranks them too low to report (TODO A51 O2)")
+        step1.add_argument("--recurrent", action=argparse.BooleanOptionalAction, default=True,
+                           help="carry a learned state per slot; --no-recurrent leaves the rescoring head a candidate and the statistics of "
+                                "the slot matched to it, which tests whether this is a learned memory or a tracker with a scorer (TODO A51 E10)")
+        step1.add_argument("--exchange", action=argparse.BooleanOptionalAction, default=True,
+                           help="self-attention between slots; --no-exchange removes it, which is the design's only O(K^2) term (TODO A51 E6)")
+        step1.add_argument("--learned-match", action=argparse.BooleanOptionalAction, default=True,
+                           help="cross-attention from slots to candidates; --no-learned-match leaves each slot the candidate its hand-coded "
+                                "association matched (TODO A51 E7). Both flags off together is a per-slot recurrent memory, the baseline "
+                                "a reviewer would ask for")
         step1.add_argument("--room-frame", action=argparse.BooleanOptionalAction, default=True,
                            help="keep slots in room coordinates, so a static object keeps zero velocity; --no-room-frame keeps them in "
                                 "the sensor frame, the ablation of the design's central claim (TODO A51 D1)")
@@ -1402,6 +1529,12 @@ def main() -> None:
     step4.add_argument("--streams", type=int, default=16, help="recordings played at once")
     step4.add_argument("--limit-recordings", type=int, default=0, help="only the first N test recordings (smoke runs)")
     step4.add_argument("--out-dir", type=Path, default=_HERE.parent / "checkpoints_three_horizon")
+    step3b.add_argument("--oracle-prior", action="store_true",
+                        help="draw stage 2's prior from ground truth instead of from the slots: the ceiling on what any feedback could buy (A51 E12b)")
+    step3b.add_argument("--no-rescore", dest="rescore", action="store_false",
+                        help="drop the rescoring correction, leaving the prior as the memory's only route to the loss (A51 E12a)")
+    step3b.add_argument("--prior-channels", type=int, default=PRIOR_CHANNELS,
+                        help="feedback channels into stage 2's bottleneck; 0 removes the path entirely, which is E12a's control arm")
     step3b.add_argument("--limit-recordings", type=int, default=0, help="only the first N recordings of each split (smoke runs)")
     step2 = sub.choices["step2"]
     step2.add_argument("--init", type=Path, default=None, help="start from this checkpoint's weights (a fresh optimizer)")
