@@ -73,6 +73,7 @@ This project has no API keys, tokens, or credentials anywhere in the repo; `depl
 | Understand a dataset file format, or what a rebuild invalidates | [`memory/data-model.md`](memory/data-model.md) |
 | Run something | [`memory/commands.md`](memory/commands.md) |
 | Avoid a known platform or environment trap | [`memory/gotchas.md`](memory/gotchas.md) |
+| Launch, watch or report on a run that takes hours | [`memory/long-running-tasks.md`](memory/long-running-tasks.md) |
 | Check whether an idea was already tried | [`memory/rejected-ideas.md`](memory/rejected-ideas.md) |
 | Deploy to the robot, or understand what's running on it | [`memory/deployment.md`](memory/deployment.md) |
 | Automate a task I am about to do by hand twice | [`memory/automation-scripts.md`](memory/automation-scripts.md) |

@@ -290,6 +290,76 @@ Key constraints: single-scan only (no odometry, no temporal history); trained on
 
 ---
 
+### 3.5 Memory inside a detector, and detector-plus-tracker: what already exists (searched 2026-09-28)
+
+Searched before claiming novelty for TAKHeLiPeD's object memory. The claim that survives the search is narrower than "memory
+inside the model", and is stated at the end of this section.
+
+**A recurrent memory inside a 2D-LiDAR person detector already exists: DR-SPAAM's own template.** Its auto-regressive half keeps
+backbone features as a template and updates them recurrently as each scan arrives (Section 3.2). That memory is **per beam and
+spatial**, not keyed to objects, and spans about 0.15 s. So "in-network temporal state for 2D range data" is prior art; the object
+keying and the horizon are not.
+It is not the only one: **Deep Tracking** (Ondruska & Posner, AAAI 2016) and **Deep Tracking on the Move** (Dequaire et al., IJRR 2018) carry a learned recurrent memory over raw 2D laser scans for seconds, through occlusion, keyed by grid cell rather than by object (§7.4.1).
+
+**Object-level memory fused into detection is prior art in other modalities.**
+
+- **MAD, Agro et al., CVPR 2025 (Waabi).** A transformer fuses detector proposals with proposals from a **memory bank of past
+  beliefs**, storing explicit trajectory forecasts so an object's pose can be queried at any timestamp. On Waymo Open and
+  Argoverse 2 it adds +2.5 to +7.6 AP over the detectors it wraps. Its motivation is word for word ours: detectors see only a
+  0.1-0.3 s window, and memory fills what occlusion and a narrow field of view remove. Differences: 3D automotive LiDAR and
+  camera, a forecast-carrying memory bank, and no embedded-cost constraint.
+- **Tokmakov et al., ICCV 2021, "Learning to Track with Object Permanence".** CenterTrack plus a spatio-temporal **ConvGRU**
+  memory over the whole history, trained end to end for detection and tracking, explicitly to localise fully occluded objects.
+  Video RGB, scene-level recurrent state rather than per-object slots.
+
+**Detector plus tracker on 2D LiDAR, including on an embedded platform, also exists, and its components are named.**
+"Autonomous Navigation in Dynamic Human Environments with an Embedded 2D LiDAR-based Person Tracker" (arXiv 2412.15000, 2024)
+runs **DR-SPAAM, not retrained**, followed by **Norfair** (SORT generalised to several points per detection), developed against
+JRDB and evaluated on three own recordings against motion capture: **MOTA 85.45%**, MOTP under 0.2 m, at **20 Hz on a Jetson
+Xavier NX**. It is strictly **tracking-by-detection**: the detector runs, the tracker associates, and the paper describes **no
+feedback from tracker to detector**. DR-SPAAM's own release has likewise been paired with SORT and trajectory prediction in
+deployments.
+
+**That modularity is the gap this project occupies, and it is measurable.** A SORT-style tracker only ever sees detections that
+survived the threshold, so it cannot recover a person whose score fell below it. On FROG, **99.1% of the people TAKHeLiPeD's
+memory "loses" at a shared threshold were pushed under it by rescoring while a live slot sat on them**
+(`../memory/slot-design-evidence.md`), and rescoring before the threshold beats SORT on *identical* candidates at every setting.
+SORT cannot reach those people by construction.
+**A ByteTrack-style tracker can** -- it associates low-score detections to unmatched tracks in a second pass (Zhang et al., ECCV 2022) -- and CBMOT-style score refinement rescores detections from track confidence (Benbarka et al., IROS 2021), so until E14 and E15 run (§7.4.5) the gap is measured against SORT only.
+**JRDB** ships image-plane (2D) and point-cloud (3D) person *tracking* benchmarks beside its detection ones, but none on its 2D laser (§7.4.1). The older
+laser-based people-tracking literature (Arras, Luber, Linder and the SPENCER work; Leigh et al., ICRA 2015) is substantial.
+So a reviewer will not accept "nobody combines a learned 2D-LiDAR detector with tracking" -- they do, modularly, and on embedded
+hardware.
+
+**What is left, and it is worth stating precisely.** For knee-height 2D LiDAR person detection, TAKHeLiPeD contributes an
+**object-keyed memory inside the detector that acts before the threshold**, at **constant per-frame cost** (4.3-4.6 ms, flat from
+64 to 720 slots), exploiting a **measured ~10 s horizon** (`../memory/slot-design-evidence.md` E1) rather than DR-SPAAM's ~0.15 s
+template or MAD's forecast bank. Three further findings sharpen it, all from A51 phase 5-6 (2026-09-29/30).
+
+**The learned per-slot state is the mechanism, not decoration.** Removing it and rescoring from the bookkeeping alone -- value,
+age, time since match, displacement, hit rate -- costs 1.50 pp of AP, 1.67 pp of recall at matched false positives, and
+**14.08 pp of coasting precision**, every one past its three-sigma bar. It is the only ablation of this design that has ever
+cost anything. Before it, "the state is learned rather than hand-coded" was the weakest of the claims separating this work from
+tracking-by-detection; it is now the strongest, and the coasting collapse says why -- with no current measurement, only carried
+state separates a genuinely occluded person from a stale slot.
+
+**The attention usually assumed necessary for a slot memory is not needed.** Rule-based association plus a linear-time per-slot
+recurrence ties the full model on every metric at three seeds, with 43% fewer parameters and 18% less time per frame.
+
+**The feedback path does not work here, and the measurement says why.** Rendering the slots back into stage 2 contributes
++0.0012 / -0.0022 / +0.02 pp across three configurations, including a ground-truth prior with the rescoring head removed so
+nothing could compete with it. The cause is capacity, measured rather than argued: the prior carries **0.012-0.045% of that
+layer's input magnitude** -- 2 channels against 256, non-zero in 2% of sectors, at the most downsampled layer. The ceiling is
+small in any case: only **1.91% of annotated people** are missed with *no* candidate for rescoring to raise while a live slot
+holds them, and every one of those is already coasting. **So the paper claims rescoring before the threshold, not feedback**,
+and reports the feedback result as a measured negative with its ceiling stated.
+The accurate name for the mechanism, from the tracking literature, is a **learned, causal, object-keyed track-before-detect over a detector's sub-threshold candidates** (§7.4.1); "acts before the threshold" alone is track-before-detect's defining idea, not a new one.
+
+**What the write-up must therefore do:** cite 2412.15000 and JRDB's tracking benchmark rather than claiming the combination is
+untried; position against MAD and Tokmakov as memory-augmented detection in other modalities; and keep the comparison against a
+*properly tuned* detector-plus-tracker baseline, which is the SORT sweep this project already ran on its own candidates.
+SORT is not the strongest such baseline: the one a tracking reviewer will ask for is ByteTrack, with CBMOT's score refinement, on the same candidates including the sub-threshold ones (§7.4.5).
+
 ## 4. Preprocessing
 
 ### 4.1 Raw sensor data
@@ -566,6 +636,105 @@ No paper found in this search combines full-scan (no-cutout), raw input, a multi
 ### 7.3 Adjacent 3-D LiDAR literature (context, not a fair baseline)
 
 Full-scan, no-cutout CNNs are the *standard*, not the exception, in 3-D LiDAR object detection — range-image-based detectors (e.g. Sun et al., *RSN: Range Sparse Net*, CVPR 2021; *Fully Convolutional One-Stage 3D Object Detection on LiDAR Range Images*, 2022) run ordinary 2-D convolutions over the whole range image. Useful context for why "full-scan CNN" is a reasonable thing to try, but these papers are 3-D, multi-object, autonomous-driving-scale, and not a fair comparison row for this project's 2-D, person-only, robot-scale setting.
+
+### 7.4 Person tracking: what this project must cite, and what it suggests (surveyed 2026-09-28)
+
+TAKHeLiPeD's stage 3 associates candidates with slots, keeps an existence score per slot, coasts through misses and retires a slot when its score fades.
+That is a tracker in structure, even though it is scored as a detector, so the literature it will be judged against is multi-object tracking (MOT) as much as person detection.
+Until this survey the repository cited only SORT, the MOTR family, CenterTrack, MAD, Tokmakov et al. 2021 and the classical laser trackers of §2.2.
+Venues below were checked against abstracts, proceedings pages or code, not re-read in full — the standard of `PROPOSAL.md` §13.
+
+#### 7.4.1 Six claims the tracking literature qualifies
+
+| claim, as this repository states it | what the literature says | consequence |
+| --- | --- | --- |
+| "A post-hoc tracker only ever sees detections that survived the threshold" (§3.5, `../TODO.md` A51, `../memory/dataset-properties.md`) | True of SORT, the only tracker measured here. **ByteTrack** (Zhang et al., *ECCV* 2022, arXiv 2110.06864) associates *every* box, matching low-score detections to still-unmatched tracks in a second pass, precisely to recover occluded people. **OC-SORT** (Cao et al., *CVPR* 2023) re-associates lost tracks from their last real observation | SORT is not the strongest post-hoc baseline. The one that tests "memory inside the detector" is ByteTrack on the *same* 64 candidates, sub-threshold ones included (E14) |
+| The slot value rule is this project's design (`PROPOSAL.md` §5.5) | `v <- v + gain * (1 - v) * s` is **CBMOT**'s "multiplication" score update `c = 1 - (1 - c)(1 - s)` generalised by a gain (Benbarka, Schröder & Zell, *IROS* 2021, arXiv 2107.04327); CBMOT also decays unmatched tracklets (by a constant per step, where TAKHeLiPeD decays exponentially in seconds) and deletes them on score rather than on a miss count. Track existence as a recursively updated probability goes back to **IPDA** (Mušicki, Evans & Stanković, *IEEE Trans. Automatic Control* 1994) | Cite CBMOT and IPDA for the value rule, and keep "ours" only for value-ranked *replacement*, which never fires on FROG. D2 (latest score instead, +0.60 pp) is CBMOT's count-based-against-confidence-based comparison, where confidence-based won by up to +1.83 AMOTA on nuScenes — a contrast worth one sentence in the write-up |
+| In-network temporal state for 2D range data exists only as DR-SPAAM's template (§3.5, before this survey) | **Deep Tracking** (Ondruska & Posner, *AAAI* 2016) and **Deep Tracking on the Move** (Dequaire et al., *IJRR* 2018, from a moving platform) run a recurrent network over raw 2D laser scans and learn to keep occluded objects in memory. `PROPOSAL.md` §12 already lists them as an alternative, but §3.5's novelty argument did not | The surviving claim narrows again: **object-keyed**, and scored as person detection on a public benchmark. Their memory is an occupancy grid keyed by place, the addressing `../memory/rejected-ideas.md` shows failing when it is hand-built |
+| Memory acting *before* the threshold is what separates TAKHeLiPeD from a tracker (§3.5, `PAPER.md`) | This is the defining idea of **track-before-detect** (TBD): integrate unthresholded evidence over time and declare a weak target only once its track is convincing (particle-filter TBD, Salmond & Birch, *American Control Conference* 2001; a learned TBD, Fishel et al., *ICASSP* 2024). In video detection, **Seq-NMS** (Han et al., arXiv 1602.08465, 2016) rescores weak detections from high-scoring linked ones | Name stage 3 a **learned, causal, object-keyed track-before-detect over a detector's sub-threshold candidates**. That is accurate, citable and still distinctive; "before the threshold" alone is not |
+| JRDB "ships 2D and 3D person tracking benchmarks" (§3.5 and `../TODO.md` A51, before this survey) | JRDB's 2D tracking benchmark is **image-plane** boxes in panoramic video; its 3D benchmark is **point clouds**. It has no 2D-laser benchmark ([jrdb.erc.monash.edu/benchmark](https://jrdb.erc.monash.edu/benchmark/)); tracking is ranked by MOTA and also scored with OSPA, CLEAR-MOT, HOTA and identity metrics | A 2D-laser tracking result on JRDB means projecting the 3D tracks and their identities to the ground plane on train/val, outside the leaderboard; say so wherever it is quoted (A49) |
+| AP conceals a constant absolute false-positive rate, so a metric that charges for it is needed (`PAPER.md`) | **GOSPA** (Rahmathullah, García-Fernández & Svensson, *FUSION* 2017, arXiv 1601.05585) is an established metric on finite sets of *point* targets that decomposes into localisation error, missed targets and false targets, without normalising by cardinality — the per-frame FP/FN accounting `PAPER.md` builds by hand. **OSPA** and **OSPA(2)** (Nguyen, Rezatofighi et al., *TPAMI* 2023) are JRDB's own | Cite GOSPA as the metric the argument calls for, and report it beside AP (E16); it needs no identities, so it works on FROG |
+
+#### 7.4.2 Laser people tracking: the lineage to cite
+
+| work | what it does | where it applies here |
+| --- | --- | --- |
+| Arras, Grzonka, Luber & Burgard, *ICRA* 2008 | multi-hypothesis leg tracker: legs tracked separately, people as leg pairs, **occlusion probabilities adapted to the situation** | A51 O2: an occluded person should coast and a vanished phantom should not (E19) |
+| Luber, Tipaldi & Arras, *IJRR* 2011, "Place-dependent people tracking" | learns per place where people appear and disappear, as priors for the tracker | the working form of place-keyed memory: it pays when a platform revisits places for long, which is exactly `../memory/rejected-ideas.md`'s reopen condition for role C |
+| Luber & Arras, *RSS* 2013; Linder, Breuers, Leibe & Arras, *ICRA* 2016 (SPENCER) | social-group tracking; laser and RGB-D tracking in dense airport crowds, released as a ROS framework | group interaction is what the slot exchange was meant to learn, and E6 found it earns nothing on FROG — a contrast to state. SPENCER is also the ready-made deployment baseline for `../TODO.md` §E |
+| Leigh, Pineau, Olmedo & Zhang, *ICRA* 2015 | leg tracker, the classical baseline of DROW and Li2Former | already cited (§2.2) |
+| Guerrero-Higueras et al., *Frontiers in Neurorobotics* 2019 (PeTra) | its title is a *tracking* paper: U-Net leg segmentation plus leg-pair tracking | already cited as a detector (§7.2); cite it as a tracker too |
+| Aguirre & García-Silvente, *Neural Computing and Applications* 35, 2023 | leg detector trained on camera auto-labels, plus a Kalman tracker, reported above Leigh's | self-supervision (E18) |
+| Jia, Steinweg, Hermans & Leibe, *ICRA* 2021 | 2D-LiDAR detectors trained on camera pseudo-labels, close to manual-label performance | self-supervision (E18); same group and code base as DR-SPAAM |
+| Plozza et al., *SAS* 2024 (arXiv 2412.15000) | DR-SPAAM + Norfair, MOTA 85.45%, 20 Hz on a Jetson Xavier NX | already cited (§3.5); its recordings are the transfer test (`../TODO.md` A51) |
+| Arreghini, Nava, Carlotti, Paolillo & Giusti, arXiv 2607.21309 (July 2026) | planar-LiDAR person detection and 2D pose from factorised space-time blocks over **30 scans (3 s at 10 Hz)**, odometry-reprojected; a Kalman filter tracks in field tests; **65.9 / 66.4% AP on FROG** at d = 0.5 m, 2.9-3.4 ms on a robot CPU, ~40k parameters, trained by cross-modal self-supervision on the authors' own data | the newest published FROG detector, and a temporal one: a 3 s window lands at LFE's level, which agrees with `PAPER.md`'s claim that a window is not the lever. Confirm its training regime (zero-shot or FROG-trained) before it enters `../memory/performance-log.md` |
+| Wang, Thorpe, Thrun, Hebert & Durrant-Whyte, *IJRR* 2007 (SLAMMOT); Vu & Aycard, *ICRA* 2009 | detection and tracking of moving objects (DATMO) from a moving laser platform, separating static from dynamic structure | the classical frame for room-coordinate slots (D1) and odometry drift (E2, E11). Vu & Aycard is prof. Aycard's own laser DATMO work: context for `../TODO.md` A54, **not** the reference for `AlgorithmicDetector` |
+
+#### 7.4.3 Tracking methods closest to stage 3
+
+| work | mechanism | relation to TAKHeLiPeD |
+| --- | --- | --- |
+| Tracktor (Bergmann, Meinhardt & Leal-Taixé, *ICCV* 2019) | the detector's own regression head carries last frame's boxes forward, so the detector *is* the tracker | a detector-in-the-loop precedent for E12's feedback, beside CenterTrack (cited) |
+| Detect to Track and Track to Detect (Feichtenhofer, Pinz & Zisserman, *ICCV* 2017) | joint detection and cross-frame regression; tracks rescore detections | the video-detection precedent for "tracking raises detection AP" |
+| MOTRv2 (Zhang, Wang & Zhang, *CVPR* 2023) | a pretrained detector's proposals become the queries of an end-to-end tracker | the transformer form of stage 2's candidates feeding stage 3 |
+| SimTrack (Luo, Yang & Yuille, *ICCV* 2021); PnPNet (Liang et al., *CVPR* 2020) | joint detection and tracking from raw point clouds, association, birth and death read off one map; tracking in the loop of an end-to-end LiDAR network | "memory inside the detector" in 3D LiDAR, beside MAD (cited) |
+| 3D-MAN (Yang et al., *CVPR* 2021); PF-Track (Pang et al., *CVPR* 2023) | a memory bank of past proposals attended by the detector; past and future reasoning over object queries, cutting ID switches by 90% | same; PF-Track's future reasoning is what stage 3's constant-velocity prediction does by rule |
+| Tokmakov, Jabri, Li & Gaidon, *ICML* 2022 | object permanence learned **self-supervised**, by a random walk along memory | slots trained on unlabelled recordings (E18) |
+| ImmortalTracker (Wang et al., arXiv 2111.13672) | never terminates a track; predicts through darkness | E1's "never emptied" is already its best row (83.88%); an immortal-slot arm costs one evaluation |
+| SimpleTrack (Pang et al., *ECCV Workshops* 2022) | decomposes 3D MOT into pre-processing, association, motion model and life cycle; two-stage association | the vocabulary for stage 3's fixed rules in a write-up |
+| GNN-PMB (Liu et al., arXiv 2206.10255) | Poisson multi-Bernoulli filter on LiDAR detections, with an existence probability per track | the random-finite-set statement of a slot's value |
+| DeepMOT (Xu et al., *CVPR* 2020) | a differentiable Hungarian proxy trains trackers on MOTA and MOTP | the relaxation A51 D5 names for making spawn and eviction trainable |
+| Schöller, Aravantinos, Lay & Knoll, *RA-L* 2020 | a constant-velocity model beats learned pedestrian predictors | justifies stage 3's constant-velocity slot prediction |
+
+#### 7.4.4 Metrics
+
+| metric | needs identities | fits |
+| --- | --- | --- |
+| GOSPA (*FUSION* 2017) | no | FROG and DROW, every frame; splits into localisation, missed and false |
+| OSPA; OSPA(2) (*TPAMI* 2023) | OSPA no; OSPA(2) yes | JRDB's own |
+| CLEAR-MOT: MOTA, MOTP (Bernardin & Stiefelhagen, 2008) | yes | JRDB (ranked by MOTA), Plozza et al. |
+| HOTA (Luiten et al., *IJCV* 2021) | its DetA no; AssA yes | DetA is a detection score; AssA needs identities |
+| IDF1 (Ristani et al., *ECCV Workshops* 2016) | yes | as above |
+
+FROG carries no identities, so only the identity-free rows apply to this project's headline dataset.
+
+#### 7.4.5 Experiments this suggests
+
+Proposed to the owner 2026-09-28 as `../TODO.md` A56; none is agreed yet.
+
+| # | what | cost | what it decides |
+| --- | --- | --- | --- |
+| E14 | ByteTrack, and OC-SORT's re-update, on the same stage-2 candidates with the sub-threshold ones included, scored by AP with a track score | evaluation only | whether the memory's +5.68 pp exceeds a 2022 post-hoc tracker given the same sub-threshold evidence — the first comparison a tracking reviewer will ask for |
+| E15 | CBMOT's score refinement: rescore each candidate from its slot's rule value, which `manage_slots` already computes, with no learned head | evaluation only | the hand-coded twin of E10; with E14, whether the learned part adds anything to rules published in 2021-2022 |
+| E16 | GOSPA per frame beside AP, for the published detectors, stage 2 and stage 3 | evaluation only, same pass as E14 | puts `PAPER.md`'s false-positive argument into an established metric |
+| E17 | score the slots *as a tracker* (HOTA, MOTA, IDF1, OSPA(2)) where identities exist: JRDB's 3D tracks projected to the ground plane, and Plozza et al.'s mocap if they share it | needs A49's JRDB loader | a second result: a detector whose memory is also a competitive tracker, against DR-SPAAM + Norfair and DR-SPAAM + ByteTrack |
+| E18 | self-supervised slot training, or label densification from slot tracks (Tokmakov 2022; Jia 2021; Qi et al., *CVPR* 2021, offboard auto-labelling) | a research branch | whether DROW's ~95% unlabelled scans and FROG's extra recordings can train the memory |
+| E19 | an occlusion input for the coasting head: whether a nearer return lies on the slot's bearing (after Arras 2008) | one training run | O2 found the head cannot tell a remembered person from a remembered phantom; occlusion explains a person's absence and not a chair's |
+
+E14 and E15 come first: they can falsify the headline claim at no training cost.
+
+#### 7.4.6 Who claims a *detection* gain from tracking or object memory (checked 2026-09-29)
+
+The owner's question: does any of this literature claim that tracking raises detection accuracy, as TAKHeLiPeD's +5.68 pp over its own candidates does?
+**Yes, outside 2D LiDAR; no one inside it.**
+Tracking-by-detection papers (ByteTrack, OC-SORT, CBMOT, Plozza et al., PeTra, Leigh, Arras, SPENCER) report tracking metrics only (MOTA, HOTA, IDF1, localisation error), never the detector's AP.
+The claims come from memory-augmented and multi-frame *detection*:
+
+| work | data | causal | claimed detection gain |
+| --- | --- | --- | --- |
+| MAD (Agro et al., *CVPR* 2025) | 3D LiDAR and camera; Waymo, AV2 | yes | **+2.5 to +7.6 AP** over the detectors it wraps, all classes |
+| MoDAR (Li, Qi et al., *CVPR* 2023, arXiv 2306.03206) | 3D LiDAR, Waymo; a Kalman tracker plus MultiPath++ forecasts fed back as virtual points | online: 9.1 s of past; offline: past and future | **pedestrian AP, online: +1.5 to +3.4** (L1/L2, three detectors, Table 1); the headline +7.2 / +11.1 L2 mAPH (online / offline) is mostly heading, which point detection does not score |
+| Detect to Track and Track to Detect (*ICCV* 2017) | video, ImageNet VID | no: tubes linked over the whole video | 74.2 -> 79.8 mAP (+5.6) over its frame-level R-FCN |
+| 3D Auto Labeling (Qi et al., *CVPR* 2021); Seq-NMS (2016) | 3D LiDAR; video | no | "significant gains", on par with human labels; weak detections rescored from linked strong ones |
+| DR-SPAAM (*IROS* 2020) | 2D LiDAR | yes, ~0.15 s template | +1.9 AP on FROG (5 scans against 1): temporal, not tracking |
+| Arreghini et al. (arXiv 2607.21309, 2026) | 2D LiDAR | yes, 3 s window | 65.9 / 66.4% FROG AP; its Kalman tracker only smooths field demonstrations |
+
+What this means for the write-up:
+
+- **TAKHeLiPeD would be the first 2D-LiDAR detector to report a detection gain from object-level memory**, as far as this search reaches: +5.68 pp AP at 0.5 m over its own candidates, three seeds.
+- **The within-model gain is the defensible number, not 83.3% against 75.6%.** The latter is ours measured here against DR-SPAAM's published figure (`../memory/interpreting-evaluation.md`), and 75.6% is DR-SPAAM's, not DROW3's 73.9%.
+- **Cross-domain magnitudes do not compare.** MAD's and MoDAR's gains are 3D-box AP on Waymo and AV2; ours is point AP on FROG. Cite them as the same phenomenon in other sensors, never as a smaller number.
+- **E14 decides what the gain is attributed to, not whether it exists.** If ByteTrack on the same candidates recovers most of it, the finding "tracking raises 2D-LiDAR detection AP by several points" is still unclaimed on this sensor; the novelty then moves from the learned memory to the finding and its cheapest mechanism.
 
 ---
 

@@ -13,6 +13,7 @@ Start with [`../AGENTS.md`](../AGENTS.md) for orientation; come here for depth.
 | [`dos-and-donts.md`](dos-and-donts.md) | House rules: workflow, doc conventions, evidence standards, what to re-run after a change, what never gets committed. |
 | [`coding-guidelines.md`](coding-guidelines.md) | How code is written here, per language, and the linter and config that enforce each set (mostly not-yet-enforced — see `TODO.md`). |
 | [`gotchas.md`](gotchas.md) | Platform and environment traps that have cost real debugging time. |
+| [`long-running-tasks.md`](long-running-tasks.md) | How a 4-20 hour run is launched, watched and reported on a machine that interrupts them: the pre-launch checks, the watcher beside the task, the five failure signatures and what to do about each, and the reporting cadence. **Read before starting anything long.** |
 
 ## The system
 

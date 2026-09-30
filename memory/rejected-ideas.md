@@ -7,6 +7,32 @@ Open questions live in [`../TODO.md`](../TODO.md); this file is for settled ones
 
 Each entry states what was proposed, what was measured, and what new evidence would be needed to reopen it.
 
+## Four slot-memory ideas closed by measurement (TODO.md A51)
+
+*keywords: A51, slots, stage 3, S3, S4, T3, D2, more candidates, learned association, slot statistics, accumulated value, capacity*
+
+All four were in the plan, all four were closed without a training run each, and the measurements are in
+[`slot-design-evidence.md`](slot-design-evidence.md).
+
+**More candidates per frame, to fill the unused slot capacity (S3).** *Closed 2026-09-22.* The memory uses a median of **24 slots
+of 256**, and a live slot already sits on **95.5%** of the people stage 3 fails to report, with a median value of 0.986. Spare
+capacity is not what is missing, so feeding more candidates fills a shortage that does not exist. **Reopen if** a dataset appears
+where the memory never learns about a meaningful share of people -- on FROG that is 4.5% of the misses and 0.7% of all people.
+
+**A learned association rule (S4).** *Closed 2026-09-21.* A rule-only sweep over 3 association gates (0.3-1.0 m) x 3 fade times
+(2-30 s) moved coverage by 0.2 pp: **96.9-97.0%** of annotated people have a slot that matched a candidate, at every setting. There
+is nothing left for a learned association to recover, and the discrete spawn and eviction decisions have no gradient anyway.
+**Reopen if** a dataset or a denser scene pushes the matched share meaningfully below 97%.
+
+**Normalising the slot statistics fed to the learned update (T3).** *Demoted 2026-09-20.* The input that most needed clamping was
+slot speed, which read a median of 3.97 m/s while people walked at 0.56. That was the time step, not the scaling: with the running
+`dt` the same statistic reads 0.58 m/s. **Reopen if** an arm shows the remaining statistics (age, time since match) saturating.
+
+**Accumulated value as the rule that holds a slot (D2).** *Not rejected -- unsupported.* The ablation that replaces it with the
+latest candidate score **scored 83.94% against B0's 83.34% mean**, so it does not lose. The design argues accumulated value keeps a
+briefly hidden person's slot; on FROG the learned slot state appears to cover that already. One seed, so this is "claim it and you
+will be asked for evidence you do not have", not "it is wrong".
+
 ## A per-beam fine temporal convolution (the "calibration" denoiser) in the three-horizon detector (TODO.md A50)
 
 *keywords: A50, fine convolution, fine_lags, --fine-lags, align_beams, calibration horizon, denoising, jitter, 3 taps, 5 taps, 7 taps, tested hypothesis, not required*
@@ -90,7 +116,8 @@ The 89.7% was measured on **person-free** frames, where a filter cannot destroy 
 The deeper reason is structural and shows directly in A44's table: at a 30 s minimum observation span only **11.3%** of phantoms qualify, and at 100 s none do. **On a mobile robot, how long something has been at a location is dominated by how long the robot looked at it.** A museum robot drives past a chair rather than watching it, so world-location persistence is largely a statement about the robot's own transit -- and short-lived is exactly what a person is too.
 
 **What would reopen it.**
-A **stationary or slowly-patrolling** platform, where per-location observation span is set by the scene rather than by the robot's path -- the premise fails on mobility, not on the physics. Or an **object-keyed** displacement feature rather than a location-keyed persistence one: that is the only variant measured above SORT, and it belongs to role B (`docs/PROPOSAL.md`).
+A **stationary or slowly-patrolling** platform, where per-location observation span is set by the scene rather than by the robot's path -- the premise fails on mobility, not on the physics.
+The published case where place-keyed memory does pay is exactly that one: Luber, Tipaldi & Arras, *Place-dependent people tracking*, IJRR 2011, learns per-place priors over long deployments (`../docs/RESEARCH.md` §7.4.2). Or an **object-keyed** displacement feature rather than a location-keyed persistence one: that is the only variant measured above SORT, and it belongs to role B (`docs/PROPOSAL.md`).
 
 **What this does not reject.** The horizon argument itself. 786 frames is still the span over which the separating evidence exists; what is rejected is reaching it through location.
 

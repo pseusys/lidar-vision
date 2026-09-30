@@ -37,10 +37,17 @@ It breaks the lifecycle above in two places: there is no `T`-scan window (one sc
 | --- | --- | --- | --- |
 | 1, features | 10 pose-invariant per-beam features from one raw scan; `sanitize_ranges` maps non-finite, non-positive and beyond-`max_range_m` readings to `max_range_m`, so no dataset-specific preprocessing is needed | — | — |
 | 2, calibration network | 1D ConvNeXt U-Net over the whole scan, causal temporal convolutions per sector at the bottleneck with their caches odometry-re-aligned; a DROW vote head decodes 64 candidates, sub-threshold ones included | 1.18 M | ~10.4 ms/frame with decoding |
-| 3, object memory | 256 slots in **room** coordinates; cross-attention association, slot self-attention, and a Δt-aware selective diagonal recurrence (Mamba-style, decay 1-60 s). Rescores candidates, coasts briefly-missed people, optionally renders slots back into stage 2 | 0.31 M | ~4.4 ms/frame |
+| 3, object memory | 256 slots in **room** coordinates; cross-attention association, slot self-attention, and a Δt-aware selective diagonal recurrence (Mamba-style, decay 1-60 s). Rescores candidates and coasts briefly-missed people | 0.31 M | ~4.4 ms/frame |
 
 `step()` carries `(CalibrationState, Slots)` between frames, ~1.8 MB, and the per-frame cost does not grow with how far back the memory reaches.
 **`manage_slots` runs under `no_grad`** — association, value accumulation, spawn, replacement and retirement are fixed rules; only what reads the slots learns.
+
+**What A51 settled about stage 3 (2026-09-29/30), and what the write-up should propose.**
+
+- **Keep the learned slot state.** It is the only part whose removal has ever cost anything: −1.50 pp AP, −1.67 pp recall at matched false positives, −14.08 pp coasting precision, all past their bars (E10).
+- **Drop both attention mechanisms.** Rule-based association plus the per-slot recurrence ties the full model on every metric at three seeds, at **173,579 parameters against 306,443 (−43%)** and **3.72 ms against 4.53 (−18%)** (E6, E7, E13). This is the architecture to propose; the full model is the ablation.
+- **Drop the feedback path.** `render_prior` and `prior_channels` contribute 0.00 pp in three configurations, because the prior carries 0.012–0.045% of `aggregate`'s input and its exclusive ceiling is 1.91 pp of recall anyway (E12). Dropping it also drops the `step3b` joint stage, which already scored worse than `step3a` (78.84% against 80.10%) — this session localised that loss to the **rescoring head's** drift on stage 2, not the prior.
+- **Still there, still conditional:** room coordinates win only below ~0.02 m/s of odometry drift (D1, E2); training with jittered poses is the untried repair (`../TODO.md` E11).
 Design rationale: [`../docs/PROPOSAL.md`](../docs/PROPOSAL.md). Evidence for each slot decision, or an explicit note that there is none: [`slot-design-evidence.md`](slot-design-evidence.md). Numbers: [`performance-log.md`](performance-log.md).
 
 **Two architecture names appear in the logs.** With `--fine-lags` removed on 2026-09-17, the runs formerly called "no-fine" are the **default** architecture (coarse convolution only) and "static" is **no-temporal** (`--coarse-lags 0`); directory names keep the old words. The B0 chain and the A51 slot ablations sit on the no-temporal stage 2, by the owner's call.

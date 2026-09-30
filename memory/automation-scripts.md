@@ -55,4 +55,5 @@ ruff check --config memory/scripts/ruff.toml memory/scripts/
 | Script | What it does |
 | --- | --- |
 | [`scripts/verify_memory.py`](scripts/verify_memory.py) | Checks that internal links resolve, that the two indexes match the files on disk, and that the markdown house rules hold. Run it before committing a documentation change. |
+| [`scripts/machine_is_free.py`](scripts/machine_is_free.py) | Whether a second job may start: exits non-zero if one of the project's long scripts is running or under 2 GB of memory is free. Put it in front of `pytest` and any evaluation. |
 | [`scripts/ruff.toml`](scripts/ruff.toml) | Not a script: the lint config for this directory. |

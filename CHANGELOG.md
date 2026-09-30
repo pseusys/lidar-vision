@@ -38,6 +38,243 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Detection gains from tracking are claimed in 3D LiDAR and video, not in 2D LiDAR (2026-09-29)
+
+*keywords:* RESEARCH §7.4.6, detection gain from tracking, MAD, MoDAR, Detect to Track, 3D Auto Labeling, novelty, within-model gain
+
+The owner asked whether any tracking paper claims a boost in person *detection*.
+Tracking-by-detection papers report tracking metrics only; the claims come from memory-augmented detection: MAD +2.5 to +7.6 AP (Waymo, AV2), MoDAR +1.5 to +3.4 pedestrian AP online from 9.1 s of tracked history, Detect to Track +5.6 mAP offline.
+None is on 2D LiDAR, so TAKHeLiPeD's +5.68 pp over its own candidates appears to be the first such claim on this sensor.
+The defensible figure is that within-model gain, not 83.3% against DR-SPAAM's published 75.6%.
+Written up in `docs/RESEARCH.md` §7.4.6.
+
+## Arm provenance comes from the checkpoints, not the launchers; a second E10 seed is running (2026-09-30)
+
+*keywords: provenance, judge_arms.py, UNVERIFIED_CLI, checkpoint args, T1, T2, a51_e10_norecurrent_s1, headline claim, seed count*
+
+`judge_arms.py` flagged T1 and T2 as unverified because their launcher scripts no longer exist. That was the wrong place to
+look: every stage-3 checkpoint stores its own CLI, and `torch.load(<run>/step3a_object_memory.best.pth)["args"]` shows both
+arms match the control exactly -- `step3a` on `step2_static`, `chunk_s [1.0, 10.0]`, `test_strides [5]`, `max_hours 24`, 256
+slots, seed 0, cosine -- differing only in their own intervention. The flag is removed and the script records where provenance
+comes from.
+
+**A second E10 seed is running.** The arm became the paper's headline after one seed, and its AP margin is 1.50 against a
+1.45 bar. Earlier in this session a two-seed reading of the tightest-barred metric flipped when the third seed arrived
+(E13's recall at matched FP, +1.08 clearing its bar, then +0.68 inside it), which is precisely the risk a single-seed headline
+carries.
+
+## The headroom feedback actually has: +1.91 pp of recall, all of it already held by coasting slots (2026-09-30)
+
+*keywords: E12, feedback headroom, necessity, memory_diagnosis.py --recovery, no_candidate, feedback-exclusive pool, TOP_P*
+
+Asked before committing to another feedback architecture: is there anything for it to win? `memory_diagnosis.py --recovery` now
+splits misses by whether stage 2 produced **any** candidate near the person at any score -- the line between what rescoring can
+fix and what only feedback can.
+
+On B0 seed 0, FROG test, threshold 0.3: of 153,655 annotated people stage 3 covers 129,755 and misses 23,900. **83.0% of the
+misses already have a candidate** that rescoring can raise. Only **4,068 (17.0%)** have no candidate at all, and of those
+**2,930** are held by a live slot -- **1.91% of all annotated people**. Every one of those 2,930 slots is already coasting.
+
+**So feedback's exclusive ceiling is +1.91 pp of recall**, attainable only by converting all of them with no false positives,
+and it finds nobody the memory does not already hold; its unique value would be a scan-localised detection instead of a coasted
+slot position. Outside that pool it can only duplicate rescoring, which reaches the same people by a far shorter gradient path
+-- which is itself an explanation for why the three E12 arms had nothing to learn.
+
+Read with E12's capacity measurement: the path was under-built **and** aimed at a small target. The first is cheap to fix; the
+second bounds the reward.
+
+## E12's real conclusion: the feedback path carries 0.02% of the bottleneck, so it could never have mattered (2026-09-30)
+
+*keywords: E12, measure_prior_share.py, a51_e12ab_oracle_norescore, prior share, aggregate, render_prior, injection capacity, cancellation hypothesis*
+
+The ceiling cell -- a perfect prior with **no** rescoring head to compete with it, the configuration neither earlier arm covered
+-- returned **+0.02 pp**. With E12b's +0.0012 and E12a's -0.0022, all three cells are null.
+
+**Both explanations offered along the way were wrong, and the real one is now measured.** *Competition* predicted the path would
+wake once the rescoring head was removed: it did not. *Cancellation* -- large weights parked where they cannot act -- is false:
+under an oracle prior the two channels are identical, so their gradients are identical and their difference stays exactly
+`0.000000e+00`, putting the entire weight in the acting direction (sum rms 3.56e-2 against the body's 4.07e-2).
+
+**`utils/measure_prior_share.py`** (new) measures the two terms of `aggregate` on real frames instead of comparing weight norms:
+the prior carries **0.012-0.045% of the layer's input magnitude**. The arithmetic is not subtle once stated -- 2 prior channels
+against 256 body channels, non-zero in 2% of sectors, at the most downsampled layer. A per-weight rms of 0.44 is a
+per-contribution share of 0.045%.
+
+**This changes what E12 licenses the write-up to say.** Not "memory cannot help the detector before the threshold", but "**this
+injection** contributes nothing, and here is why". Testing the idea properly needs a wider path (project the prior to `c2`
+channels), a denser prior (`render_prior` gives each person one sector with no extent), injection above the bottleneck, or
+multiplicative gating. That is a design change rather than an ablation, so it is not queued.
+
+## E12a settles it: the feedback path does nothing even with its competitor removed, and the oracle verifies (2026-09-30)
+
+*keywords: E12a, a51_e12a_norescore, verify_oracle_prior.py, feedback contribution, stage 2 drift, rescoring head, channel degeneracy*
+
+`a51_e12a_norescore` trained step 3b with the rescoring correction switched off, so the prior drawn into stage 2 was the memory's
+only route to the loss. Contribution: **-0.0022 pp** (77.5909% against 77.5931% silenced). With E12b's +0.0012 pp under a perfect
+prior, **both cells are null**, and the competition hypothesis is refuted on its own prediction -- removing the competitor did not
+wake the path.
+
+**The oracle verified first**, so E12b's null is no longer provisional: on 400 recorded FROG frames, 400 of 400 draw a non-zero
+prior and **638 of 638** people's sectors, recomputed from `people_polar`'s bearing independently of `render_prior`'s xy path,
+land on a marked sector.
+
+**The trained weights are large, which is the surprise.** `aggregate.weight[:, 2*c2:]` reaches rms 1.78e-2 against the body's
+4.07e-2 -- 44% -- with all 256 entries non-zero, yet silencing those channels moves nothing. Under an oracle prior the two
+channels are identical, so only their sum can act and their difference is a free direction; `verify_oracle_prior.py` now reports
+both, to be run on all three checkpoints. That degeneracy cannot explain E12a, whose prior has differing channels.
+
+**Side finding.** Stage 2 finishes at 77.59% in E12a against 76.45% in E12b, with candidates alone at 77.66%: joint training's
+~1.2 pp stage-2 drift (A50 phase 1 item 2) tracks the **rescoring head**, not the prior.
+
+## E12b: a perfect prior buys stage 2 +0.0012 pp, pending one verification (2026-09-30)
+
+*keywords: E12b, a51_e12b_oracle, oracle prior, feedback contribution, aggregate.weight, null result, verification pending*
+
+`a51_e12b_oracle` trained step 3b for 3 epochs with stage 2 fed a ground-truth prior, then scored those weights twice on test:
+**76.4517% with the prior against 76.4506% with it silenced, +0.0012 pp.** The whole detector moved +0.055 pp, to 81.69%. The
+two runs are not bit-identical, so gradient reached the feedback channels and moved them -- to almost exactly nothing.
+
+**Not yet a finding.** An empty oracle would produce an identical-looking null, and `oracle_prior` is so far covered only by
+synthetic unit tests, which `AGENTS.md` rule 4 says is insufficient for anything reading recorded data. Queued for the gap after
+E12a: confirm on real FROG frames that the rendered prior is non-zero where people are, and that `aggregate.weight[:, 2*c2:]` is
+non-zero after training. The commit limit forbids running it beside a training job.
+
+**A design gap, named rather than glossed.** E12b kept the rescoring head, so its null admits two explanations -- feedback is
+useless here, or the head out-competed it again. E12a removes the head but feeds a real prior. The separating cell, oracle prior
+*and* no rescoring, is neither run and is worth ~4 h if E12a also comes back null.
+
+## E13 at three seeds: both attention mechanisms are free to remove, and a two-seed reading had been wrong (2026-09-30)
+
+*keywords: E13, E6+E7, a51_e67_recurrent, --no-exchange, --no-learned-match, three seeds, recall at matched FP, two-seed error*
+
+`a51_e67_recurrent_s1` and `_s2` finished the arm at three seeds (248 and 374 min, both clean on the first attempt). Against the
+three-seed control: AP 83.86 (+0.53, bar 1.45), AP at 0.3 m 82.14 (+0.46, bar 1.29), recall at matched false positives 93.16
+(+0.68, bar 0.86), coasting precision 29.81 (+4.38, bar 8.19). **Nothing clears in either direction**, at 173,579 parameters
+against 306,443 (-43%) and 3.72 ms per frame against 4.53 (-18%). Per-seed AP 83.91 / 84.15 / 83.52.
+
+**A two-seed reading of this arm was wrong and is corrected here.** At seeds 0 and 1, recall at matched false positives read
++1.08 and cleared its 0.86 bar, and was reported that way on 2026-09-29. Seed 2's 92.36 pulled the mean to +0.68, inside the bar.
+The metric with the tightest bar is the one a short seed count misreads first; the three-seed protocol exists for exactly this.
+
+**With E10, the architecture is now decided.** The two arms are the same experiment in opposite directions: remove the slot state
+and every bar is cleared downward; remove both attention mechanisms and nothing is cleared at all. State is the mechanism,
+attention is not. The proposal is E6+E7, with the full model as the ablation.
+
+## E10: the learned slot state is the mechanism, and removing it is the only ablation that has ever cost anything (2026-09-29)
+
+*keywords: E10, --no-recurrent, slot state, coasting precision, judge_arms.py, a51_e10_norecurrent_s0, tracker with a scorer*
+
+`a51_e10_norecurrent_s0` rescored from the bookkeeping statistics alone -- value, age, time since match, displacement, hit rate --
+with no slot state and no recurrence, 55,691 parameters against B0's 306,443. It finished clean in 300 min and is **the only arm
+of the eleven that clears its three-sigma bar on every metric**, all four downward: test AP **81.84** (-1.50, bar 1.45), AP at
+0.3 m 80.26 (-1.42, bar 1.29), recall at matched false positives **90.80** (-1.67, bar 0.86), coasting precision **11.35**
+(-14.08, bar 8.19). It runs at **2.70 ms per frame** against ~4.5.
+
+**This is the favourable answer.** The question E10 asked was whether the memory is a tracker with a learned scorer; the answer is
+no. "The slot state is learned, not hand-coded" was the weakest of the three claims separating this design from tracking-by-
+detection -- it rested on D3's 0.90 pp, inside its bar -- and is now the strongest. The coasting-precision collapse says where the
+state earns its keep: with no current measurement, only carried state separates a genuinely occluded person from a stale slot.
+
+**It also settles E13's shape.** The state costs 250,752 parameters and ~1.8 ms and pays for them; the attention does not (E6, E7).
+The architecture to propose is E6+E7 -- whose validation AP, 80.67%, is the highest of any arm -- not the smaller E10.
+
+`utils/judge_arms.py` now prints the whole comparison; `results/a51_arms.json` holds it as data.
+
+## The feedback path becomes measurable: an oracle prior, rescoring that can be switched off, and a within-network ablation (2026-09-29)
+
+*keywords: E12, E12a, E12b, oracle_prior, prior_mode, rescore=False, feedback contribution, test_prior_silenced, run_e12.ps1*
+
+`docs/PROPOSAL.md`'s claim that memory changes what the detector *sees* has never been tested, because step 3b's prior never left
+zero. Three pieces of code make it testable, written against tests first.
+
+- **`ObjectMemory(rescore=False)`** removes the rescoring correction and its parameters, so a candidate keeps its own score and
+  the prior drawn into stage 2 is the memory's only remaining route to the loss (E12a). Both call sites now share one
+  `_rescored` helper instead of repeating the gate-and-limit arithmetic.
+- **`oracle_prior()`** draws the prior a perfect memory would draw -- every annotated person marked in its sector at full value
+  and probability (E12b) -- and **`joint_step(..., prior=...)`** feeds it in place of what the slots would have drawn.
+  Unannotated frames draw nothing rather than carrying the last annotation forward: stale positions would stop it being an upper
+  bound, and it costs nothing, because the oracle holds no state and every scored frame is annotated.
+- **`evaluate_joint(..., prior_mode=)`** picks `slots`, `oracle` or `zero`, and raises on anything else rather than silently
+  falling back.
+
+**The measurement got cheaper than planned.** Each arm was going to need its own retrained control. Scoring one trained network
+twice -- once with its prior, once with it silenced -- answers the same question in half the GPU time, and is the better
+comparison: a retrained `prior_channels=0` control can compensate for the missing channels, while the same weights cannot. Every
+step-3b run now ends with a `feedback contribution` line and stores `test_prior_silenced` in its results.
+
+**Queued** as `run_e12.ps1` behind the E10 chain: `a51_e12b_oracle`, then `a51_e12a_norescore`. The chain runs the test suite
+itself when the machine frees up and refuses to launch either run if it fails, because the commit limit made it impossible to run
+`pytest` beside E10.
+
+## Stage-3 training is bit-reproducible from its seed; `--resume` is what breaks it (2026-09-29)
+
+*keywords: determinism, reproducibility, a51_b0f, a51_b0_short, resume divergence, judge_arms.py, fresh control, seed pairing*
+
+**The fresh B0 control reproduced the old one exactly, which is the answer rather than a disappointment.** `a51_b0f_s1` retrained
+stage 3 from scratch -- same seed, same flags, same code, a different output directory, eight days after `a51_b0_short_s1` -- and
+matched it on **46 of 46** evaluations to six decimals of validation AP, and on every test metric: AP **83.17**, AP@0.3 81.52,
+recall at matched FP 92.53, coasting precision 22.31. Only `ms/frame` differs (4.65 against 4.51), as a wall-clock number must.
+
+**`--resume` is what does not reproduce.** `a51_b0f_s0` was interrupted twice by driver bugchecks and resumed. It tracks
+`a51_b0_short_s0` for **36 of 42** evaluations and diverges at exactly the first epoch after the resume point -- 10 s stage epoch 4,
+0.7885 against 0.7854 -- finishing 0.41 pp higher in AP (83.37 against 82.96) and 5.3 pp lower in coasting precision. A resumed run
+is a different draw from the seed's distribution, not the same run continued. It is a valid sample of its arm and never a
+reproduction of it, which matters for `a51_o1_bounded_s0c` (three attempts) and `a51_e6_noexchange_s0` (scored from an interrupted
+checkpoint).
+
+**Three consequences.**
+
+- **The fresh control changes no verdict.** Its mean will land within ~0.15 pp of the short control's 83.34, so every arm judgement
+  already recorded against the E9 bars stands, and the results table does not need rewriting. Seed 2 is a live prediction: if it
+  runs uninterrupted it must score **83.88 / 82.17 / 92.72 / 26.61**.
+- **`memory/interpreting-evaluation.md`'s "seeds do not reproduce runs on this machine" is corrected.** Its 2026-09-17 evidence
+  compared runs whose *code differed*, so it could not separate seed irreproducibility from the code change; the stated mechanism
+  ("GPU kernels are nondeterministic") is not what was measured. The practical rule -- compare means, not per-seed differences --
+  survives for a different reason: an ablation changes the architecture, so the same seed's random stream is consumed differently
+  and the two runs were never paired.
+- **Re-running a configuration is now a legitimate check on a number that looks too good**, which it was not believed to be.
+
+**`utils/judge_arms.py`** (new, standard library only, safe to run beside a training job) reads every arm's `step3a_results.json`,
+computes a control's mean, sd and three-sigma bars, and prints each arm's deltas with a verdict against both those bars and E9's.
+
+## Why step 3b's feedback prior is silent, and why no torch process can run beside a training job (2026-09-29)
+
+*keywords: E12, E12a, E12b, feedback prior, aggregate.weight, rescoring head competition, WinError 1455, commit limit, pagefile, machine_is_free.py*
+
+Written while the fresh B0 control chain was training, so both findings come from logs already on disk rather than from a new run.
+
+**The feedback prior is silent because the rescoring head out-competes it, not because gradient fails to reach it.** Step 3b's log
+reports stage 2 **with** feedback at 75.68% on test; A50 phase 1 item 2 had separately scored the same network with the prior
+algebraically **silenced** at 75.68%. Equal to two decimals, so those channels carry nothing. The mechanism is competition, not a
+bug: gradient does reach `aggregate.weight[:, 2*c2:]` from a zero start, because `dL/dW = dL/d(bottom) * prior` and the prior is
+non-zero -- but the rescoring head reads the same slots one operation before the loss, while the prior must travel through the
+bottleneck, decoder, vote grid and candidate decoder to matter. At 3 epochs and lr 1e-4 the optimiser takes the short path.
+**Consequence for E12:** "initialise the prior's weights away from zero" (the design `TODO.md` recorded) would reproduce the null
+more slowly. E12 must remove the competitor -- **E12a**, step 3b with the rescoring head frozen at identity, with the prior's
+contribution logged per epoch -- optionally preceded by **E12b**, oracle priors, to tell a "feedback cannot help" null apart from a
+"training will not find it" null. Awaiting the owner's approval; the options table is in `TODO.md` A51 phase 6.
+
+**The machine's limit is commit, not RAM, and beside a live run there is none left.** A CPU-only inspection script
+(`CUDA_VISIBLE_DEVICES=""`, one `torch.load`) could not even `import torch`: `OSError: [WinError 1455] The paging file is too small
+... loading c10.dll`. At that moment: 15.9 GB physical with **5.4 GB free**, but a 30.6 GB commit limit with **1.9 GB free**, and
+`S:\pagefile.sys` already at its configured 15000 MB maximum. So free physical memory does not predict whether a second process
+starts, and `machine_is_free.py` covers more than `pytest`: **nothing that imports torch runs beside a training job**, including a
+one-line checkpoint load -- queue it. Raising the page file's maximum would lift this, and is the owner's machine setting to make.
+Recorded in `memory/gotchas.md` beside the older `_ArrayMemoryError` signature.
+
+## Person-tracking literature surveyed: three claims narrowed, six experiments proposed (2026-09-28)
+
+*keywords:* tracking literature, RESEARCH §7.4, ByteTrack, OC-SORT, CBMOT, IPDA, track-before-detect, Deep Tracking, GOSPA, OSPA, HOTA, JRDB tracking, Arreghini 2607.21309, E14, E15, E16, E17, E18, E19, A54
+
+The owner asked for a review of every citation and experiment in the repo against the person-*tracking* literature, which had never been surveyed. Written up as `docs/RESEARCH.md` §7.4; no code changed, no run started.
+
+- **SORT is not the strongest post-hoc baseline.** ByteTrack (ECCV 2022) associates low-score detections in a second pass, so "a post-hoc tracker only ever sees post-threshold detections" holds for SORT only. Corrected in `docs/RESEARCH.md` §3.5, `memory/dataset-properties.md` and `memory/slot-design-evidence.md`; E14 is the test.
+- **The slot value rule is prior art.** `v + gain*(1-v)*s` is CBMOT's score update (IROS 2021) with a gain, and track existence probability is IPDA (1994); D2 is CBMOT's count-based ablation, which lost there and ties here.
+- **"Acting before the threshold" is track-before-detect** (Salmond & Birch 2001), and learned recurrent memory over raw 2D laser exists as Deep Tracking (AAAI 2016, IJRR 2018), grid-keyed. The claim that survives: a learned, causal, object-keyed track-before-detect over sub-threshold candidates.
+- **Two errors fixed in TODO A51's earlier literature note:** 99.1% is the share of people stage 3 *loses* that rescoring pushed under the threshold, not "of the people our memory recovers"; and JRDB's tracking benchmarks are image-plane and point-cloud, with none on its 2D laser.
+- **A new FROG number exists:** Arreghini et al., arXiv 2607.21309 (July 2026), 65.9 / 66.4% AP with a 3 s space-time window, trained by cross-modal self-supervision; not added to `memory/performance-log.md` until its training regime is confirmed.
+- **Proposed, not agreed:** TODO A56 (split out of A51 on 2026-09-29, owner's request) -- E14 ByteTrack on the same candidates, E15 CBMOT rescoring, E16 GOSPA beside AP, E17 slots scored as a tracker, E18 self-supervised memory, E19 an occlusion input for coasting. A54 gained two leads from prof. Aycard's own publications, neither of them the reference.
+
 ## `AlgorithmicDetector` is credited to prof. O. Aycard, wherever it is reported (2026-09-23)
 
 *keywords:* Aycard, AlgorithmicDetector, attribution, credit, citation, provenance, A54
@@ -83,6 +320,51 @@ Owner-approved (2026-09-20) after asking whether the slot bookkeeping should be 
 - **D4 `--learn-value`**: the value rule's `gain` and `fade_time_s` become parameters (+2). The discrete decisions stay under `no_grad` and take the constants as detached floats, while the value the network reads is recomputed with gradient, so the rule moves as they train.
 - **Interaction, found by D4's test:** with T1's zero-initialised rescoring head no gradient reaches anything the head reads at initialisation, value constants included, so D4 must be run on whichever rescoring parameterisation wins T1.
 - `object_memory` carries all four through a checkpoint round trip. Tests: 5 in `TestObjectMemory`, 1 in `TestObjectMemoryFor`.
+
+## The driver bugchecks are a pattern on one branch, and AMD requires 26.2.2 for ROCm 7.2.1: revert decided (2026-09-26)
+
+*keywords:* A55, amdkmdag.sys, bugcheck, 0x7E, Adrenalin 26.2.2, Adrenalin 26.8.1, 32.0.23027.2005, 32.0.31041.1004, TDR, driver revert
+
+- **The full crash history, read from the System log and WER:** five `0x7E`/`c0000005` bugchecks since 2026-05-13, **all on the `32.0.31xxx` driver branch** installed from 2026-05-08 (26.5.x, 26.6.x, then three on 26.8.1: 09-01, 09-22, 09-25). The three on 26.8.1 fault at the same code offset (`...4f50`), so one deterministic code path. TDR live dumps also exist (`0x141` 08-09 and 09-14, `0x117` 07-27 and 09-21), which corrects this file's 2026-09-23 entry ("no TDR events"). The earlier `22xxx`/`23xxx` drivers, Dec 2025 to May 2026 (26.2.2 among them), logged no bugcheck, but never ran ROCm.
+- **AMD's *Install PyTorch on Windows* page says 26.2.2 "must be installed"** for the ROCm 7.2.1 wheels, and 26.2.2 is driver store `32.0.23027.2005`, the `23xxx` branch. 26.8.1 was never a validated pairing.
+- **Decision:** revert to 26.2.2 rather than to 26.7.x, which would stay on the branch that crashed. The owner stopped the A51 queue at 04:51 to do it; O2's resume file is intact. Verification plan and fallback in TODO A55; `memory/gotchas.md` updated.
+- **Then the dumps were read (WinDbg), and the revert is on hold behind one test.** 09-22 and 09-25 are one bug: a null-pointer read in `amdkmdag` on Windows' power-IRP worker, i.e. while the GPU's power state was being changed. The display turns off after 5 min, the trainer keeps only the system awake, and the driver has GPU power-down (BACO) enabled; 09-25's crash came 4 min 50 s after the last unlock. Hypothesis: display off -> chip power-down under a live ROCm context. Two side findings: the 09-21 "device-side corruption" was a TDR at 23:06:26 inside epoch 12's evaluation, and the 09-15 "sleep" was a Windows Update restart.
+- **The display-off hypothesis failed its test.** Ten minutes of ROCm load with 0.2-30 s idle gaps, display off for ~9: first-kernel latency after a gap 0.4-1.3 ms (display on: 0.7-1.2 ms), D-state D0 throughout, data intact, no crash. The trigger of the power request stays unknown; the minidumps cannot show it (small dumps only). Revert back on, preceded by switching to kernel dumps.
+- **Then the owner chose to find the cause before reverting.** Kernel dumps enabled (live since the 05:58 boot, 8 GB dedicated dump file on `C:`), and the queue relaunched O2 at 06:03 on 26.8.1. New suspect: a display **wake** under load -- both crashes came as the owner logged in to check progress, and the display-off test never woke the display with a GPU program running. The System log shows 401 wake/unlock transitions since 09-14 against 2 bugchecks, so a wake trigger would fire on well under 1% of wakes.
+
+## D1 settled at three seeds: room coordinates are worth 1.14 pp; a second driver bugcheck, survived by resume (2026-09-26)
+
+*keywords:* A51, D1, room_frame, a51_d1_sensor_s1, a51_d1_sensor_s2, amdkmdag.sys, bugcheck, resume, O2
+
+- **D1, the design's central claim, is the one internal choice that is now established.** Slots in the sensor frame score 82.02 / 82.57 / 82.01 (mean **82.20**, sd 0.32) against B0's 83.34 (sd 0.48): **-1.14 pp, Welch t = 3.40, p = 0.034**. Recall at matched false positives moves only -0.17 pp (p = 0.41), so the effect is in ranking, not at the operating point, and the ablation still bundles the association loss the sensor frame causes -- the robot's own motion pushes a static object out of the 0.6 m gate.
+- Seed 1 needed **five attempts and 835 min**; seed 2 took 321 min on its first.
+- **The AMD driver bugchecked a second time** (2026-09-25 22:29, same `0x7E` / `amdkmdag.sys`), killing O2 at 3.9 h and the launcher with it. **Resume worked in a real crash**: O2 restarted from chunk stage 1, epoch 7, with 3.86 h credited, losing only the 16 minutes since its last evaluation. The crash also caught a checkpoint mid-write, leaving a 0-byte `10s.best.pth` -- exactly what the resume file avoids by writing beside itself and renaming.
+- O2 is running again; the queue after it is E1-E4, then E6/E7, then O1.
+
+## Metric spreads re-judge phase 1, four ideas closed, and the write-up's experiment list (2026-09-25)
+
+*keywords:* A51, E1, E2, E3, E4, E5, E6, E7, E8, E9, noise floor, coast_precision spread, phase 5, rejected-ideas
+
+- **E9, the spread of every reported metric** over B0's three seeds: AP sd 0.48, AP at 0.3 m 0.43, **recall at matched FP 0.29**, **coasting precision 2.73**; three-sigma bars 1.45 / 1.29 / 0.86 / 8.19 pp. **This re-judges phase 1**: T1's recall gain (+0.93 pp) is the only arm effect that clears its own bar, barely; T2's (+0.73) does not, and neither arm's coasting-precision gain (+6.8, +6.6) approaches 8.19. The two arms are therefore not the equivalent pair they looked like. A three-sample sd is itself uncertain, so these are order-of-magnitude bars.
+- **Four slot ideas closed with reasons** in `memory/rejected-ideas.md`: S3 (capacity is not scarce -- 24 of 256 slots, 95.5% of unreported people already held), S4 (97% already have a matched slot across a 3x gate and 15x fade sweep), T3 (the offending input was the time step, since fixed), and D2 recorded as *unsupported rather than rejected*.
+- **O1 unparked** (owner's call): the per-iteration `nan_diagnosis`, `--resume`, and a launcher that retries a crash but not a guard make a third attempt cheap to read and cheap to lose.
+- **Phase 5 proposed and settled with the owner**: E1 memory-horizon curve, E2 odometry robustness, E3 crowding, E4 cost scaling accepted (none needs training); E6 and E7 accepted; **E5 dropped** -- and noted as already covered, since E6 and E7 together *are* the per-track recurrent baseline; **E8 (DROW) postponed** until the FROG architecture is settled, because the plan is to carry it across by parameters only.
+- **Two corrections recorded for the write-up.** Li2Former's crashes were DirectML-era, and stage 3 is attention that trains fine on ROCm, so "this setup cannot train attention" no longer holds. And the memory **does** contain recurrence: `state = keep * state + (1 - keep) * update` with a learned per-slot decay is a diagonal RNN. The claim that survives is object-keyed memory carried as state at constant per-frame cost, rather than re-encoding a T-scan window.
+
+## Resume verified end to end by killing a run mid-flight (2026-09-24)
+
+*keywords:* A51, resume, --resume, save_resume, a51_resume_check
+
+The owner asked for autosave-and-resume to be armed before any further long run. Unit tests covered the machinery; this covered the path. A `step3a` run was hard-killed at epoch 3 and relaunched with the identical command:
+
+| | epoch 1 | 2 | 3 | 4 | 5 | 6 |
+| --- | --- | --- | --- | --- | --- | --- |
+| val AP | 89.85 | 91.41 | 91.58 | **91.87** | 91.98 | 91.61 |
+| gate | +0.024 | +0.025 | +0.026 | **+0.031** | +0.031 | +0.032 |
+
+The second leg logged `resuming step3a_resume.pth: chunk stage 0, 3 epochs done, 0.07 h already spent`, started at **epoch 4**, and carried the validation curve and the gate forward -- a restart would have begun near 89.85% with the gate at +0.024. It then finished the stage, scored the test split (80.17% wp-AUC against its candidates' 77.66%, 4.38 ms per frame) and wrote its results, so the whole path after a resume works, not only the restore.
+
+Note the run itself is a 6-epoch toy at four validation windows, kept only as the resume fixture; its accuracy is not an A51 result.
 
 ## Every trainer can resume, after an AMD driver bugcheck took a healthy run (2026-09-23)
 

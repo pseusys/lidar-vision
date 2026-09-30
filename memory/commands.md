@@ -42,13 +42,27 @@ python train_three_horizon.py step3a --stage2 ../checkpoints_three_horizon/step2
 python train_three_horizon.py step3b --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth   # whole detector with feedback
 python train_three_horizon.py step4 --stage2 ... --memory ... --joint ../checkpoints_three_horizon/step3b_joint.best.pth   # SORT and slot-count ablations, no training
 python scan_anomalies.py --dataset frog    # raw-scan noise report: no-return encodings, invalid runs, spikes, jitter, timestamps (also drow; A49)
+python slot_experiments.py horizon --memory <step3a ckpt> --stage2 <step2 ckpt>    # how long a memory the model uses: AP against how often it is emptied (A51 E1)
+python slot_experiments.py odometry --memory ... --stage2 ... --sensor-memory <D1 ckpt>  # AP against odometry drift, room frame vs sensor frame (A51 E2)
+python slot_experiments.py crowding --memory ... --stage2 ...                    # AP by people per frame, candidates vs memory (A51 E3)
+python slot_experiments.py cost --memory ... --stage2 ...                        # ms per frame against slot count, 64-720 (A51 E4)
+python score_memory.py --memory ... --stage2 ... --out <json>                    # score an interrupted run's best checkpoint (A51)
+python judge_arms.py                                                            # every A51 arm's deltas and verdicts against a control's three-sigma bars; stdlib only, safe beside a running job
+python train_three_horizon.py step3b --stage2 ... --memory ... --oracle-prior    # feed stage 2 a ground-truth prior: the ceiling on what feedback could buy (A51 E12b)
+python train_three_horizon.py step3b --stage2 ... --memory ... --no-rescore      # drop the rescoring correction, leaving the prior as memory's only route to the loss (A51 E12a)
+python verify_oracle_prior.py --joint <step3b ckpt>                             # is E12's oracle prior real on recorded frames, and did the feedback weights move? needs the machine to itself (A51 E12)
+python measure_prior_share.py --runs a51_e12b_oracle a51_e12a_norescore        # what fraction of stage 2's bottleneck the feedback prior carries; explains E12's null (A51 E12)
+python judge_arms.py --control a51_b0_short --json ../results/a51_arms.json      # the same against the older control, written out as data
 python memory_diagnosis.py --slot-speed --cache .three_horizon_cache/<test cache>.pkl   # slot velocity against a >= 1 s displacement reference, stamped dt vs the trainer's running average; no model (A51 0a)
+python memory_diagnosis.py --recovery --stage2 ... --memory ... --out <json>     # who stage 3 misses, whether a slot holds them, and whether a candidate exists at all (feedback's headroom; A51 E12)
 python three_horizon_oracle.py             # the interpolation bound on OUR candidates: recall headroom above stage 2, and how much of it stage 3 takes (A50 phase 1)
 python duration_curve.py --dir ../checkpoints_three_horizon/step2_control ../checkpoints_three_horizon/step2_dropout01   # test AP against training duration, from `step2 --checkpoint-every`'s checkpoints (A50 phase 1)
 python train_three_horizon.py step1        # stage 3 on cached LFE-Peaks candidates, the memory in isolation (dropped from the plan 2026-09-15)
 ```
 
-Every step takes `--resume`, which continues from `<step>_resume.pth` in `--out-dir` -- written after each evaluation, so a crash costs the time since it rather than the whole run. Relaunch the identical command with `--resume` added; it is off by default, so a fresh run never picks up an old state by accident.
+Every step takes `--resume`, **verified end to end on 2026-09-24** by killing a run at epoch 3 and relaunching it: it continued at epoch 4 with its validation curve and gate unbroken, then finished and wrote its results. It continues from `<step>_resume.pth` in `--out-dir` -- written after each evaluation, so a crash costs the time since it rather than the whole run. Relaunch the identical command with `--resume` added; it is off by default, so a fresh run never picks up an old state by accident.
+
+**Chain launchers retry with `--resume`.** The one in use (session scratchpad `run_queue3.ps1`) gives each step up to three attempts, passing `--resume` every time, and logs each attempt separately. A step that died without reaching a training guard is retried from its saved state; one whose log carries a guard message (`not finite at chunk`, `candidates' val AP moved`, `the training loss is`) stops the chain, because retrying cannot fix a run that is wrong rather than interrupted.
 
 Each writes `../checkpoints_three_horizon/<step>_*.best.pth` (the run's best, whatever epoch or stage produced it) and `<step>_results.json`; every budget flag is in `--help`, defaults as in `TODO.md` A43. `--limit-recordings N` makes a smoke run. Launch long runs as a detached process, not as a child of an agent session, which ends with the session.
 
@@ -149,6 +163,7 @@ Methodology, citations and the current grid: `informational-capacity-proxy.md`.
 
 ```bash
 .venv/Scripts/python.exe -m pytest tests -q               # 533 tests, ~60s, CPU-only, no GPU or dataset needed — run after every edit
+python memory/scripts/machine_is_free.py && python -m pytest tests -q   # the guard first: the suite has killed two live training runs
 python memory/scripts/verify_memory.py                    # docs: links, indexes, markdown rules
 python memory/scripts/verify_memory.py --strict            # same, but style warnings fail the run too
 ```
