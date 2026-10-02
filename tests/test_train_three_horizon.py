@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 from follow_the_drow.detectors.three_horizon import MAX_RANGE_M, CalibrationNetwork, ObjectMemory, SlotRules
 from train_three_horizon import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, clip_frames, clip_length, coast_targets, decode_votes, evaluate, evaluation_segments,
-    FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES,
+    FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
     DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, coasting_hits, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
 )
 
@@ -628,7 +628,8 @@ class TestFramePeriods:
         seq = SequenceCandidates(
             xy=np.zeros((n, 1, 2), np.float32), score=np.zeros((n, 1), np.float32), valid=np.zeros((n, 1), bool), target=np.zeros((n, 1), bool),
             pose=np.zeros((n, 3), np.float32), time=self._bunched(n), annotated=np.ones(n, bool), gt_xy=np.zeros((n, 1, 2), np.float32),
-            gt_valid=np.zeros((n, 1), bool), gt_covered=np.zeros((n, 1), bool), features=np.zeros((n, 1, 0), np.float16))
+            gt_valid=np.zeros((n, 1), bool), gt_covered=np.zeros((n, 1), bool), features=np.zeros((n, 1, 0), np.float16),
+            free_range=np.full((n, 8), MAX_RANGE_M, np.float16))
         split = pack([seq])
         got = gather(split, np.zeros((1, n), dtype=int), np.arange(n)[None], "cpu")["dt"][0].numpy()
         assert got == pytest.approx(frame_periods(seq.time, np.array([0]), np.array([n]), DT_AVERAGE_FRAMES).astype(np.float32))
@@ -768,6 +769,67 @@ class TestPerturbPoses:
     def test_heading_drift_turns_the_pose(self):
         pose = np.zeros((1, 3), np.float32)
         assert abs(float(perturb_poses(pose, np.array([10.0]), 0.0, 1.0)[0, 2])) > 0.01
+
+
+class TestSampleDrift:
+    """S3/E11: a drift rate per stream, redrawn each chunk -- domain randomisation over odometry error rather than one rate."""
+
+    def test_every_stream_gets_its_own_rate_inside_the_band(self):
+        drift, heading = sample_drift(np.random.default_rng(0), 8, 0.05, 2.0)
+        assert drift.shape == (8,) and heading.shape == (8,)
+        assert (drift >= 0).all() and (drift <= 0.05).all()
+        assert (heading >= 0).all() and (heading <= 2.0).all()
+        assert len(np.unique(drift)) > 1               # a band, not one rate applied eight times
+
+    def test_successive_chunks_draw_different_rates(self):
+        rng = np.random.default_rng(0)
+        assert not np.allclose(sample_drift(rng, 4, 0.05, 2.0)[0], sample_drift(rng, 4, 0.05, 2.0)[0])
+
+    def test_a_zero_band_asks_for_no_drift_at_all(self):
+        drift, heading = sample_drift(np.random.default_rng(0), 4, 0.0, 0.0)
+        assert not drift.any() and not heading.any()
+
+
+class TestPerturbPosesPerStream:
+    """S3/E11: the same drift model, but each stream on its own rate."""
+
+    def test_each_stream_drifts_at_its_own_rate(self):
+        pose = np.zeros((2, 3), np.float32)
+        out = perturb_poses(pose, np.array([10.0, 10.0]), np.array([0.0, 0.1]), 0.0)
+        assert np.allclose(out[0, :2], 0.0)                       # the stream given no drift is untouched
+        assert np.linalg.norm(out[1, :2]) > 0.1
+
+    def test_an_all_zero_array_is_the_same_as_no_drift(self):
+        pose = np.array([[1.0, 2.0, 0.5], [3.0, 4.0, 1.0]], np.float32)
+        assert np.allclose(perturb_poses(pose, np.array([5.0, 5.0]), np.zeros(2), np.zeros(2)), pose)
+
+    def test_a_scalar_still_works_as_it_always_did(self):
+        pose = np.zeros((2, 3), np.float32)
+        array = perturb_poses(pose, np.array([4.0, 4.0]), np.array([0.1, 0.1]), 0.0)
+        assert np.allclose(perturb_poses(pose, np.array([4.0, 4.0]), 0.1, 0.0), array)
+
+
+class TestChunkElapsed:
+    """S3/E11: drift accumulates from the frame the slots were created in, so the clock restarts wherever memory does."""
+
+    def test_it_accumulates_across_the_chunk(self):
+        dt = np.full((1, 4), 0.025)
+        elapsed, carry = chunk_elapsed(dt, np.zeros((1, 4), bool), np.zeros(1))
+        assert elapsed[0].tolist() == pytest.approx([0.025, 0.05, 0.075, 0.1])
+        assert carry[0] == pytest.approx(0.1)
+
+    def test_a_reset_restarts_the_clock_for_that_stream_only(self):
+        dt = np.full((2, 3), 1.0)
+        reset = np.array([[False, True, False], [False, False, False]])
+        elapsed, _ = chunk_elapsed(dt, reset, np.zeros(2))
+        assert elapsed[0].tolist() == pytest.approx([1.0, 0.0, 1.0])
+        assert elapsed[1].tolist() == pytest.approx([1.0, 2.0, 3.0])
+
+    def test_it_carries_on_from_the_previous_chunk(self):
+        dt = np.full((1, 2), 1.0)
+        elapsed, carry = chunk_elapsed(dt, np.zeros((1, 2), bool), np.array([10.0]))
+        assert elapsed[0].tolist() == pytest.approx([11.0, 12.0])
+        assert carry[0] == pytest.approx(12.0)
 
 
 class TestResume:
@@ -923,7 +985,8 @@ class TestEvaluate:
                 xy=rng.uniform(-3, 3, (n, 6, 2)).astype(np.float32), score=rng.random((n, 6)).astype(np.float32), valid=rng.random((n, 6)) < 0.8,
                 target=np.zeros((n, 6), bool), pose=np.zeros((n, 3), np.float32), time=np.arange(n) * 0.04, annotated=np.ones(n, bool),
                 gt_xy=rng.uniform(-3, 3, (n, 2, 2)).astype(np.float32), gt_valid=present, gt_covered=present.copy(),
-                features=rng.standard_normal((n, 6, 8)).astype(np.float16))
+                features=rng.standard_normal((n, 6, 8)).astype(np.float16),
+                free_range=np.full((n, 8), MAX_RANGE_M, np.float16))
         return pack([recording(23), recording(17)])
 
     def _model(self):
@@ -978,7 +1041,7 @@ class TestReplaySort:
             xy=np.tile(np.array([[[0.0, 2.0]]], np.float32), (n, 1, 1)), score=np.full((n, 1), 0.9, np.float32), valid=present[:, None].copy(),
             target=np.zeros((n, 1), bool), pose=np.zeros((n, 3), np.float32), time=np.arange(n) * 0.04, annotated=np.ones(n, bool),
             gt_xy=np.tile(np.array([[[0.0, 2.0]]], np.float32), (n, 1, 1)), gt_valid=present[:, None].copy(), gt_covered=present[:, None].copy(),
-            features=np.zeros((n, 1, 0), np.float16))
+            features=np.zeros((n, 1, 0), np.float16), free_range=np.full((n, 8), MAX_RANGE_M, np.float16))
         reported = [len(scores) for scores, _, _ in replay_sort(pack([seq]), min_hits=3)]
         assert reported[:5] == [0, 0, 0, 0, 0]           # its first frame is not confirmed
         assert reported[-1] == 1

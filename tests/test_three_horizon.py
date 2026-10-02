@@ -20,7 +20,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
 from follow_the_drow.detectors.three_horizon import (
     N_BEAM_FEATURES, CalibrationNetwork, CausalTemporalConv, ObjectMemory, SlotRules, align_sectors, beam_features, fold_legacy_calibration,
-    initial_slots, load_calibration_weights, manage_slots, render_prior, sanitize_ranges, sensor_to_world, world_to_sensor,
+    free_range_profile, initial_slots, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
+    sensor_to_world, visibility_feature, world_to_sensor,
 )
 
 
@@ -749,6 +750,75 @@ class TestCalibrationDropout:
     def test_it_adds_no_parameters_so_existing_checkpoints_still_load(self):
         assert set(self._net(0.5).state_dict()) == set(self._net(0.0).state_dict())
         self._net(0.5).load_state_dict(_small_network().state_dict())
+
+
+class TestFreeRangeProfile:
+    """S2: the nearest thing the laser actually saw, per angular sector -- the evidence a coasting slot is or is not occluded."""
+
+    def test_it_keeps_the_nearest_return_in_each_sector(self):
+        ranges = torch.tensor([[3.0, 2.0, 5.0, 4.0, 9.0, 8.0]])           # three sectors of two beams
+        assert free_range_profile(ranges, sectors=3, max_range_m=30.0)[0].tolist() == pytest.approx([2.0, 4.0, 8.0])
+
+    def test_a_missing_return_counts_as_nothing_there_rather_than_as_an_obstacle(self):
+        # FROG writes +inf and 61.0 m for "no return"; read literally, a minimum would make them the nearest obstacle
+        ranges = torch.tensor([[float("inf"), 61.0, 0.0, -1.0]])
+        assert free_range_profile(ranges, sectors=2, max_range_m=30.0)[0].tolist() == pytest.approx([30.0, 30.0])
+
+    def test_one_real_return_beside_missing_ones_still_wins_its_sector(self):
+        ranges = torch.tensor([[float("inf"), 4.0, 61.0, 61.0]])
+        assert free_range_profile(ranges, sectors=2, max_range_m=30.0)[0].tolist() == pytest.approx([4.0, 30.0])
+
+    def test_every_sector_is_covered_once(self):
+        ranges = torch.arange(1, 13, dtype=torch.float32)[None]
+        assert free_range_profile(ranges, sectors=4, max_range_m=30.0).shape == (1, 4)
+
+
+class TestVisibilityFeature:
+    """S2: is a coasting slot hidden behind something, or standing in space the laser saw straight through?"""
+
+    def test_a_slot_behind_a_nearer_return_reads_as_occluded(self):
+        # slot 5 m straight ahead, something at 2 m in the same sector: the person could plausibly still be there
+        free = torch.full((1, 6), 30.0)
+        free[0, 3] = 2.0
+        assert visibility_feature(torch.tensor([[[0.0, 5.0]]]), free, _angles(48), sectors=6, scale=2.0)[0, 0].item() < 0
+
+    def test_a_slot_the_laser_saw_past_reads_as_free_space(self):
+        # the beam reached 9 m through the slot's own position, so nobody is standing there
+        assert visibility_feature(torch.tensor([[[0.0, 5.0]]]), torch.full((1, 6), 9.0), _angles(48), sectors=6, scale=2.0)[0, 0].item() > 0
+
+    def test_it_saturates_rather_than_growing_without_bound(self):
+        near = visibility_feature(torch.tensor([[[0.0, 5.0]]]), torch.full((1, 6), 0.01), _angles(48), 6, 2.0)
+        far = visibility_feature(torch.tensor([[[0.0, 5.0]]]), torch.full((1, 6), 300.0), _angles(48), 6, 2.0)
+        assert near[0, 0].item() == pytest.approx(-1.0) and far[0, 0].item() == pytest.approx(1.0)
+
+    def test_a_slot_outside_the_field_of_view_reads_as_nothing_known(self):
+        behind = torch.tensor([[[0.0, -4.0]]])
+        assert visibility_feature(behind, torch.full((1, 6), 30.0), _angles(48), sectors=6, scale=2.0)[0, 0].item() == 0.0
+
+
+class TestMemoryWithVisibility:
+    """S2: the feature reaches the heads, and switching it off leaves the model exactly as it was."""
+
+    def _model(self, **kw):
+        torch.manual_seed(0)
+        return ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, **kw)
+
+    def test_the_statistics_vector_is_one_wider_and_the_heads_follow(self):
+        on, off = self._model(visibility=True), self._model()
+        assert on.coast.in_features == off.coast.in_features + 1
+        assert on.statistics.in_features == off.statistics.in_features + 1
+
+    def test_it_refuses_to_run_without_the_free_range_it_needs(self):
+        model = self._model(visibility=True)
+        with pytest.raises(ValueError, match="free_range"):
+            TestObjectMemory()._run(model, 1)
+
+    def test_the_default_model_is_untouched(self):
+        # the flag must not perturb any existing checkpoint's shape or numbers
+        off = self._model()
+        assert off.coast.in_features == 32 + 8
+        for out, score, valid in TestObjectMemory()._run(off, 4):
+            assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-5)
 
 
 class TestRescoringOff:

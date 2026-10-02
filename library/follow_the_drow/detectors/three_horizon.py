@@ -25,6 +25,7 @@ SLOT_STATISTICS = 8
 CANDIDATE_FEATURES = 5
 PROBABILITY_EPS = 1e-6
 SILENT_COAST_LOGIT = -10.0
+VISIBILITY_SCALE_M = 1.0        # a metre of free space past a slot saturates the evidence against it
 HIT_RATE_TIME_S = 1.0
 FEATURE_SCALE = 10.0
 
@@ -339,22 +340,24 @@ class ObjectMemory(nn.Module):
     def __init__(self, rules: SlotRules = SlotRules(), dim: int = 128, heads: int = 4, sigma_m: float = 0.6, decay_init_s: Tuple[float, float] = (1.0, 60.0),
                  feature_dim: int = 0, rescore_gate: bool = True, rescore_limit: float = 0.0, room_frame: bool = True,
                  fixed_decay_s: float = 0.0, learn_value: bool = False, exchange: bool = True, learned_match: bool = True,
-                 recurrent: bool = True, rescore: bool = True):
+                 recurrent: bool = True, rescore: bool = True, visibility: bool = False):
         super().__init__()
         self.rules, self.dim, self.sigma_m, self.feature_dim = rules, dim, sigma_m, feature_dim
+        self.visibility = visibility
+        statistics = SLOT_STATISTICS + int(visibility)
         self.rescore_limit, self.room_frame, self.fixed_decay_s = rescore_limit, room_frame, fixed_decay_s
         self.recurrent = recurrent
         self.encode = nn.Sequential(nn.Linear(CANDIDATE_FEATURES + feature_dim, dim), nn.GELU(), nn.Linear(dim, dim))
         self.spawn = nn.Linear(dim, dim) if recurrent else None
-        self.statistics = nn.Linear(SLOT_STATISTICS, dim)
+        self.statistics = nn.Linear(statistics, dim)
         self.match = _BiasedAttention(dim, heads) if recurrent and learned_match else None
         self.exchange = _BiasedAttention(dim, heads) if recurrent and exchange else None
         self.exchange_norm = nn.LayerNorm(dim) if recurrent and exchange else None
-        self.update = nn.Linear(dim + SLOT_STATISTICS, dim) if recurrent else None
+        self.update = nn.Linear(dim + statistics, dim) if recurrent else None
         if fixed_decay_s or not recurrent:
             self.decay, self.decay_bias = None, None        # one time constant for every slot, or no slot state at all
         else:
-            self.decay = nn.Linear(dim + SLOT_STATISTICS, dim, bias=False)
+            self.decay = nn.Linear(dim + statistics, dim, bias=False)
             times = exp(linspace(log(decay_init_s[0]), log(decay_init_s[1]), dim))
             self.decay_bias = nn.Parameter(tlog(expm1(1.0 / times)))
         if learn_value:                                      # the value rule's two constants, as parameters the loss can reach
@@ -368,7 +371,7 @@ class ObjectMemory(nn.Module):
             self.register_parameter("rescore_gate", None)       # the head starts silent through its own last layer instead
             if rescore:
                 nn.init.zeros_(self.rescore[-1].weight), nn.init.zeros_(self.rescore[-1].bias)
-        self.coast = nn.Linear(dim + SLOT_STATISTICS, 1)
+        self.coast = nn.Linear(dim + statistics, 1)
         nn.init.zeros_(self.coast.weight)
         nn.init.constant_(self.coast.bias, SILENT_COAST_LOGIT)
 
@@ -402,7 +405,7 @@ class ObjectMemory(nn.Module):
         return where(events.source >= 0, slots.value, where(events.matched, raised, faded))
 
     def step(self, cand_xy: Tensor, cand_score: Tensor, cand_valid: Tensor, pose: Tensor, dt: Tensor, slots: Slots, reset: Optional[Tensor] = None,
-             cand_features: Optional[Tensor] = None) -> MemoryOutput:
+             cand_features: Optional[Tensor] = None, free_range: Optional[Tensor] = None, angles: Optional[Tensor] = None) -> MemoryOutput:
         """One frame: candidates `[B, P, 2]` in the detection frame with scores and validity, robot pose `[B, 3]`, seconds since
         the previous frame `[B]`; `reset` `[B]` empties those streams' memory first; `cand_features` `[B, P, feature_dim]` are the
         detector's own features of each candidate, when the memory was built with `feature_dim`."""
@@ -428,15 +431,21 @@ class ObjectMemory(nn.Module):
         observed_score = where(refill, cand_score.gather(1, events.source.clamp(min=0)), cand_score.gather(1, events.match_index.clamp(min=0)) * events.matched)
         stats = stack([slots.value, slots.age_s / FEATURE_SCALE, slots.since_match_s / FEATURE_SCALE, (slots.position - slots.origin).norm(dim=-1),
                        slots.velocity.norm(dim=-1), slots.hit_rate, (events.matched | refill).float(), observed_score], dim=-1)
+        if self.visibility:
+            if free_range is None or angles is None:
+                raise ValueError("this memory was built with visibility=True, so step() needs free_range and angles; "
+                                 "free_range_profile() builds the first from the raw scan")
+            here = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
+            stats = cat([stats, visibility_feature(here, free_range, angles, free_range.shape[-1])[..., None]], dim=-1)
 
         if not self.recurrent:
             # no slot state: the head reads each candidate beside the statistics of the slot its association gave it
             # one row per candidate plus a discard row, so the slots that matched nothing cannot overwrite a real entry
             candidates = cand_score.shape[1]
-            held = zeros(stats.shape[0], candidates + 1, SLOT_STATISTICS, device=cand_score.device)
+            held = zeros(stats.shape[0], candidates + 1, stats.shape[-1], device=cand_score.device)
             taken = events.matched | refill
             target = where(taken, where(refill, events.source, events.match_index), full_like(events.source, candidates))
-            held = held.scatter(1, target.clamp(min=0)[..., None].expand(-1, -1, SLOT_STATISTICS), stats)
+            held = held.scatter(1, target.clamp(min=0)[..., None].expand(-1, -1, stats.shape[-1]), stats)
             recalled = self.statistics(held[:, :candidates])
             slots = Slots(slots.alive, slots.value, slots.position, slots.velocity, slots.origin, slots.age_s, slots.since_match_s,
                           slots.hit_rate, state)
@@ -600,6 +609,32 @@ def load_calibration_weights(net: CalibrationNetwork, state: dict) -> None:
         padded[:, :state["aggregate.weight"].shape[1]] = state["aggregate.weight"]
         state = {**state, "aggregate.weight": padded}
     net.load_state_dict(state)
+
+
+def free_range_profile(ranges: Tensor, sectors: int, max_range_m: float = MAX_RANGE_M) -> Tensor:
+    """The nearest thing the laser actually saw per angular sector, `[B, S]`, from raw ranges `[B, N]`.
+
+    Readings that mean "nothing within range" go through `sanitize_ranges` first, so a missing return reads as empty space
+    rather than as the closest obstacle in its sector -- the opposite of what a raw minimum would say.
+    """
+    clean = sanitize_ranges(ranges, max_range_m)
+    return clean.reshape(clean.shape[0], sectors, clean.shape[-1] // sectors).amin(dim=-1)
+
+
+def visibility_feature(slot_xy: Tensor, free_range: Tensor, angles: Tensor, sectors: int, scale: float = VISIBILITY_SCALE_M) -> Tensor:
+    """Per slot `[B, K]`: how much further the laser reached than the slot claims to be, scaled and clamped to `[-1, 1]`.
+
+    Negative means something is in front of the slot, so a person there could still be hidden; positive means the beam passed
+    through the slot's own position and found nothing, which is direct evidence against it. Slots outside the field of view read
+    0 -- nothing known rather than either. This is the evidence the coasting head was missing (`TODO.md` A51 S2): it must tell a
+    genuinely occluded person from a slot that is simply wrong, and until now it saw nothing of the current scan at all.
+    """
+    width = (angles[1] - angles[0]) * len(angles) / sectors
+    index = ((atan2(-slot_xy[..., 0], slot_xy[..., 1]) - angles[0]) / width).floor().long()
+    inside = (index >= 0) & (index < sectors)
+    seen = free_range.gather(1, where(inside, index, zeros_like(index)))
+    margin = (seen - slot_xy.norm(dim=-1)) / scale
+    return where(inside, margin.clamp(-1.0, 1.0), zeros_like(margin))
 
 
 def render_prior(slot_xy: Tensor, value: Tensor, person: Tensor, alive: Tensor, angles: Tensor, sectors: int) -> Tensor:

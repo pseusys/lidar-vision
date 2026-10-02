@@ -70,7 +70,7 @@ sys.path.insert(0, str(_HERE))
 from follow_the_drow.detectors.three_horizon import ObjectMemory, SlotRules, initial_slots, manage_slots, sensor_to_world, world_to_sensor  # noqa: E402
 from train_three_horizon import (  # noqa: E402
     MATCH_RADIUS_M, MAX_DT_S, MIN_DT_S, MIN_REPORTED_SCORE, OPERATING_THRESHOLD, PROBABILITY_EPS, SequenceCandidates, Split, detect_device, evaluation_segments, gather,
-    load_split, mean_frame_period, object_memory, pack,
+    laser_angles, load_split, mean_frame_period, object_memory, pack,
 )
 
 SPEED_WINDOW_S = 1.0
@@ -127,7 +127,8 @@ def diagnose(model: ObjectMemory, split: Split, device, streams: int, threshold:
             for t in range(t0, t1):
                 i = t - t0
                 out = model.step(batch["xy"][:, i], batch["score"][:, i], batch["valid"][:, i], batch["pose"][:, i], batch["dt"][:, i], slots,
-                                 reset=torch.full((len(group),), t == 0, dtype=torch.bool, device=device), cand_features=batch["features"][:, i])
+                                 reset=torch.full((len(group),), t == 0, dtype=torch.bool, device=device), cand_features=batch["features"][:, i],
+                                 free_range=batch["free_range"][:, i], angles=laser_angles(device))
                 slots = out.slots
                 rows = np.nonzero(chosen[:, t])[0]
                 if not len(rows):
@@ -247,7 +248,8 @@ def recovery(model: ObjectMemory, split: Split, device, streams: int, threshold:
             for t in range(t0, t1):
                 i = t - t0
                 out = model.step(batch["xy"][:, i], batch["score"][:, i], batch["valid"][:, i], batch["pose"][:, i], batch["dt"][:, i], slots,
-                                 reset=torch.full((len(group),), t == 0, dtype=torch.bool, device=device), cand_features=batch["features"][:, i])
+                                 reset=torch.full((len(group),), t == 0, dtype=torch.bool, device=device), cand_features=batch["features"][:, i],
+                                 free_range=batch["free_range"][:, i], angles=laser_angles(device))
                 slots = out.slots
                 rows = np.nonzero(chosen[:, t])[0]
                 in_use.extend(out.slots.alive.sum(dim=1).cpu().numpy().tolist())

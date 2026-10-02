@@ -47,7 +47,7 @@ sys.path.insert(0, str(_HERE))
 from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from follow_the_drow.detectors import LFEPeaksDetector
 from follow_the_drow.detectors.three_horizon import (
-    MAX_RANGE_M, CalibrationNetwork, CalibrationState, MemoryOutput, ObjectMemory, SlotRules, Slots, TemporalCache, load_calibration_weights, render_prior, sanitize_ranges,
+    MAX_RANGE_M, CalibrationNetwork, CalibrationState, MemoryOutput, ObjectMemory, SlotRules, Slots, TemporalCache, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
     world_to_sensor,
 )
 from follow_the_drow.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
@@ -99,7 +99,8 @@ def candidate_targets(cand_xy: np.ndarray, cand_valid: np.ndarray, gt_xy: np.nda
 @dataclass
 class SequenceCandidates:
     """One recording, per frame: candidates `[T, P]` (detection-frame xy, score, validity, person target), robot pose `[T, 3]`,
-    timestamp, whether the frame is annotated, and annotated people `[T, G]` (xy, validity, covered by a candidate)."""
+    timestamp, whether the frame is annotated, annotated people `[T, G]` (xy, validity, covered by a candidate), and the nearest
+    return per angular sector `[T, S]`, which is what tells a coasting slot apart from free space (A51 S2)."""
     xy: np.ndarray
     score: np.ndarray
     valid: np.ndarray
@@ -111,6 +112,20 @@ class SequenceCandidates:
     gt_valid: np.ndarray
     gt_covered: np.ndarray
     features: np.ndarray
+    free_range: np.ndarray
+
+
+SECTOR_BEAMS = 8                # stage 2's bottleneck sits three halvings below the beam grid, so a sector is 8 beams
+SECTORS = 720 // SECTOR_BEAMS   # FROG's profile width; the candidate cache is keyed on it
+_ANGLES: Dict[str, torch.Tensor] = {}
+
+
+def laser_angles(device) -> torch.Tensor:
+    """FROG's beam grid on `device`, cached per device: `ObjectMemory` needs it to map a slot's bearing to a sector (A51 S2)."""
+    key = str(device)
+    if key not in _ANGLES:
+        _ANGLES[key] = torch.from_numpy(frog_laser_angles(720)).to(device)
+    return _ANGLES[key]
 
 
 def build_candidates(ds, candidates_of, top_p: int, radius: float, recordings: int = 0) -> List[SequenceCandidates]:
@@ -118,7 +133,8 @@ def build_candidates(ds, candidates_of, top_p: int, radius: float, recordings: i
     with the detector's features `[K, C]`; the `top_p` best per frame are kept, with annotations attached."""
     out = []
     for s in range(min(recordings, len(ds.scans)) if recordings else len(ds.scans)):
-        n = len(ds.scans[s])
+        scans = np.asarray(ds.scans[s], np.float32)
+        n = len(scans)
         annotated = np.zeros(n, dtype=bool)
         people = [np.empty((0, 2))] * n
         for d in range(len(ds.det_id[s])):
@@ -132,6 +148,7 @@ def build_candidates(ds, candidates_of, top_p: int, radius: float, recordings: i
             target=np.zeros((n, top_p), bool), pose=np.asarray(ds.odoms[s]["xya"], np.float32), time=np.asarray(ds.scan_time[s], np.float64),
             annotated=annotated, gt_xy=np.zeros((n, g, 2), np.float32), gt_valid=np.zeros((n, g), bool), gt_covered=np.zeros((n, g), bool),
             features=np.zeros((n, top_p, frames[0][1].shape[1] if frames else 0), np.float16),
+            free_range=free_range_profile(torch.from_numpy(scans), scans.shape[-1] // SECTOR_BEAMS, MAX_RANGE_M).numpy().astype(np.float16),
         )
         for i, (c, f) in enumerate(frames):
             order = np.argsort(-c[:, 0], kind="stable")[:top_p]
@@ -185,6 +202,7 @@ def pack(seqs: Sequence[SequenceCandidates]) -> Split:
         widened.append(SequenceCandidates(
             s.xy, s.score, s.valid, s.target, s.pose, s.time, s.annotated,
             np.pad(s.gt_xy, ((0, 0), (0, pad), (0, 0))), np.pad(s.gt_valid, ((0, 0), (0, pad))), np.pad(s.gt_covered, ((0, 0), (0, pad))), s.features,
+            s.free_range,
         ))
     data = SequenceCandidates(**{f.name: np.concatenate([getattr(s, f.name) for s in widened]) for f in fields(SequenceCandidates)})
     lengths = np.array([len(s.time) for s in seqs])
@@ -400,11 +418,33 @@ def periodic_reset(since_s: np.ndarray, dt: np.ndarray, interval_s: Optional[flo
     return due, np.where(due, 0.0, elapsed)
 
 
-def perturb_poses(pose: np.ndarray, elapsed_s: np.ndarray, drift_m_per_s: float, heading_deg_per_s: float) -> np.ndarray:
+def sample_drift(rng: np.random.Generator, streams: int, max_drift_m_per_s: float, max_heading_deg_per_s: float):
+    """One odometry drift rate per stream, uniform over `[0, max]` (A51 S3). Redrawn each chunk, so a stream is not tied to one
+    rate for a whole run and the model sees the band E2 measured -- wheel odometry at FROG's speeds drifts 0.005-0.025 m/s, and
+    the room frame's advantage inverts somewhere inside it."""
+    return rng.uniform(0.0, max_drift_m_per_s, streams), rng.uniform(0.0, max_heading_deg_per_s, streams)
+
+
+def chunk_elapsed(dt: np.ndarray, reset: np.ndarray, carry: np.ndarray):
+    """Seconds each stream has run since its memory was last emptied, per frame of a chunk `[B, T]`, plus the value to carry
+    into the next chunk. Drift accumulates from the frame the slots were created in, so the clock restarts wherever memory does."""
+    elapsed = np.zeros_like(dt, dtype=np.float64)
+    running = np.asarray(carry, dtype=np.float64).copy()
+    for t in range(dt.shape[1]):
+        running = np.where(reset[:, t], 0.0, running + dt[:, t])
+        elapsed[:, t] = running
+    return elapsed, running
+
+
+def perturb_poses(pose: np.ndarray, elapsed_s: np.ndarray, drift_m_per_s, heading_deg_per_s) -> np.ndarray:
     """Odometry as a drifting estimate rather than ground truth (`TODO.md` A51 E2): a translation error growing at
     `drift_m_per_s` and a heading error at `heading_deg_per_s`, both a deterministic function of how long each stream has been
-    running, so the error accumulates the way real odometry drifts instead of jittering frame to frame."""
-    if not drift_m_per_s and not heading_deg_per_s:
+    running, so the error accumulates the way real odometry drifts instead of jittering frame to frame.
+
+    Either rate may be a scalar, as evaluation uses it, or one rate per stream `[B]`, as training does (A51 S3): domain
+    randomisation needs every stream on its own rate, so the model sees the whole band rather than one point in it.
+    """
+    if not np.any(drift_m_per_s) and not np.any(heading_deg_per_s):
         return pose
     out = np.array(pose, dtype=np.float32, copy=True)
     angle = 2.0 * np.pi * np.sin(elapsed_s)                      # a slow wander, not a straight bias
@@ -510,7 +550,8 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
              "exchange": parameters["exchange"].default if args.get("exchange") is None else literal_eval(args["exchange"]),
              "learned_match": parameters["learned_match"].default if args.get("learned_match") is None else literal_eval(args["learned_match"]),
              "recurrent": parameters["recurrent"].default if args.get("recurrent") is None else literal_eval(args["recurrent"]),
-             "rescore": parameters["rescore"].default if args.get("rescore") is None else literal_eval(args["rescore"])}
+             "rescore": parameters["rescore"].default if args.get("rescore") is None else literal_eval(args["rescore"]),
+             "visibility": parameters["visibility"].default if args.get("visibility") is None else literal_eval(args["visibility"])}
     slots = capacity if capacity else (parameters["rules"].default.capacity if args.get("slots") is None else int(args["slots"]))
     rules = SlotRules(capacity=slots,
                       latest_value=SlotRules().latest_value if args.get("latest_value") is None else literal_eval(args["latest_value"]))
@@ -567,7 +608,8 @@ def gather(split: Split, seq: np.ndarray, frame: np.ndarray, device) -> Dict[str
     dt = split.dt[flat]
     arrays = dict(xy=d.xy[flat], score=d.score[flat], valid=d.valid[flat], target=d.target[flat], pose=d.pose[flat],
                   annotated=d.annotated[flat], gt_xy=d.gt_xy[flat], gt_valid=d.gt_valid[flat], gt_covered=d.gt_covered[flat],
-                  features=d.features[flat].astype(np.float32), dt=dt.astype(np.float32))
+                  features=d.features[flat].astype(np.float32), free_range=d.free_range[flat].astype(np.float32),
+                  dt=dt.astype(np.float32))
     return {k: torch.from_numpy(np.ascontiguousarray(v)).to(device) for k, v in arrays.items()}
 
 
@@ -638,7 +680,8 @@ def memory_ms_per_frame(model: ObjectMemory, split: Split, device, frames: int =
             torch.cuda.synchronize()
         start = time.perf_counter()
         slots = model.step(batch["xy"][:, t], batch["score"][:, t], batch["valid"][:, t], batch["pose"][:, t], batch["dt"][:, t], slots,
-                           cand_features=batch["features"][:, t]).slots
+                           cand_features=batch["features"][:, t], free_range=batch["free_range"][:, t],
+                           angles=laser_angles(batch["xy"].device)).slots
         if synchronise:
             torch.cuda.synchronize()
         elapsed += (time.perf_counter() - start) if t else 0.0
@@ -700,7 +743,8 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                 if drift_m_per_s or heading_deg_per_s:
                     pose = torch.from_numpy(perturb_poses(pose.cpu().numpy(), since_start, drift_m_per_s, heading_deg_per_s)).to(device)
                 out = model.step(batch["xy"][:, i], batch["score"][:, i], batch["valid"][:, i], pose, batch["dt"][:, i], slots,
-                                 reset=torch.from_numpy(due | (t == 0)).to(device), cand_features=batch["features"][:, i])
+                                 reset=torch.from_numpy(due | (t == 0)).to(device), cand_features=batch["features"][:, i],
+                                 free_range=batch["free_range"][:, i], angles=laser_angles(device))
                 slots = out.slots
                 rows = np.nonzero(chosen[:, t])[0]
                 if not len(rows):
@@ -740,7 +784,7 @@ def load_split(name: str, limit: int, stage2: Optional[Path], device) -> Split:
     calibration network's at `stage2`, with its decoder features."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     source = "lfe-peaks" if stage2 is None else f"network-{stage2.stem}-{int(stage2.stat().st_mtime)}-limit-silenced"
-    path = CACHE_DIR / f"{source}_official_{name}_f{CANDIDATE_FLOOR}_p{TOP_P}{f'_first{limit}' if limit else ''}.pkl"
+    path = CACHE_DIR / f"{source}_official_{name}_f{CANDIDATE_FLOOR}_p{TOP_P}_s{SECTORS}{f'_first{limit}' if limit else ''}.pkl"
     if path.exists():
         seqs = [SequenceCandidates(**fields_of) for fields_of in pickle.loads(path.read_bytes())]
     else:
@@ -780,8 +824,9 @@ def train_memory(args) -> None:
     model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value), feature_dim=splits["train"].data.features.shape[-1],
                          rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame,
                          fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value, exchange=args.exchange,
-                         learned_match=args.learned_match, recurrent=args.recurrent).to(device)
-    print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}; rescoring "
+                         learned_match=args.learned_match, recurrent=args.recurrent, visibility=args.visibility).to(device)
+    print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}"
+          f"{'; slot statistics carry the free space seen past each slot' if args.visibility else ''}; rescoring "
           f"{'through a scalar gate' if args.rescore_gate else 'from a zero-initialised head'}, "
           f"{f'limited to +-{args.rescore_limit:g} logits' if args.rescore_limit else 'unlimited'}; slots in "
           f"{'room' if args.room_frame else 'sensor'} coordinates, value by "
@@ -813,7 +858,10 @@ def train_memory(args) -> None:
         stopper = EarlyStopping(args.patience, args.min_epochs, args.max_epochs, args.max_hours)
         sampler = StreamSampler(splits["train"].lengths, streams, rng)
         slots = model.initial_state(streams, device)
-        print(f"\n== chunks of {chunk_s:g} s: {length} frames x {streams} streams, {iterations} iterations per epoch", flush=True)
+        drift_carry = np.zeros(streams)
+        print(f"\n== chunks of {chunk_s:g} s: {length} frames x {streams} streams, {iterations} iterations per epoch"
+              + (f", odometry drift up to {args.train_drift_m_per_s:g} m/s and {args.train_heading_deg_per_s:g} deg/s"
+                 if args.train_drift_m_per_s or args.train_heading_deg_per_s else ""), flush=True)
         epoch = first_epoch if stage == first_stage else 0
         if resumed and stage == first_stage:
             optimizer.load_state_dict(resumed["optimizer"])
@@ -824,12 +872,20 @@ def train_memory(args) -> None:
             for _ in range(iterations):
                 seq, frame, reset = sampler.next_chunk(length, args.reset_prob)
                 batch = gather(splits["train"], seq, frame, device)
+                if args.train_drift_m_per_s or args.train_heading_deg_per_s:
+                    elapsed, drift_carry = chunk_elapsed(batch["dt"].cpu().numpy(), reset, drift_carry)
+                    drift, heading = sample_drift(rng, streams, args.train_drift_m_per_s, args.train_heading_deg_per_s)
+                    poses = batch["pose"].cpu().numpy()
+                    for t in range(length):
+                        poses[:, t] = perturb_poses(poses[:, t], elapsed[:, t], drift, heading)
+                    batch["pose"] = torch.from_numpy(poses).to(device)
                 reset_t = torch.from_numpy(reset).to(device)
                 slots = detach(slots)
                 loss = torch.zeros((), device=device)
                 for t in range(length):
                     out = model.step(batch["xy"][:, t], batch["score"][:, t], batch["valid"][:, t], batch["pose"][:, t], batch["dt"][:, t], slots, reset=reset_t[:, t],
-                                     cand_features=batch["features"][:, t])
+                                     cand_features=batch["features"][:, t], free_range=batch["free_range"][:, t],
+                                     angles=laser_angles(device))
                     slots = out.slots
                     annotated = batch["annotated"][:, t, None]
                     missed = batch["gt_valid"][:, t] & ~batch["gt_covered"][:, t]
@@ -1026,7 +1082,8 @@ def joint_step(net: CalibrationNetwork, memory: ObjectMemory, ranges: torch.Tens
         xy[i, :k], score[i, :k], valid[i, :k], weights[i, :k] = candidates[:, 1:], candidates[:, 0], True, w
     cand_xy, cand_score, cand_valid = (torch.from_numpy(a).to(device) for a in (xy, score, valid))
     cand_features = torch.einsum("bpn,bcn->bpc", torch.from_numpy(weights).to(device), features)
-    out = memory.step(cand_xy, cand_score, cand_valid, pose, dt, slots, cand_features=cand_features)
+    out = memory.step(cand_xy, cand_score, cand_valid, pose, dt, slots, cand_features=cand_features,
+                      free_range=free_range_profile(ranges, sectors, net.max_range_m), angles=net.angles)
     return JointOutput(logit, votes, cand_xy, cand_score, cand_valid, cand_features, prior, out), JointState(calibration, out.slots, out.slot_logit)
 
 
@@ -1477,6 +1534,14 @@ def main() -> None:
         step1.add_argument("--coast-weight", type=float, default=1.0,
                            help="weight of the coasting loss against the candidate loss; the coasting head holds a live slot on 95.5%% of the "
                                 "people stage 3 fails to report, yet ranks them too low to report (TODO A51 O2)")
+        step1.add_argument("--train-drift-m-per-s", type=float, default=0.0,
+                           help="train with odometry that drifts, at a rate drawn per stream from [0, this] and redrawn each chunk; "
+                                "E2 showed the room frame's advantage inverts around 0.02 m/s and real wheel odometry reaches it (TODO A51 S3/E11)")
+        step1.add_argument("--train-heading-deg-per-s", type=float, default=0.0,
+                           help="the heading half of that drift, degrees per second")
+        step1.add_argument("--visibility", action="store_true",
+                           help="give the slot statistics the free space the laser saw past each slot, so the coasting head can tell an "
+                                "occluded person from a phantom (TODO A51 S2)")
         step1.add_argument("--recurrent", action=argparse.BooleanOptionalAction, default=True,
                            help="carry a learned state per slot; --no-recurrent leaves the rescoring head a candidate and the statistics of "
                                 "the slot matched to it, which tests whether this is a learned memory or a tracker with a scorer (TODO A51 E10)")
