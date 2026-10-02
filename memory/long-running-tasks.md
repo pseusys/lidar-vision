@@ -8,6 +8,60 @@ This is how a long task is launched, watched and reported, so the owner never ha
 
 Every incident behind a rule below is in [`gotchas.md`](gotchas.md); the cost is in the "because" clause.
 
+## Watchers expire long before a training run does
+
+A background command started by the agent is killed at roughly **30 minutes**, whatever deadline the script itself carries. On
+2026-10-01 a 3-hour reporting sleeper and a 10-hour event watcher were both killed 31 minutes after arming, with no output.
+Earlier in the same week the identical sleeper survived its full 3 hours, so **the ceiling moves** -- never assume the one that
+worked last session still will.
+
+**Consequences, and the fix:**
+
+- A watcher that outlives its limit is silent in exactly the way a healthy watcher is silent. Silence is not evidence the chain
+  is alive; `progress.txt` with a recent timestamp is.
+- **Use a cron job for the cadence, not a sleeping background task.** `CronCreate` fires on wall-clock time, independently of
+  the background-task limit, and survives for the session. Half-hourly is a reasonable poll for a run that takes hours. Pick an
+  off-minute (`23,53 * * * *`, not `0,30`).
+- **Keep the chain detached** (below), so the watcher dying never takes the run with it. The watcher's job is to wake the agent;
+  the chain's job is to finish regardless.
+- Cron jobs are session-only too. Re-create them at the start of each session, after reading `progress.txt` to find out what
+  actually happened while nobody was watching.
+
+## Launch the chain detached, or it dies with the session
+
+A launcher started through the agent's own background-command tool is a **child of the session process**. When that session
+ends -- a crash, a teardown, a restart -- the whole tree goes with it, **including grandchildren started detached**, because
+the tree is held in a job object rather than merely parented. On 2026-10-01 a
+6.8-hour stage-3 run was killed this way three hours after its last epoch, with nobody watching: the chain simply stopped
+existing, and the only trace was a `progress.txt` whose last line was hours stale.
+
+**`Start-Process` is not enough.** Tried on 2026-10-01: the chain was started detached and still died with the session, because
+Windows puts the agent's whole process tree in a **job object**, and a job object takes its children's children too. The run
+reached the end of its 1 s stage and stopped at 18:11, the minute the session turned over.
+
+**Use the Task Scheduler, which is a different service rather than a different process:**
+
+```powershell
+schtasks /create /tn "lidar_<item>" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$chain`"" /sc once /st 23:59 /it /f
+schtasks /run   /tn "lidar_<item>"
+```
+
+`/it` matters: the task then runs **in the logged-on user's interactive session**, which is what gives it the GPU. A task
+without it can land in session 0 and find no device. Verified 2026-10-02: the trainer came up under the scheduler reporting
+`CUDA / ROCm: AMD Radeon RX 9060 XT (1 device(s))`.
+
+With `--resume` on every step, a relaunch then costs the current stage rather than the whole run.
+
+**One wrinkle to know:** `Run-Step` names its log `<step>.attempt1.log` and a relaunch overwrites it, so the earlier stage's
+epoch history is lost from the log. The resume file and the final results JSON keep the full history, but read the log before
+relaunching if the trajectory matters. **Watchers are the
+exception** and stay session-bound: their whole purpose is to notify the agent, so a watcher that outlives the session has
+nobody to tell. Re-arm them at the start of each session instead, and read `progress.txt` first -- it is the one record that
+survives everything.
+
+**The resumed run is a different draw**, not the same run continued (`interpreting-evaluation.md`). That is fine for a
+screening arm and wrong for a reproduction; say which one it is when reporting the result.
+
 ## Before launching
 
 1. **Run the guard, do not eyeball it:** `python memory/scripts/machine_is_free.py && <your command>`. It exits non-zero when a

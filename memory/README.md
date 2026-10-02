@@ -35,6 +35,7 @@ Start with [`../AGENTS.md`](../AGENTS.md) for orientation; come here for depth.
 | [`informational-capacity-proxy.md`](informational-capacity-proxy.md) | A no-training AUC/mutual-information proxy for how much temporal signal a `(T, dtime)` configuration carries, with citations, and what it can't tell you. |
 | [`slot-design-evidence.md`](slot-design-evidence.md) | Stage 3's object memory, decision by decision, each with the measurement that supports it or the note that nothing does. **Read before claiming any slot design choice in a write-up.** |
 | [`static-detector-diagnosis.md`](static-detector-diagnosis.md) | Where a single-frame detector loses recall and to what: range-stratified error, the scale-vs-capacity answer from a no-training 1-NN probe over four window parameterisations, the sub-threshold miss budget, and the Cover & Hart bracket. **Read before proposing a static architecture.** |
+| [`experiments/2026-09-tracking-claims.md`](experiments/2026-09-tracking-claims.md) | The paper's claim ledger against the tracking literature, and the predictions for A56's experiments, written before they run: what each outcome changes in the paper. **Read before running or quoting any A56 result.** |
 
 ## Tooling and operations
 

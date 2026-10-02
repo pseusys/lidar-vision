@@ -320,12 +320,12 @@ Xavier NX**. It is strictly **tracking-by-detection**: the detector runs, the tr
 feedback from tracker to detector**. DR-SPAAM's own release has likewise been paired with SORT and trajectory prediction in
 deployments.
 
-**That modularity is the gap this project occupies, and it is measurable.** A SORT-style tracker only ever sees detections that
-survived the threshold, so it cannot recover a person whose score fell below it. On FROG, **99.1% of the people TAKHeLiPeD's
+**That modularity is the gap this project occupies, and it is measurable.** A tracker that reports each detection with the detector's own
+score can remove a false positive but never lift a person above the threshold. On FROG, **99.1% of the people TAKHeLiPeD's
 memory "loses" at a shared threshold were pushed under it by rescoring while a live slot sat on them**
 (`../memory/slot-design-evidence.md`), and rescoring before the threshold beats SORT on *identical* candidates at every setting.
-SORT cannot reach those people by construction.
-**A ByteTrack-style tracker can** -- it associates low-score detections to unmatched tracks in a second pass (Zhang et al., ECCV 2022) -- and CBMOT-style score refinement rescores detections from track confidence (Benbarka et al., IROS 2021), so until E14 and E15 run (§7.4.5) the gap is measured against SORT only.
+SORT cannot reach those people by construction -- not for want of seeing them (this repository's replay feeds it every candidate down to 0.01), but because it only filters.
+**The tracking literature does have a way to lift them:** CBMOT's score refinement raises a detection's score from its track's confidence (Benbarka et al., IROS 2021), and ByteTrack's second association pass is built for low-score detections (Zhang et al., ECCV 2022). Until E14 and E15 run (§7.4.5), the gap is measured against a tracker that cannot rescore, and that is the weakest possible comparison.
 **JRDB** ships image-plane (2D) and point-cloud (3D) person *tracking* benchmarks beside its detection ones, but none on its 2D laser (§7.4.1). The older
 laser-based people-tracking literature (Arras, Luber, Linder and the SPENCER work; Leigh et al., ICRA 2015) is substantial.
 So a reviewer will not accept "nobody combines a learned 2D-LiDAR detector with tracking" -- they do, modularly, and on embedded
@@ -337,9 +337,10 @@ hardware.
 template or MAD's forecast bank. Three further findings sharpen it, all from A51 phase 5-6 (2026-09-29/30).
 
 **The learned per-slot state is the mechanism, not decoration.** Removing it and rescoring from the bookkeeping alone -- value,
-age, time since match, displacement, hit rate -- costs 1.50 pp of AP, 1.67 pp of recall at matched false positives, and
-**14.08 pp of coasting precision**, every one past its three-sigma bar. It is the only ablation of this design that has ever
-cost anything. Before it, "the state is learned rather than hand-coded" was the weakest of the claims separating this work from
+age, time since match, displacement, hit rate -- costs, at two seeds, 1.40 pp of AP, 1.30 pp at 0.3 m, **1.60 pp of recall at
+matched false positives (1.9x its bar)** and **13.80 pp of coasting precision (1.7x its bar)**. Three of the four clear their
+three-sigma bars; **AP, at 1.40 against a 1.45 bar, does not**, so the claim is carried by recall and coasting rather than by
+AP. It is still the only ablation of this design that has ever cost anything. Before it, "the state is learned rather than hand-coded" was the weakest of the claims separating this work from
 tracking-by-detection; it is now the strongest, and the coasting collapse says why -- with no current measurement, only carried
 state separates a genuinely occluded person from a stale slot.
 
@@ -648,7 +649,7 @@ Venues below were checked against abstracts, proceedings pages or code, not re-r
 
 | claim, as this repository states it | what the literature says | consequence |
 | --- | --- | --- |
-| "A post-hoc tracker only ever sees detections that survived the threshold" (§3.5, `../TODO.md` A51, `../memory/dataset-properties.md`) | True of SORT, the only tracker measured here. **ByteTrack** (Zhang et al., *ECCV* 2022, arXiv 2110.06864) associates *every* box, matching low-score detections to still-unmatched tracks in a second pass, precisely to recover occluded people. **OC-SORT** (Cao et al., *CVPR* 2023) re-associates lost tracks from their last real observation | SORT is not the strongest post-hoc baseline. The one that tests "memory inside the detector" is ByteTrack on the *same* 64 candidates, sub-threshold ones included (E14) |
+| "A post-hoc tracker only ever sees detections that survived the threshold" (§3.5, `../TODO.md` A51, `../memory/dataset-properties.md`) | Not even true of this repository's SORT baseline, which is fed every candidate down to 0.01 (`replay_sort`, `tracker_sweep.py`) -- SORT sees them but only filters, reporting each with its own score. **CBMOT** (below) raises a detection's score from its track's confidence, which is the capability the memory is credited with. **ByteTrack** (Zhang et al., *ECCV* 2022, arXiv 2110.06864) associates *every* box, matching low-score detections to still-unmatched tracks in a second pass, precisely to recover occluded people. **OC-SORT** (Cao et al., *CVPR* 2023) re-associates lost tracks from their last real observation | SORT is not the strongest post-hoc baseline. The one that tests "memory inside the detector" is ByteTrack with CBMOT's score refinement on the *same* 64 candidates, sub-threshold ones included (E14), plus CBMOT's rule on the memory's own bookkeeping (E15) |
 | The slot value rule is this project's design (`PROPOSAL.md` §5.5) | `v <- v + gain * (1 - v) * s` is **CBMOT**'s "multiplication" score update `c = 1 - (1 - c)(1 - s)` generalised by a gain (Benbarka, Schröder & Zell, *IROS* 2021, arXiv 2107.04327); CBMOT also decays unmatched tracklets (by a constant per step, where TAKHeLiPeD decays exponentially in seconds) and deletes them on score rather than on a miss count. Track existence as a recursively updated probability goes back to **IPDA** (Mušicki, Evans & Stanković, *IEEE Trans. Automatic Control* 1994) | Cite CBMOT and IPDA for the value rule, and keep "ours" only for value-ranked *replacement*, which never fires on FROG. D2 (latest score instead, +0.60 pp) is CBMOT's count-based-against-confidence-based comparison, where confidence-based won by up to +1.83 AMOTA on nuScenes — a contrast worth one sentence in the write-up |
 | In-network temporal state for 2D range data exists only as DR-SPAAM's template (§3.5, before this survey) | **Deep Tracking** (Ondruska & Posner, *AAAI* 2016) and **Deep Tracking on the Move** (Dequaire et al., *IJRR* 2018, from a moving platform) run a recurrent network over raw 2D laser scans and learn to keep occluded objects in memory. `PROPOSAL.md` §12 already lists them as an alternative, but §3.5's novelty argument did not | The surviving claim narrows again: **object-keyed**, and scored as person detection on a public benchmark. Their memory is an occupancy grid keyed by place, the addressing `../memory/rejected-ideas.md` shows failing when it is hand-built |
 | Memory acting *before* the threshold is what separates TAKHeLiPeD from a tracker (§3.5, `PAPER.md`) | This is the defining idea of **track-before-detect** (TBD): integrate unthresholded evidence over time and declare a weak target only once its track is convincing (particle-filter TBD, Salmond & Birch, *American Control Conference* 2001; a learned TBD, Fishel et al., *ICASSP* 2024). In video detection, **Seq-NMS** (Han et al., arXiv 1602.08465, 2016) rescores weak detections from high-scoring linked ones | Name stage 3 a **learned, causal, object-keyed track-before-detect over a detector's sub-threshold candidates**. That is accurate, citable and still distinctive; "before the threshold" alone is not |

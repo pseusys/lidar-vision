@@ -30,7 +30,7 @@ history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/
 | claim | evidence |
 | --- | --- |
 | The memory earns its place | **+5.68 pp of AP over its own candidates** (83.34% mean against 77.66%), and **+3.7 pp of recall at the candidates' own false-positive rate** (92.5% against 88.8%), 3 seeds |
-| It is not just temporal filtering | SORT replayed on the same candidates **loses** at every setting (76.7 / 75.7 / 74.9% at `min_hits` 1/3/5 against 76.92%) -- `CHANGELOG.md` 2026-09-16. **Only against SORT:** ByteTrack associates sub-threshold candidates and has not been run (`../TODO.md` A56 E14) |
+| It is not just temporal filtering | SORT replayed on the same candidates **loses** at every setting (76.7 / 75.7 / 74.9% at `min_hits` 1/3/5 against 76.92%) -- `CHANGELOG.md` 2026-09-16. **Only against SORT**, which saw every candidate down to 0.01 but can only filter: a rule that *raises* scores from track confidence (CBMOT) has not been run (`../TODO.md` A56 E14, E15) |
 | Memory belongs inside the model, not behind it | every place-keyed variant failed first: persistence map 0.57 false positives removed per false negative added, background subtraction 1.90, acausal trail oracles 2.54 and 4.20, against the merge radius's 21.9 (`rejected-ideas.md`) |
 | It costs little | **4.4-4.6 ms per frame**, one stream, beside stage 2's 6.5 ms, inside FROG's 25 ms budget |
 | Its cost does not grow with the horizon | the memory is carried as state, so per-frame work is **constant in elapsed time**; window methods (DR-SPAAM, Li2Former) re-encode `T` scans every frame, so their cost scales with the horizon they want. This is the efficiency claim the design is built on (owner, 2026-09-25): linear-time memory for an embedded platform |
@@ -179,22 +179,34 @@ disappear, per-frame time falls 9% (3.93 ms) and GPU memory 40% (3.2 against 5.3
 epoch where the run was interrupted, so the arm is slightly under-trained -- which makes the null more convincing, not less.
 **Dropping the exchange removes the design's only super-linear term at no measurable accuracy cost.**
 
-**The learned slot state is the mechanism, and it is the only ablation that has ever cost anything (E10, 2026-09-29).** Removing
-the state entirely -- no recurrence, no `spawn`/`update`/`recall`, the rescoring head reading a candidate and the bookkeeping
-statistics of the slot matched to it -- is the one arm that clears its bar on **every** metric, and clears all four downward.
+**The learned slot state is the mechanism, and it is the only ablation that has ever cost anything (E10, two seeds,
+2026-09-29/10-01).** Removing the state entirely -- no recurrence, no `spawn`/`update`/`recall`, the rescoring head reading a
+candidate and the bookkeeping statistics of the slot matched to it -- costs on every metric, and clears its bar on three of four.
 
-| | B0 mean (3 seeds) | E10, no slot state | delta | 3 sigma bar | verdict |
-| --- | --- | --- | --- | --- | --- |
-| test AP | 83.34 | **81.84** | **-1.50** | 1.45 | clears |
-| AP at 0.3 m | 81.68 | 80.26 | -1.42 | 1.29 | clears |
-| recall at matched FP | 92.47 | 90.80 | **-1.67** | 0.86 | clears |
-| coasting precision | 25.43 | **11.35** | **-14.08** | 8.19 | clears |
-| parameters | 306,443 | **55,691** | -82% | -- | |
-| ms per frame | ~4.5 | **2.70** | -40% | -- | |
+| | B0 mean (3 seeds) | E10 (2 seeds) | per seed | delta | 3 sigma bar | verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| test AP | 83.34 | 81.94 | 81.84 / 82.04 | **-1.40** | 1.45 | **inside the bar** |
+| AP at 0.3 m | 81.68 | 80.38 | 80.26 / 80.51 | -1.30 | 1.29 | clears, just |
+| recall at matched FP | 92.47 | **90.87** | 90.80 / 90.94 | **-1.60** | 0.86 | clears, 1.9x |
+| coasting precision | 25.43 | **11.63** | 11.35 / 11.90 | **-13.80** | 8.19 | clears, 1.7x |
+| parameters | 306,443 | **55,691** | -- | -82% | -- | |
+| ms per frame | ~4.5 | **2.69** | 2.70 / 2.67 | -40% | -- | |
+
+**The second seed moved the headline metric inside its bar, and that is recorded rather than worked around.** At one seed AP read
+-1.50 against a 1.45 bar; the second seed's 82.04 pulled the mean to -1.40. AGENTS.md makes wp-AUC at 0.5 m lead any accuracy
+answer, so the honest headline is now **three of four metrics clear, and AP does not**.
+
+**Where the uncertainty actually sits.** E10's two seeds agree to 0.20 pp on AP, far tighter than B0's own three (sd 0.48). The
+bar is three times *the control's* standard deviation, so what limits this comparison is the control's spread, not the arm's.
+**The pre-registered screening rule does not say what to do with a multi-seed arm** -- it was written for one-seed screening
+against a three-seed control -- and choosing a two-sample statistic now, after seeing the result, would be picking the test that
+gives the answer we want. So the recorded verdict stays the pre-registered one. If a two-sample reading is wanted, it should be
+pre-registered before any further seed is run.
 
 **What it settles.** `docs/RESEARCH.md` §3.5 lists three things separating this design from a tracker with a learned scorer, and
 "the slot state is learned, not hand-coded" was the weak one, resting only on D3's 0.90 pp, which sits inside its bar. It is now
-the strongest: without the state the arm loses more than any other arm has ever lost, on all four metrics at once.
+much the strongest: without the state the arm loses more than any other arm has ever lost, on all four metrics at once, and past
+its bar on three. Recall at matched false positives, at 1.9x its bar, and coasting precision, at 1.7x, carry the claim -- not AP.
 
 **Where the state earns it.** Coasting precision collapsing by 14 pp -- to less than half the control -- says where. Coasting is
 exactly the case with no current measurement, so nothing but the carried state can distinguish a person who is genuinely occluded
@@ -255,11 +267,94 @@ nothing to learn: for 83% of the misses the gradient has a shorter path to the s
 **Read with E12's capacity measurement**, this says the feedback path was both under-built (0.02-0.045% of the bottleneck) *and*
 aimed at a small target (1.91 pp). Fixing the first is cheap; the second bounds the reward.
 
+**Free-space evidence does not fix coasting precision (S2, one seed, 2026-10-01).** Each slot was told how much further the laser
+reached than the slot claims to be -- negative where something is in front of it, positive where the beam passed through its own
+position and found nothing, which is direct evidence against it. The feature is real and verified; the result is a null.
+
+| | B0 mean (3 seeds) | E6+E7 (3 seeds) | S2, visibility (1 seed) | vs B0 | 3 sigma bar | verdict |
+| --- | --- | --- | --- | --- | --- | --- |
+| test AP | 83.34 | 83.86 | 83.58 | +0.24 | 1.45 | ns |
+| AP at 0.3 m | 81.68 | 82.14 | 81.92 | +0.24 | 1.29 | ns |
+| recall at matched FP | 92.47 | 93.16 | 92.58 | +0.10 | 0.86 | ns |
+| **coasting precision** | 25.43 | 29.81 | **27.38** | **+1.95** | 8.19 | **ns** |
+| coasting reports per frame | 0.176 | 0.237 | **0.074** | **-58%** | -- | |
+
+**At the shared threshold the head looks merely more conservative** -- the matched-rate sweep below shows it is also more
+discriminating, so read both. It reports 58% fewer coasting
+detections for 1.95 pp more precision. A genuinely better ranking would buy far more precision than that at less than half the
+volume -- keeping only the best half of a well-ordered list raises precision sharply. Instead the whole model shifted down:
+precision at the shared 0.3 threshold rose to 70.3% with false positives at 1.087 against B0's ~1.6, and false negatives rose to
+0.495. That is a calibration shift, not a discrimination gain, and `recall at matched FP` -- which removes calibration from the
+comparison -- is flat at +0.10.
+
+**The matched-rate comparison, done 2026-10-02, corrects the paragraph above: the head *is* more discriminating.** Comparing at
+a fixed 0.3 threshold was the wrong comparison. Sweeping the coasting threshold and reading people recovered against the false
+positives that recovery costs:
+
+| false positives added per frame | 0.05 | 0.26 | 1.10 | 3.35 | 25.1 |
+| --- | --- | --- | --- | --- | --- |
+| S2 recovers | 978 | 3,288 | 6,904 | 9,250 | 12,379 |
+| B0 recovers, interpolated to the same cost | 1,040 | 2,975 | 6,113 | 8,525 | 11,658 |
+| S2 / B0 | 0.94 | **1.11** | **1.13** | **1.08** | **1.06** |
+
+**At matched cost the free-space feature recovers 6-13% more people**, everywhere except the cheapest point. So "conservative,
+not discriminating" was half right and half wrong: it is both. The ranking improved.
+
+**It still buys nothing end to end, and that is the result that governs.** S2's candidates-plus-rescoring stage covers **2,240
+fewer** people than B0 before coasting begins, so total coverage at every matched cost is 1,400-2,300 people *worse*. Part of
+that is the shared 0.3 threshold being miscalibrated for both models, which is exactly why the operating-point metric exists --
+and recall at each model's own matched-false-positive point is **92.58 against 92.47, flat**. **A better coasting ranking does
+not reach the end of the pipeline, because coasting contributes a small share of total coverage.**
+
+**Timing cleared, and the first measurement was wrong.** 7.76 ms per frame was measured while the host was loaded enough to
+stretch training epochs from 677 s to 970 s. Re-timed on a quiet machine: **4.74 ms at 256 slots** (4.86 / 4.81 / 4.74 / 4.92 /
+5.21 at 64 / 128 / 256 / 512 / 720), against B0's 4.37. **The feature costs about 0.4 ms, not 3.2**, and the curve stays flat in
+slot count. Never quote a timing taken beside other work.
+
+**Why it may have failed, for whatever comes next.** The information may already be reachable without it -- a slot's learned
+state sees the pattern of candidate matches over time, from which "currently occluded" is partly inferable, which would make the
+explicit feature redundant exactly as the feedback prior was. Or the question coasting actually fails is not "is this position
+occluded" but "was this remembered object ever a person", which free space cannot answer.
+
+**Training with jittered odometry flattens the room frame's collapse, but does not remove D1's caveat (S3 / E11, one seed,
+2026-10-02).** Drift was applied during training at a rate drawn **per stream and redrawn each chunk**, uniform over
+`[0, 0.05] m/s` plus `2 deg/s` of heading -- domain randomisation rather than one fixed rate. Then E2's sweep was re-run on it.
+
+| room-frame AP at drift | 0 | 0.005 | 0.020 | 0.050 | 0.100 |
+| --- | --- | --- | --- | --- | --- |
+| B0, trained on clean odometry (E2) | 83.88 | 82.96 | 81.25 | 78.27 | 73.10 |
+| **S3, trained with jitter** | 83.50 | 82.77 | 81.59 | **80.02** | **77.44** |
+| delta | -0.38 | -0.19 | +0.34 | **+1.75** | **+4.34** |
+
+**It works where it was worst and costs nothing where it was best.** The penalty at 0.1 m/s falls from 10.78 pp to 6.06 pp, and
+zero-drift AP gives up 0.38 pp, well inside its 1.45 bar. On clean test odometry S3 is indistinguishable from the control on
+every barred metric: AP 83.50 (+0.16), AP at 0.3 m 81.76 (+0.07), recall at matched FP 93.09 (+0.61), coasting precision 29.04
+(+3.61). **So the robustness is free.**
+
+**What it does not do is move the crossover.** Within this sweep the sensor frame is flat at 82.03, so S3's room frame wins
+below roughly **0.015 m/s** and loses above it -- essentially where B0's crossover already sat. Domain randomisation reduced the
+*size* of the penalty beyond the crossover, not the existence of one. **D1's conditional claim therefore stands**, and the
+write-up must keep it: room coordinates win on good odometry, and a deployment with drift past ~0.02 m/s should prefer the
+sensor frame.
+
+**Two provenance notes, because they limit what may be compared.** The sensor-frame baseline differs between the two sweeps
+(82.03 here against E2's 82.57), so the sensor arm must have used a different D1 checkpoint; **compare room against room, and
+take any crossover from within a single sweep**. And `slot_experiments.py odometry` writes a fixed path, so this run
+**overwrote E2's `a51_odometry.json`** -- E2's numbers survive only in `results/a51_odometry.log`, and the script should take an
+output path.
+
 ## What is not established
 
-- **D1, D2 and D3 each rest on one seed**, and none crosses the screening threshold. The memory as a whole is well supported; its
-  internal choices are not, individually.
-- **The calibration metrics have no noise estimate**, so "T1 beats every B0 seed" is weaker than it sounds.
+- **D2, D3, O1, O2, T1 and T2 each rest on one seed**, and none crosses the screening threshold; D1 has three. The memory as a
+  whole is well supported, and so now are the two decisions that matter most -- the learned state (E10) and the removal of both
+  attention mechanisms (E13, three seeds) -- but the smaller internal choices are single-seed screening and must be reported as
+  that, not as results. **D3 matters most of the six**: a fixed 8 s decay costs 0.90 pp, inside its bar, so "the per-slot decay
+  is learned" is currently unsupported even though E10 proves the state as a whole is load-bearing.
+- **Nothing says how the slots interact with a coasting head that knows about occlusion**, which is where the remaining recall
+  is (`TODO.md` A56 E19/E20).
+- ~~**The calibration metrics have no noise estimate**~~ -- **superseded by E9, 2026-09-25**: recall at matched false positives
+  has sd 0.29 (bar 0.86) and coasting precision sd 2.73 (bar 8.19) over B0's three seeds. Re-judged against those, T1's recall
+  gain (+0.88) clears and its coasting gain (+6.72) does not.
 - **Coarse convolutions were excluded throughout**, so nothing here says how the slots interact with a temporal stage 2; that is
   `TODO.md` §D's question and A51 phase 4's job.
 - **Only FROG.** DROW and JRDB are A49.

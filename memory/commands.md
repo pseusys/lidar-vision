@@ -48,6 +48,8 @@ python slot_experiments.py crowding --memory ... --stage2 ...                   
 python slot_experiments.py cost --memory ... --stage2 ...                        # ms per frame against slot count, 64-720 (A51 E4)
 python score_memory.py --memory ... --stage2 ... --out <json>                    # score an interrupted run's best checkpoint (A51)
 python judge_arms.py                                                            # every A51 arm's deltas and verdicts against a control's three-sigma bars; stdlib only, safe beside a running job
+python train_three_horizon.py step3a --stage2 ... --visibility                   # give the coasting head the free space the laser saw past each slot (A51 S2); rebuilds the candidate cache once
+python train_three_horizon.py step3a --stage2 ... --train-drift-m-per-s 0.05    # train with odometry drifting at a rate drawn per stream, the repair for D1's conditional win (A51 S3/E11)
 python train_three_horizon.py step3b --stage2 ... --memory ... --oracle-prior    # feed stage 2 a ground-truth prior: the ceiling on what feedback could buy (A51 E12b)
 python train_three_horizon.py step3b --stage2 ... --memory ... --no-rescore      # drop the rescoring correction, leaving the prior as memory's only route to the loss (A51 E12a)
 python verify_oracle_prior.py --joint <step3b ckpt>                             # is E12's oracle prior real on recorded frames, and did the feedback weights move? needs the machine to itself (A51 E12)

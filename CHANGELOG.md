@@ -38,6 +38,18 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The paper's claims against the tracking literature, pre-registered; our SORT baseline already saw every candidate (2026-09-30)
+
+*keywords:* A56, pre-registration, memory/experiments/2026-09-tracking-claims.md, claim ledger, tracking ladder, replay_sort, CANDIDATE_FLOOR, CBMOT, ByteTrack, E14, E15, E16, E20, E21, E22, block bootstrap
+
+The owner asked for a plan of paper claims, tests and experiments from the tracking survey, to run once the machine is free.
+It is `memory/experiments/2026-09-tracking-claims.md`: nine claims, the evidence each has, the experiment that decides it, predictions, and what the paper says for each outcome; TODO A56 now carries the work.
+No code written and nothing run: A56 waits for the owner's confirmation, then tests first.
+
+**A correction found while planning.** `replay_sort` and `tracker_sweep.py` feed SORT every candidate down to 0.01, so the repo's SORT baseline always saw sub-threshold evidence; it loses because it only filters, reporting each detection with its own score.
+The 2026-09-28 wording ("a post-hoc tracker only ever sees post-threshold detections") is corrected in `docs/RESEARCH.md` §3.5 and §7.4.1, `memory/dataset-properties.md` and `memory/slot-design-evidence.md`.
+The comparison that matters is against a rule that *raises* scores from track confidence -- CBMOT's -- which is the one unmeasured rung between the candidates (77.66%) and the learned scorer without state (E10, 81.84%).
+
 ## Detection gains from tracking are claimed in 3D LiDAR and video, not in 2D LiDAR (2026-09-29)
 
 *keywords:* RESEARCH §7.4.6, detection gain from tracking, MAD, MoDAR, Detect to Track, 3D Auto Labeling, novelty, within-model gain
@@ -47,6 +59,159 @@ Tracking-by-detection papers report tracking metrics only; the claims come from 
 None is on 2D LiDAR, so TAKHeLiPeD's +5.68 pp over its own candidates appears to be the first such claim on this sensor.
 The defensible figure is that within-model gain, not 83.3% against DR-SPAAM's published 75.6%.
 Written up in `docs/RESEARCH.md` §7.4.6.
+
+## S2's first launch: a flag that never reached the model, and the commit limit broken a third time (2026-10-01)
+
+*keywords: S2, visibility, wiring bug, ObjectMemory, 306828, _ArrayMemoryError, commit limit, machine_is_free.py, pack, free_range*
+
+Three faults in one launch, all mine, all found before any result was reported.
+
+**`--visibility` never reached the model.** `train_memory` builds `ObjectMemory` directly and the new keyword was not passed, so
+the run was a plain B0 under an S2 name. The header line gave it away: **306,443 parameters where visibility should give
+306,828**. The header now names the flag when it is on, because that line is what caught this.
+
+**`pack()` dropped the new cache field.** It rebuilds `SequenceCandidates` positionally, so `free_range` was lost and the run
+crashed after spending 980 s building the train cache. The three `TestEvaluate` fixtures that construct through `pack` were
+failing for a *different* reason -- a missing constructor argument -- and masked it. Both fixed; `build_candidates` also stopped
+hardcoding 90 sectors, which cannot cut the 8-beam test scan. **581 tests pass.**
+
+**The commit limit, broken a third time, by a one-line parameter count.** A `python -c` that imports torch for a second was run
+beside the live job to check that count. The training process died 20 s later in `sklearn_auc` with `_ArrayMemoryError: Unable
+to allocate 1.93 MiB`, 45 minutes in. The victim is whatever allocates next, so the traceback blames evaluation and looks like a
+bug. `machine_is_free.py` takes a second and exists for exactly this. Recorded in `memory/gotchas.md`.
+
+Nothing experimental was lost: the run had to be restarted anyway because the flag was not wired, and both rebuilt caches
+survive on disk.
+
+## E10's second seed pulls AP inside its bar: three of four metrics clear, not four (2026-10-01)
+
+*keywords: E10, a51_e10_norecurrent_s1, second seed, correction, three sigma bar, wp-AUC, pre-registered rule, multi-seed arm*
+
+`a51_e10_norecurrent_s1` finished clean in 296 min and scored AP **82.04**, AP at 0.3 m 80.51, recall at matched false positives
+90.94, coasting precision 11.90. Against the three-seed control the two-seed means are now **-1.40 AP (bar 1.45, inside)**,
+-1.30 at 0.3 m (bar 1.29, clears), **-1.60 recall (bar 0.86, 1.9x)** and **-13.80 coasting precision (bar 8.19, 1.7x)**.
+
+**This is the correction the second seed was run to find.** At one seed AP read -1.50 against a 1.45 bar -- 1.03x, the thinnest
+possible clearance on the metric `AGENTS.md` makes lead every accuracy answer. It is now inside. Every place that said E10
+"clears its bar on every metric" is corrected: `memory/slot-design-evidence.md`, `TODO.md` and `docs/RESEARCH.md` §3.5.
+
+**The claim survives, on different metrics.** Recall at matched false positives at 1.9x its bar and coasting precision at 1.7x
+are not marginal, and the coasting collapse is still the mechanism's signature. But the headline sentence changes from "every
+metric" to "three of four, and not AP".
+
+**A methodological point worth stating, because it cuts against us.** E10's two seeds agree to 0.20 pp on AP where B0's three
+have sd 0.48, so the comparison is limited by the *control's* spread, not the arm's -- a two-sample test would read this as
+clearly significant. The pre-registered rule does not cover a multi-seed arm, and choosing a different statistic after seeing the
+result would be selecting the test that gives the wanted answer. The recorded verdict stays the pre-registered one; any
+two-sample reading must be pre-registered before further seeds.
+
+## S3 / E11: training with odometry that drifts, at a rate drawn per stream (2026-09-30)
+
+*keywords: S3, E11, train-drift-m-per-s, sample_drift, chunk_elapsed, perturb_poses, domain randomisation, room frame, odometry*
+
+Room coordinates are the design's central claim and they are bought *from odometry*. E2 measured the price: the room frame
+scores 83.88 / 82.96 / 81.25 / 78.27 / 73.10 at 0 / 0.005 / 0.02 / 0.05 / 0.1 m/s of drift, against a sensor frame flat at
+82.57, so it **wins only below roughly 0.02 m/s** -- inside the band real wheel odometry reaches. The model had never seen a
+drifting pose, because `perturb_poses` existed only in `evaluate`.
+
+- **`sample_drift(rng, streams, max_drift, max_heading)`** draws one rate per stream, uniform over `[0, max]`, redrawn each
+  chunk, so the model sees the whole band rather than one point in it.
+- **`chunk_elapsed(dt, reset, carry)`** gives the seconds each stream has run since its memory was last emptied, carried across
+  chunks. Drift accumulates from the frame the slots were created in, so the clock restarts wherever memory does.
+- **`perturb_poses`** now takes either a scalar, as evaluation always did, or one rate per stream.
+- **`--train-drift-m-per-s` and `--train-heading-deg-per-s`**, both 0 by default, so every existing configuration is unchanged.
+
+Nine tests, written first. Queued as `run_s3.ps1` behind S2: `a51_s3_drift_s0` at 0.05 m/s and 2 deg/s, then **E2's own sweep
+re-run on the jittered model**, which is the readout -- does the room frame still lose above 0.02 m/s?
+
+## S2's follow-ups: the coasting ranking did improve, the pipeline did not, and the timing was host load (2026-10-02)
+
+*keywords: S2, visibility, matched report rate, coasting sweep, a51_s2_recovery.json, ms per frame, 4.74, host load, a51_cost.json, correction*
+
+Two evaluation-only follow-ups on `a51_s2_visibility_s0`, and both correct something reported yesterday.
+
+**The coasting head is more discriminating, not just more conservative.** Yesterday's read came from coasting precision at a
+fixed 0.3 threshold (+1.95 pp at 58% fewer reports), which compares two operating points. Sweeping the threshold and comparing
+people recovered at matched false-positive cost: **S2 recovers 6-13% more people** than B0 at the same cost (ratios 1.11 / 1.13
+/ 1.08 / 1.06 at 0.26 / 1.10 / 3.35 / 25.1 FP per frame), and 6% fewer only at the cheapest point. The ranking genuinely improved.
+
+**It still buys nothing end to end.** S2's candidates-plus-rescoring stage covers 2,240 fewer people than B0 before coasting
+starts, so total coverage at matched cost is 1,400-2,300 worse; and at each model's own matched-false-positive operating point
+recall is **92.58 against 92.47, flat**. A better coasting ranking does not reach the end of the pipeline, because coasting is a
+small share of total coverage. **S2 stays a null end to end**, for a better-understood reason.
+
+**The 7.76 ms per frame was host load, as suspected.** Re-timed on a quiet machine: **4.74 ms at 256 slots** (4.86 / 4.81 / 4.74
+/ 4.92 / 5.21 at 64 / 128 / 256 / 512 / 720) against B0's 4.37. The feature costs about **0.4 ms, not 3.2**, and the curve stays
+flat in slot count.
+
+**Same hardcoded-output bug as the odometry sweep:** `slot_experiments.py cost` overwrote E4's `a51_cost.json`. E4's numbers
+survive in `CHANGELOG.md` and `memory/slot-design-evidence.md`; both scripts need an `--out`.
+
+## S3 / E11: jittered odometry buys real robustness, free, but the crossover stays (2026-10-02)
+
+*keywords: S3, E11, a51_s3_drift_s0, train-drift-m-per-s, domain randomisation, drift sweep, room frame, D1, crossover, a51_odometry.json*
+
+`a51_s3_drift_s0` trained with pose drift drawn per stream and redrawn each chunk over `[0, 0.05] m/s` and `2 deg/s`, then
+E2's sweep was re-run on it. Room-frame AP against B0's clean-trained curve: **83.50 / 82.77 / 81.59 / 80.02 / 77.44** against
+83.88 / 82.96 / 81.25 / 78.27 / 73.10 at 0 / 0.005 / 0.02 / 0.05 / 0.1 m/s -- **+1.75 pp at 0.05 and +4.34 pp at 0.1**, for
+-0.38 pp at zero drift. The penalty at 0.1 m/s falls from 10.78 pp to 6.06 pp.
+
+**The robustness is free.** On clean test odometry every barred metric is inside its bar: AP 83.50 (+0.16), AP at 0.3 m 81.76
+(+0.07), recall at matched false positives 93.09 (+0.61), coasting precision 29.04 (+3.61).
+
+**It does not move the crossover.** The sensor frame is flat at 82.03 in this sweep, so the room frame still wins below about
+0.015 m/s and loses above. Domain randomisation shrank the penalty past the crossover rather than removing the crossover, so
+**D1 stays conditional** and the write-up keeps that caveat.
+
+**Two provenance notes.** The sensor-frame baseline differs between the sweeps (82.03 against E2's 82.57), so the sensor arm used
+a different D1 checkpoint -- compare room against room and read any crossover within one sweep. And
+`slot_experiments.py odometry` writes a fixed path, so this run **overwrote E2's `a51_odometry.json`**; E2's numbers survive in
+`results/a51_odometry.log` and the script should take an output path.
+
+## S2's result: free-space evidence makes coasting conservative, not discriminating (2026-10-01)
+
+*keywords: S2, a51_s2_visibility_s0, visibility, coasting precision, coast_per_frame, calibration shift, null result, matched report rate*
+
+`a51_s2_visibility_s0` finished after a resume (10.4 h, best at epoch 22, 79.76% val AP). Against the three-seed control:
+AP 83.58 (+0.24), AP at 0.3 m 81.92 (+0.24), recall at matched false positives 92.58 (+0.10), **coasting precision 27.38
+(+1.95, bar 8.19)**. Every barred metric is inside its bar, so the feature costs nothing and buys nothing.
+
+**The shape of the null is the interesting part.** Coasting reports fell from 0.176 to **0.074 per frame, 58% fewer**, for
+1.95 pp more precision. A better ranking would pay far more than that at less than half the volume; what happened instead is
+that the whole model grew conservative -- precision 70.3% at the shared threshold with false positives 1.087 against B0's ~1.6,
+and false negatives up to 0.495. `recall at matched FP`, which removes calibration from the comparison, is flat at +0.10.
+
+**Not yet like for like.** Coasting precision is read at a fixed 0.3 threshold, so +1.95 pp at a 58% lower report rate compares
+two operating points. The sweep that answers it -- precision at a *matched* report rate, via `memory_diagnosis.py --recovery` on
+this checkpoint -- needs no training and is queued.
+
+**One number not to quote yet:** 7.76 ms per frame against B0's 4.53. The host was loaded enough that training epochs ran 970 s
+where they had run 677 s, so this needs re-timing on a quiet machine before any of it is attributed to the feature.
+
+## S2: the coasting head is told what the laser saw past each slot (2026-09-30)
+
+*keywords: S2, visibility, free_range_profile, visibility_feature, coasting precision, SECTORS, cache key, free space, occlusion*
+
+Coasting has to tell a genuinely occluded person from a slot that is simply wrong, and until now the head saw nothing of the
+current scan -- only eight bookkeeping numbers and the slot's learned state. The decisive evidence was being thrown away: **if
+the laser reaches past a slot's own position, nobody is standing there.**
+
+- **`free_range_profile(ranges, sectors)`** -- the nearest return per angular sector, through `sanitize_ranges` first, so a
+  missing return reads as empty space rather than as the closest obstacle in its sector.
+- **`visibility_feature(slot_xy, free_range, angles, sectors)`** -- per slot, how much further the beam reached than the slot
+  claims to be, scaled by `VISIBILITY_SCALE_M` and clamped to [-1, 1]. Negative means something is in front, so the person
+  could still be hidden; positive means the beam passed through and found nothing; a slot outside the field of view reads 0.
+- **`ObjectMemory(visibility=True)`** appends it to the slot statistics, so the rescoring head sees it too, and `step()` then
+  requires `free_range` and `angles` rather than silently doing without.
+
+**Two implementation decisions worth recording.** The flag is **off by default**, because the statistic widens every layer that
+reads the statistics vector, and every existing checkpoint -- B0, E10, E13 -- must still load. And the candidate cache now
+carries the profile, so its **key gained the sector count** and the next run rebuilds it (about an hour) rather than the code
+gaining a migration path for old caches.
+
+Tests first, twelve of them: the profile's treatment of missing returns, the feature's sign, saturation and field of view, and
+that the default model's shape and numbers are untouched. They could not run beside S1, so `run_s2.ps1` runs the suite itself
+when the machine frees and refuses to train if it fails.
 
 ## Arm provenance comes from the checkpoints, not the launchers; a second E10 seed is running (2026-09-30)
 

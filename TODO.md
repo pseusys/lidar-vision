@@ -87,7 +87,7 @@ That's a structural gap, not a pending deploy — see §E below.
 | | **A53** rewrite `docs/RESEARCH.md` around TAKHeLiPeD | header note added 2026-09-23; the body still argues the superseded framing | a day of writing, no compute |
 | | **A54** a formal citation for prof. O. Aycard's `AlgorithmicDetector` | credit stated everywhere 2026-09-23; **blocked on the owner** for a reference | one question |
 | | **A55** revert the GPU driver to Adrenalin 26.2.2, the version AMD requires for ROCm 7.2.1 | queue stopped for it 2026-09-26 04:51; **owner installing** | ~30 min by hand, then one long run as the test |
-| | **A56** tracking-literature baselines and metrics: ByteTrack and CBMOT on the same candidates, GOSPA, slots scored as a tracker | proposed 2026-09-28, **awaiting the owner**; E14-E16 need no training | E14-E16 evaluation only; E19 one step 3a run; E17-E18 after A49 |
+| | **A56** tracking-literature baselines and the paper's claims: CBMOT and ByteTrack on the same candidates, GOSPA, where the gain sits, latency | plan pre-registered 2026-09-30 (`memory/experiments/2026-09-tracking-claims.md`), **awaiting the owner** | ~6 h of machine, no training |
 
 **Stage-3 slot experiments (owner's call 2026-09-17) are planned in A51**, which supersedes the backbone choice below: the owner chose the **no-temporal** stage 2, not `default_s0`. Start from these facts:
 
@@ -197,13 +197,78 @@ Trained `--align-scans` checkpoints saw the bad headings in the windows touching
 
 **Why.** `AGENTS.md` rule 3 and the evidence rules: the paper's exchange-rate tables and the §2.4 numbers the proposal is argued from must be measured on correct odometry before they are quoted.
 
+### A57. Replace the PowerShell launchers with one typed Python queue runner -- **owner's suggestion 2026-10-01**
+
+**What.** `utils/run_queue.py`: one program that takes a list of jobs and runs them all, replacing the ~60-line PowerShell
+launcher that has now been hand-copied eight times (`run_arms.ps1`, `run_arms2.ps1`, `run_b0fresh.ps1`, `run_e10.ps1`,
+`run_e12.ps1`, `run_e12ab.ps1`, `run_s2.ps1`, `run_s3.ps1`). Do it when the machine is free, not beside a run.
+
+**Why.** Every incident in this session traces to the launcher rather than to the research:
+
+| incident | what the duplicated script did |
+| --- | --- |
+| S3 trained ahead of a failed test gate | each copy waits for an *idle machine*, and a chain that stops on failure makes the machine idle |
+| a 6.8 h run died silently at 08:48 | the launcher was a child of the agent session, so a teardown killed the tree |
+| `\r` became a carriage return, twice | the scripts are built by string substitution rather than written as code |
+| a wrong completion marker nearly missed a finish | each copy greps a different hand-typed string |
+| `Wait-Finished` hardcoded `step3a` | copied for a `step3b` run and silently never matched |
+
+**How**, following `memory/coding-guidelines.md` -- type hints throughout, `from module import name`, constants at module level,
+one docstring per function, standard library only so it runs on a fresh clone:
+
+- A `Job` dataclass: `name`, `step` (`step3a` / `step3b`), `cli`, and `needs: tuple[str, ...]` -- explicit dependencies rather
+  than the implicit "wait until nothing is running". **Order within the queue carries no meaning** (`completion-over-ordering`):
+  the runner takes anything whose dependencies are met and whose results file is absent.
+- `run(jobs, *, gate=pytest)`: runs the gate once, then each job up to three times with `--resume`, stopping that job on a
+  training-guard match and recording the outcome. **A failed job never releases the machine to a job that depended on it.**
+- One `Outcome` per job -- done, skipped, failed, blocked -- printed as a table at the end and appended to `progress.txt` in the
+  existing format, so the watchers keep working unchanged.
+- Started detached (`memory/long-running-tasks.md`), so it outlives the session that launched it.
+- Tests in `tests/test_run_queue.py`: dependency resolution, the skip-if-results rule, retry limits, guard classification,
+  blocked-on-failed-dependency, and marker formatting -- with the process spawn behind a seam so none of it needs a GPU.
+
+**Tier.** After the S2/S3 queue drains. It is tooling, not research, so it waits for a gap rather than taking machine time from
+an experiment.
+
 ### A51. Stage-3 slots: performance, trainability and output
+
+> ## Closing out the slots work -- scope set by the owner, 2026-09-30
+>
+> **Three items, and deliberately not more.** An earlier draft of this block scheduled the tracking-baseline work (A56) and a
+> coarse-convolution arm as well; the owner cut both back to later sessions. **A56 stays awaiting the owner and is not
+> approved.** Machine time is single-threaded -- nothing that imports torch runs beside a training job
+> (`memory/gotchas.md`) -- so these run in order.
+>
+> | # | question | cost | status |
+> | --- | --- | --- | --- |
+> | ~~**S1**~~ | Does E10's headline survive a second seed? | ~5 h | **done 2026-10-01: partly.** AP -1.40 is now **inside** its 1.45 bar; AP@0.3 (-1.30), recall at matched FP (-1.60, 1.9x) and coasting precision (-13.80, 1.7x) clear. Three of four, not four |
+> | ~~**S2**~~ | Can the coasting head tell a remembered person from a remembered phantom, if it is told what is occluded? | ~5 h + code | **done 2026-10-01/02: no end to end, though the ranking did improve.** At matched false-positive cost the coasting head recovers **6-13% more people**; but the rest of the model turns conservative, covering 2,240 fewer before coasting starts, so recall at each model's own operating point is flat (92.58 against 92.47). Timing cleared: **4.74 ms at 256 slots** on a quiet host, not the 7.76 measured under load. Original fixed-threshold read: coasting precision 27.38 against 25.43 (+1.95, bar 8.19), reporting **58% fewer** slots to get it -- conservative, not discriminating. Every barred metric inside its bar. **Two follow-ups queued:** the coasting sweep on this checkpoint, for precision at a *matched* report rate rather than a fixed threshold; and a re-timing of its 7.76 ms/frame on a quiet host |
+> | ~~**S3**~~ | Does training with jittered odometry repair the room frame? (E11) | ~5 h + code | **done 2026-10-02: partly, and for free.** Room-frame AP **+1.75 pp at 0.05 m/s and +4.34 at 0.1**, -0.38 at zero; every clean-odometry metric inside its bar. **The crossover with the sensor frame does not move** (~0.015 m/s), so D1 stays conditional |
+>
+> **Left for later sessions, with their plans intact:** A56's tracking baselines and metrics (E14-E22, still awaiting the
+> owner), the coarse-convolution interaction (§D / A51 phase 4), extra seeds for the single-seed screening arms (D2, D3, O1,
+> O2, T1, T2), and the cross-dataset work (A49).
+>
+> **Still open, small and cheap:** `slot_experiments.py` writes hardcoded output paths, and on 2026-10-02 the `odometry` and
+> `cost` modes overwrote E2's `a51_odometry.json` and E4's `a51_cost.json`. Give every mode an `--out`. Both sets of numbers
+> survive -- E2's in `results/a51_odometry.log`, E4's in `CHANGELOG.md` and `memory/slot-design-evidence.md`.
+>
+> **Closed, with reasons, so they are not reopened by accident:**
+>
+> - **Feedback / re-injection.** Measured null in three configurations, cause measured (0.012-0.045% of the layer's input),
+>   ceiling measured (1.91% of people, all already coasting). A widened re-test is possible and is **not** scheduled: it chases a
+>   fraction of that ceiling against a coasting head that already reaches the same people. **S2 is the same prize by a shorter
+>   route.**
+> - **Deleting the feedback code.** Kept deliberately (owner, 2026-09-30) so E12's three runs stay reproducible until the paper's
+>   numbers are frozen.
+> - **Slot capacity.** 24 of 256 slots in median use, p99 84; not the limit.
+
 
 > **Where this stands, 2026-09-30 (session close).** The architecture question is **settled**; one deployment item is left.
 >
 > | question | answer | evidence |
 > | --- | --- | --- |
-> | Does the learned slot state earn its place? | **Yes, and it is the only part that does.** -1.50 AP, -1.67 recall at matched FP, -14.08 coasting precision without it, all past their bars | E10, one seed vs a three-seed control |
+> | Does the learned slot state earn its place? | **Yes, and it is the only part that does** -- though AP alone is inside its bar. -1.40 AP (bar 1.45), -1.30 AP@0.3, **-1.60 recall at matched FP (1.9x)**, **-13.80 coasting precision (1.7x)** | E10, two seeds vs a three-seed control |
 > | Is the attention needed? | **No.** Ties on every metric at three seeds, -43% parameters, -18% ms/frame | E6, E7, E13 |
 > | Does feeding memory back into stage 2 work? | **No, in three configurations including a ground-truth prior with no competitor.** Cause measured: the prior carries 0.012-0.045% of that layer's input | E12a, E12b, E12ab |
 > | Was there anything for feedback to win? | **1.91% of people at most**, and every one already held by a coasting slot | `memory_diagnosis.py --recovery`, no training |
@@ -653,34 +718,42 @@ truth than FROG has. Three recordings, about 7 minutes total, three participants
 
 **Why.** Stage 3 is the part of the design that should show temporal information pays, and its only result (80.10%, on a stage 2 that no longer loads) came from one run with a badly conditioned gate, a corrupted time step and a miscalibrated threshold.
 
-### A56. Tracking-literature baselines and metrics -- **proposed 2026-09-28, awaiting the owner**
+### A56. Tracking-literature baselines, metrics and the paper's claims -- **plan 2026-09-30, awaiting the owner**
 
-**What.** Six experiments that answer what the person-*tracking* literature (`docs/RESEARCH.md` §7.4) says about TAKHeLiPeD's claims.
+**What.** The experiments that decide which paper claims survive the person-*tracking* literature (`docs/RESEARCH.md` §7.4).
+The claim ledger, the predictions and what each outcome changes are pre-registered in `memory/experiments/2026-09-tracking-claims.md`; read it before running anything here.
 Numbered on from A51's E-series so every ID stays unique; split out of A51 at the owner's request on 2026-09-29.
 
-**Why.** The survey qualifies three claims the write-up leans on:
+**Why.** Every rung of the evidence ladder is measured except the one the tracking literature supplies:
 
-- SORT is not the strongest post-hoc baseline: **ByteTrack** (ECCV 2022) associates sub-threshold detections, which is exactly the evidence stage 3 is credited with reaching.
-- The slot **value rule is CBMOT's** score update (IROS 2021, `c = 1 - (1-c)(1-s)`) with a gain, and track existence goes back to IPDA (1994).
-- "Acting before the threshold" is **track-before-detect**, so the precise claim is a learned, causal, object-keyed track-before-detect over sub-threshold candidates.
+| rung | AP | status |
+| --- | --- | --- |
+| candidates | 77.66 | fixed |
+| SORT, fed every candidate to 0.01 but only filtering | 74.9-76.7 | earlier chain's candidates |
+| **a rule that raises scores from track confidence (CBMOT, IROS 2021), with ByteTrack's association (ECCV 2022)** | **not measured** | E14, E15 |
+| learned scorer on bookkeeping statistics, no state (E10) | 81.84 | 1 seed, second running |
+| learned state, no attention (E13, the proposed architecture) | 83.86 | 3 seeds |
 
-E14-E16 answer the first two without a training run.
+Correction recorded 2026-09-30: this repository's SORT replay already saw every sub-threshold candidate, so SORT's loss is not about visibility; it is that SORT cannot rescore. The comparison that matters is against a rule that can.
 
-**How.**
+**How.** No training; about 6 h of machine time once it is free.
 
-| # | what | how | why |
+| # | what | how | decides |
 | --- | --- | --- | --- |
-| E14 | ByteTrack, plus OC-SORT's re-update, on stage 2's candidates | replay the cached no-temporal seed-0 candidates (the B0 cache, sub-threshold ones included) through a two-stage association -- high-score candidates first, then low-score ones against still-unmatched tracks -- with the same odometry compensation `tracker_sweep.py` uses; score AP with a track score (the matched candidate's, and a decayed one when coasting), sweep the two thresholds, report AP, recall at matched FP and ms/frame beside B0 | the first comparison a tracking reviewer asks for; if ByteTrack reaches +5.68 pp, the memory's gain is a 2022 tracker's, and the write-up must say so |
-| E15 | CBMOT score refinement as a rescorer | same replay through `manage_slots` alone; each candidate's score becomes `1 - (1 - s)(1 - v)` from its slot's rule value, no learned head | the hand-coded twin of E10: together with E14 it says whether the learned half adds anything over rules published in 2021-2022 |
-| E16 | GOSPA beside AP | per-frame GOSPA (c = 0.5 m, p = 1, alpha = 2) and its localisation / missed / false split, for LFE-Peaks, LFE-PPN, stage 2 and stage 3, in the same pass as E14 | `docs/PAPER.md` argues AP conceals a constant false-positive rate; GOSPA is the established point-target metric that charges it, and needs no identities |
-| E17 | the slots scored as a tracker | HOTA, MOTA, IDF1, OSPA(2) on JRDB's 3D tracks projected to the ground plane (train/val, outside the leaderboard), and on Plozza et al.'s mocap if shared; baselines DR-SPAAM + Norfair and + ByteTrack | a second contribution if it holds -- a detector whose memory is also a competitive tracker; waits for A49's JRDB loader |
-| E18 | self-supervised memory, or DROW label densification from slot tracks | research branch after A49; Tokmakov et al. ICML 2022, Jia et al. ICRA 2021, Qi et al. CVPR 2021 | DROW labels 5% of scans; the memory is the part that most needs long unlabelled sequences |
-| E19 | an occlusion input for the coasting head | per slot, whether the current scan has a return nearer than the slot on its bearing (Arras et al., ICRA 2008's adaptive occlusion); one step 3a run | O2's null says the head cannot separate a remembered person from a remembered phantom; occlusion explains a person's absence, never a chair's |
+| E14 | the strongest classical pipeline on identical candidates | a `ByteTracker` for points in `tracking.py`: SORT's Kalman point, ego-motion, two-stage association with tracks born only from high-score candidates, CBMOT track score (eq. 6, decay, deletion on score), optional coasting at the decayed score; output as detection score, CBMOT score, or CBMOT plus coasting; tuned on **val**, scored on test once; SORT re-measured on this cache | C2, C3 |
+| E15 | the memory's own bookkeeping with CBMOT's rule instead of the learned head | replay `manage_slots` on the GPU; matched candidates rescored with CBMOT eq. 6 from their slot's value, alive unmatched slots coast at the decayed value; `gain` and `fade_time_s` tuned on val | C3: the rung directly below E10 |
+| E16 | GOSPA beside AP | per frame, c = 0.5 m, p = 1, alpha = 2, localisation / missed / false split, at each method's val-best threshold and at 0.3, for LFE-Peaks, LFE-PPN, candidates, E14, E15, E10, E13, B0 | C1 |
+| E20 | where the gain sits | recall at matched FP per stratum -- range, occluded in the raw scan, stationary or moving, trajectory age -- for candidates, E15 and E13 | C4; gates E19 |
+| E21 | first-detection latency | frames from a trajectory's first annotation to its first detection, per method at its own threshold | C5 |
+| E22 | end-to-end streaming latency of the proposed architecture | stages 1-3 of E13, one stream, median and p99 over 2,000 frames, GPU and CPU | C6 |
+| -- | uncertainty | paired block bootstrap, 30 s blocks, 1,000 resamples, per learned seed | C2 |
+| E17 | the slots scored as a tracker | HOTA, MOTA, IDF1, OSPA(2) on JRDB's 3D tracks projected to the ground plane, and Plozza et al.'s mocap if shared | waits for A49 |
+| E18 | self-supervised memory, or DROW label densification from slot tracks | Tokmakov et al. ICML 2022, Jia et al. ICRA 2021, Qi et al. CVPR 2021 | waits for A49 |
+| E19 | an occlusion input for the coasting head | one step 3a run | only if E20 puts coasting's failures on occluded people |
 
-**Order.** E14 and E15 first -- evaluation only, on caches that exist, and able to falsify the headline claim -- with E16 in the same pass.
-They need host memory, so they run in a gap in the A51 queue, never beside a training run.
-E19 is one step 3a run, queued beside A51's O-series.
-E17 and E18 wait for A49.
+**Tests first**, before any of this code: `ByteTracker` in `tests/test_tracker.py` (including frame-for-frame agreement with `SortTracker` in its degenerate setting), the rule scorer, GOSPA, the block bootstrap and the strata in a new `tests/test_tracking_baselines.py`, plus three real-data checks listed in the pre-registration.
+
+**Order.** E15, then E14, then E16 and E21 from the saved detections, then E20, E22 and the bootstrap. Nothing here runs beside a training job (`memory/gotchas.md`): it waits for the machine to be free.
 
 ### A50. After the first FROG result: post-processing, deferred ablations, architecture experiments
 
