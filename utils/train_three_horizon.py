@@ -704,7 +704,8 @@ def evaluation_segments(split, windows: int, window_frames: int, warmup_frames: 
 @torch.no_grad()
 def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: int, segments: List[Tuple[int, int, int, int]],
              slice_frames: int = 512, extra_radii: Sequence[float] = (), reset_every_s: Optional[float] = None,
-             drift_m_per_s: float = 0.0, heading_deg_per_s: float = 0.0) -> Dict[str, Dict[str, float]]:
+             drift_m_per_s: float = 0.0, heading_deg_per_s: float = 0.0, frames_out: Optional[Dict[str, list]] = None,
+             compute_metrics: bool = True) -> Dict[str, Dict[str, float]]:
     """Play each segment (recording, first frame, frames, warm-up) from empty memory, `streams` at a time, and score every
     `stride`-th annotated frame after its warm-up: the candidates alone, and the candidates rescored plus coasting slots.
     Frames are gathered `slice_frames` at a time, so memory is bounded by streams x slice rather than by the longest recording.
@@ -715,9 +716,11 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
 
     `reset_every_s` empties every stream's memory on that period, which measures how long a memory the model actually uses (A51
     E1); `drift_m_per_s` and `heading_deg_per_s` corrupt the odometry the slots are keyed on, which prices the room-frame design
-    against a robot whose odometry drifts (A51 E2)."""
+    against a robot whose odometry drifts (A51 E2). `frames_out`, when given, receives the scored frames as `candidates` and
+    `memory` lists of (scores, xy, annotated people), with each frame's packed index in `index` (A56); `compute_metrics=False` then skips
+    the metrics, which on every annotated test frame cost far more than the replay."""
     model.eval()
-    raw, memory = [], []
+    raw, memory, index = [], [], []
     shift_person, shift_other = [], []
     coast_reports, coast_hits = 0, 0
     segments = sorted(segments, key=lambda seg: -seg[2])
@@ -758,6 +761,7 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                 gt = [batch["gt_xy"][r, i][batch["gt_valid"][r, i]].cpu().numpy() for r in rows]
                 for j in range(len(rows)):
                     report = coasting[j] & (slot_p[j] >= MIN_REPORTED_SCORE)
+                    index.append(int(split.offsets[recording[rows[j], 0]] + frame[rows[j], t]))
                     raw.append((score[j][valid[j]], xy[j][valid[j]], gt[j]))
                     memory.append((np.concatenate([cand_p[j][valid[j]], slot_p[j][report]]), np.concatenate([xy[j][valid[j]], slot_xy[j][report]]), gt[j]))
                     shift_person.append(shift[j][valid[j] & target[j]]), shift_other.append(shift[j][valid[j] & ~target[j]])
@@ -765,6 +769,10 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                     coast_reports += int(confident.sum())
                     coast_hits += coasting_hits(slot_xy[j][confident], xy[j][valid[j] & (cand_p[j] >= OPERATING_THRESHOLD)], gt[j], MATCH_RADIUS_M)
     model.train()
+    if frames_out is not None:
+        frames_out.update(candidates=raw, memory=memory, index=index)
+    if not compute_metrics:
+        return dict(candidates={}, memory={})
     base, new = score_detections(raw), score_detections(memory)
     new.update(score_detections(memory, fp_budget=base["fp_per_frame"]) if memory else {})
     new["exchange_rate"] = exchange_rate(base["fp_per_frame"], base["fn_per_frame"], new["fp_per_frame"], new["fn_per_frame"])

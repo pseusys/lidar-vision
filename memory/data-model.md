@@ -176,6 +176,32 @@ Measured after the fix: the largest inter-scan gap inside any sequence is 464 ms
 The two training recordings become 54 sequences, the test recording 47.
 Per-scan interval *jitter* within a session is left alone as noise — there is nothing to be done about it, and `aligned_raw_scan()` works off real odometry timestamps rather than an assumed rate.
 
+### Duplicate labels: some circles are copied, bit for bit
+
+Some frames list one person twice: two rows of `circles` equal in all six columns, position, radius and polar form alike (found 2026-10-05, closing A56).
+Counted in the raw files, independent of every loader:
+
+| file | circles | exact duplicate pairs | share | near pairs under 5 cm |
+| --- | --- | --- | --- | --- |
+| `frog_16-41_test.h5` | 153,655 | **2,254** in 2,240 frames | **1.47%** | 62 |
+| `frog_11-36_12-43_train_val.h5` | 473,005 | 285 | 0.06% | 75 |
+| `frog_10-31.h5` | 127,600 | 1,979 | 1.55% | 63 |
+| `frog_14-57.h5` | 133,197 | 814 | 0.61% | 98 |
+| `frog_15-53.h5` | 133,023 | 1,365 | 1.03% | 27 |
+
+In the test file they run over consecutive annotated frames (54 runs, median 16, longest 219), across 19 of its 47 recordings, at ordinary ranges (median 4.6 m): a tracked label copied by the annotation tool, not two people, since two people cannot share a point.
+
+**The loaders keep them, deliberately.** The published FROG and LFE numbers were scored on the same labels, so the official protocol includes them; every number here is on the official labels, with a de-duplicated figure only as a sensitivity (`interpreting-evaluation.md`).
+**What they do:**
+
+- **At evaluation**, a copy is a person nobody can find with one detection, because matching is one to one, so it scores only for a method that puts a second detection beside the original. It costs every method 0.7-1.05 pp of test AP.
+- **In training**, a copy looks to `coast_targets` like an annotated person no candidate covers, so it teaches a coasting slot to report beside a covered person.
+  That is negligible on `train_val` (285) and not on the extras (up to 1.55%): de-duplicate before training on them.
+- **Any lookup by position** (nearest annotation to a trajectory point, a rounded-position dictionary) silently drops the copy, which is what the A56 report's "unlinked annotations" and `dataset-properties.md`'s round-trip shortfall turned out to be.
+
+De-duplicating is one line per frame: keep row `j` unless it equals an earlier row (`np.all(gt[:j] == gt[j], axis=1).any()`).
+The counts and scripts are in `checkpoints_three_horizon/a56/duplicates/`.
+
 ## FROG odometry — real official files, preferred over the ICP fallback
 
 The FROG authors publish real, official per-session odometry as `frog_<HH-MM>_odom.npz` (`ts` + `data` arrays: X, Y, heading, ~10 Hz — sparser than scan rate, aligned via `np.interp`) at `https://robotics.upo.es/datasets/frog/laser2d_people/data/`.

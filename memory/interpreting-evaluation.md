@@ -67,6 +67,20 @@ FROG's Table 4 reports **nine** figures per model: mAP / mPeakF1 / mEER averaged
 The offset is not a constant you can subtract: +0.3pp for DR-SPAAM, **+2.7pp for LFE-PPN**, because how fast a detector's AP falls as the gate tightens is itself a property of the detector.
 `performance-log.md` now carries the `d = 0.5 m` column. **Always say which `d`.**
 
+## FROG test carries 2,254 duplicate labels, and they reward double reporting
+
+1.47% of the test file's circles repeat another circle of the same frame bit for bit (`data-model.md`, found 2026-10-05).
+Matching is one to one, so a copy can only be found by a **second** detection beside the original, which is a false positive everywhere else.
+Two consequences when reading a FROG test number:
+
+- **Every AP is 0.7-1.05 pp below its de-duplicated value**, and the method that double-reports least loses most: candidates 77.66 -> 78.70, the tuned ByteTrack + CBMOT 80.96 -> 81.90, E13 83.86 -> 84.60.
+  A gap between a double-reporting method and a clean one is therefore inflated by up to ~0.3 pp (E13 over E14: +2.90 official, +2.71 de-duplicated, every interval still above zero).
+- **A per-person statistic that counts the copies** credits double reporting as recall.
+  The A56 "unlinked annotations" the memory "found" 39% of were exactly these copies.
+
+The official labels stay the reported protocol, because every published FROG and LFE number was scored on them.
+Quote the de-duplicated figure only as a sensitivity, and only beside the official one.
+
 ## Calibrate anything positional at `--eval-r 0.3`, not 0.5
 
 A 0.5 m association gate is wider than most localisation errors worth finding, so it will happily accept a decoder that is systematically off by 10-20 cm.

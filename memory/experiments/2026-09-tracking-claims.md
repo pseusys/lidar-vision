@@ -2,8 +2,8 @@
 
 *keywords:* A56, pre-registration, paper claims, claim ledger, tracking ladder, ByteTrack, CBMOT, rule scorer, E14, E15, E16, E20, E21, E22, GOSPA, block bootstrap, stratified gain, occlusion, first-detection latency, val-tuned baseline
 
-**Status: plan, 2026-09-30, awaiting the owner.**
-**Nothing below has run.**
+**Status: done 2026-10-03.** The predictions below were written 2026-09-30 and were not edited after the runs started; the Outcome section at the end scores each one.
+**Updated before any run, 2026-10-02:** E10 now has two seeds (81.84 / 82.04, mean 81.94; its AP loss of 1.40 sits inside the 1.45 bar, while recall at matched FP and coasting precision still clear), and E19 ran as A51 S2 (a free-space input for the coasting head: better coasting ranking, flat end to end), so it is dropped from this batch.
 The literature behind it is [`../../docs/RESEARCH.md`](../../docs/RESEARCH.md) §7.4; the work items are [`../../TODO.md`](../../TODO.md) A56; the slot evidence it builds on is [`../slot-design-evidence.md`](../slot-design-evidence.md).
 This file records what is predicted and what each outcome changes in the paper, so that a result cannot be reinterpreted after it arrives.
 
@@ -16,7 +16,7 @@ All on FROG `official` test, AP at 0.5 m, every 5th annotated frame, on the same
 | 0 | nothing (the candidates) | 77.66 | fixed | -- |
 | 1 | SORT, fed every candidate to 0.01, reporting each with its own score | 76.7 / 75.7 / 74.9 at `min_hits` 1 / 3 / 5 | earlier chain's candidates | -- |
 | 2 | **a rule that raises scores from track confidence (CBMOT)** | **not measured** | -- | -- |
-| 3 | a learned scorer on the slot's bookkeeping statistics, no state (E10) | 81.84 | 1 (second running) | 2.70 |
+| 3 | a learned scorer on the slot's bookkeeping statistics, no state (E10) | 81.94 (81.84 / 82.04) | 2 | 2.70 |
 | 4 | learned per-slot state, no attention (E13, the architecture to propose) | 83.86 (sd 0.32) | 3 | 3.72 |
 | 5 | learned state plus both attention mechanisms (B0) | 83.34 (sd 0.48) | 3 | 4.53 |
 
@@ -71,7 +71,7 @@ Until rung 2 is measured, "a memory inside the detector beats post-hoc tracking"
 | -- | uncertainty for every evaluation-only comparison | paired block bootstrap: 30 s blocks within the test recording, 1,000 resamples, 95% interval on the AP difference, per seed of the learned arm | ~10 min per pair | C2 |
 
 Every classical hyperparameter is tuned on val and scored on test once; tuning on test is what inflated A38's first result (`../rejected-ideas.md`).
-Not in this batch: E17 and E18 wait for A49; E19 (an occlusion input for coasting) runs only if E20 shows that coasting's failures sit on occluded people; E11 stays in A51.
+Not in this batch: E17 and E18 wait for A49; E19 already ran as A51 S2; E11 ran as A51 S3.
 
 ## Tests, written before the code
 
@@ -92,4 +92,121 @@ About 6 h of machine time, no training.
 
 ## Outcome
 
-*Empty until the runs report.*
+Run 2026-10-02/03 with `utils/tracking_baselines.py` (results in `checkpoints_three_horizon/a56/`, `report.json`).
+Test split, AP at 0.5 m on every 5th annotated frame; every classical setting tuned on val and scored on test once; 95% intervals from a paired block bootstrap (30 s blocks, 1,000 resamples), one per learned seed.
+
+**Four real-data checks passed before any number was read:** the candidates reproduce their recorded 77.66% AP and 88.8% recall at 2.62 FP per frame; re-scoring the stored memory checkpoints reproduces their recorded test APs (B0 82.96 / 83.18 / 83.88, E10 81.84 / 82.04); E14's SORT row is frame-for-frame identical to `replay_sort` (AP 0.774032 both); and GOSPA's false and missed terms for LFE-Peaks at 0.3 are 1.760 and 0.635 per frame, against its documented 1.76 FP and 0.63 FN (LFE-PPN 5.028 / 0.377 against 5.03 / 0.38).
+
+### The ladder, measured
+
+| rung | AP | vs candidates | recall at matched FP | per-frame cost |
+| --- | --- | --- | --- | --- |
+| candidates | 77.66 | -- | 88.80 | -- |
+| SORT, `min_hits` 1 / 3 | 77.40 / 76.67 | -0.25 [-0.42, -0.08] / -0.98 | 88.52 / 87.68 | ~0.3 ms (CPU, Python) |
+| ByteTrack as published (detection scores) | 76.49 | -1.17 [-1.59, -0.78] | 88.83 | ~0.3 ms |
+| E15: the memory's bookkeeping, its value used as the score | 69.51 | -8.14 [-12.44, -4.20] | 89.77 | -- |
+| **E14: ByteTrack + CBMOT, tuned on val** | **80.96** | **+3.30 [+2.83, +3.77]** | 92.17 | ~0.3-0.5 ms |
+| E10: learned scorer on the bookkeeping, no state (2 seeds) | 81.94 | +4.28 | 90.88 | 2.70 ms |
+| **E13: learned state, no attention (3 seeds, the proposal)** | **83.86** | **+6.20** | **93.16** | 3.72 ms |
+| B0: learned state with attention (3 seeds) | 83.34 | +5.68 | 92.47 | 4.53 ms |
+
+**E13 against the tuned classical pipeline, per seed: +2.95 [+2.06, +3.89], +3.20 [+2.17, +4.31], +2.56 [+1.08, +3.88]** -- mean +2.90, every interval above zero, the mean twice the 1.45 pp seed bar.
+B0 against it: +2.00 / +2.22 / +2.92, all intervals above zero.
+E10 against it: +0.88 [-0.08, +1.81] and +1.09 [+0.10, +2.07] -- a learned scorer without state barely clears a tuned rule.
+
+E14's tuned configuration: two-stage association, `high_thresh` 0.1, `low_thresh` 0.01, gate 0.3 m, tracks kept 1 s, CBMOT's parallel-addition update, confidence decaying 0.1 per second, coasted tracks reported for 2 s, unmatched candidates at half their score.
+**The decay is what makes the rule work**: without it every long-lived track, phantom or person, saturates near 1 and val AP falls to 52.9%; at 0.1 per second it is 73.4%, and coasting and the update rule take it to 76.5% (candidates 72.95% on val).
+The same saturation explains E15: the memory's value rule, used directly as a score, either saturates (gain 1, CBMOT's multiplication: 47-49% val) or, below gain 1, pulls a confident detection down to a young slot's low value (best 66.1% val).
+
+### Where the gain sits (E20), recall at matched FP
+
+| stratum | people | candidates | tuned classical | E13 (3-seed mean) | E13 over classical |
+| --- | --- | --- | --- | --- | --- |
+| visible | 134,585 | 91.2 | 93.9 | 94.7 | +0.8 |
+| partly occluded | 17,589 | 72.9 | 81.0 | 83.2 | +2.1 |
+| mostly occluded | 1,481 | 53.5 | 65.4 | 68.2 | +2.9 |
+| first 0.5 s of a trajectory | 13,080 | 86.0 | 85.1 | 88.1 | +3.0 |
+| 0.5-2 s | 31,120 | 90.4 | 94.4 | 93.9 | -0.5 |
+| 2-10 s | 79,588 | 91.1 | 95.0 | 95.7 | +0.7 |
+| over 10 s | 27,613 | 88.0 | 91.1 | 91.7 | +0.6 |
+| moving / slow / still | 83,158 / 26,055 / 42,180 | 92.8 / 88.4 / 85.3 | 95.9 / 92.2 / 89.0 | 97.0 / 92.8 / 88.7 | +1.0 / +0.6 / -0.2 |
+| 0-2 / 2-4 / 4-6 / 6-8 / 8+ m | | 89.2 / 90.1 / 89.3 / 86.2 / 88.7 | 92.1 / 93.6 / 93.4 / 89.8 / 91.0 | 93.9 / 93.9 / 94.3 / 90.8 / 92.2 | +1.8 / +0.4 / +0.9 / +1.0 / +1.2 |
+
+Occlusion is "a return at least 0.5 m in front of the person within their angular width" in that frame's raw scan; partly is up to half the width, mostly beyond.
+Trajectories are annotations linked within 0.6 m; 2,254 annotations link to nothing and are left out of the age rows (2,262 of the motion rows, adding 8 single-point trajectories with no speed).
+**Those 2,254 are FROG's duplicate labels, not people** (checked 2026-10-05): each repeats another circle of its frame in all six columns, the reverse lookup from trajectory to annotation takes the first of the two, and the copy is left without one.
+The "recall" on them (candidates 9.7%, classical 15.7%, E13 39.0%) measures how often a method puts a second detection beside a person, which is a false positive everywhere else (see below).
+
+### With the duplicate labels removed (2026-10-05)
+
+| | AP, official labels | AP, de-duplicated | a second detection within 0.5 m of a person, at matched FP |
+| --- | --- | --- | --- |
+| candidates | 77.66 | 78.70 | 1.7% |
+| E14: ByteTrack + CBMOT | 80.96 | 81.90 | 6.5% |
+| E10 (2 seeds) | 81.94 | 82.86 | 4.9-5.4% |
+| E13 (3 seeds) | 83.86 | 84.60 | 12.5-14.8% |
+| B0 (3 seeds) | 83.34 | 84.14 | 8.4-11.5% |
+| LFE-Peaks / LFE-PPN | 65.14 / 69.56 | 65.23 / 69.99 | 17.5% / 35.8% |
+
+Every claim survives: E13 over E14 per seed is **+2.74 [+1.85, +3.68], +3.02 [+2.01, +4.14], +2.36 [+0.91, +3.66]** (official +2.95 / +3.20 / +2.56), E14 over the candidates +3.19 [+2.75, +3.64], E10 over E14 +0.86 [-0.11, +1.79] and +1.06 [+0.06, +2.06].
+Removing the copies helps every method, and helps least those that double-report most, since a double report was the only way to score a copy.
+Scripts and outputs: `checkpoints_three_horizon/a56/duplicates/`.
+
+**Nor does the double reporting move the comparison** (`TODO.md` A58, same day): a merge radius chosen on val buys no output anything (E13 -0.04 to -0.05 pp, E14 chooses none), and with both merged E13 over E14 is +2.90 [+2.00, +3.81], +3.16 [+2.14, +4.24], +2.51 [+1.09, +3.82].
+Even an oracle that removes every redundant detection near a person lifts E13 and E14 alike, by about 0.5 pp (`rejected-ideas.md`).
+
+### First detection (E21), 672 linked test trajectories
+
+| | detected on its first annotated frame | within 0.5 s | never |
+| --- | --- | --- | --- |
+| candidates | 84.1% | 97.8% | 26 |
+| tuned classical | **74.1%** | 95.7% | 42 |
+| E13 (seeds 0 / 1 / 2) | 83.7 / 88.5 / 85.3% | 97.0 / 97.7 / 96.6% | 33 / 26 / 32 |
+
+### GOSPA (E16), mean per frame at each method's GOSPA-best threshold on val
+
+| | GOSPA | localisation | missed | false |
+| --- | --- | --- | --- | --- |
+| LFE-Peaks / LFE-PPN | 0.679 / 0.740 | 0.146 / 0.243 | 1.816 / 0.972 | 0.315 / 1.015 |
+| candidates | 0.530 | 0.106 | 1.368 | 0.328 |
+| tuned classical | 0.516 | 0.126 | 1.092 | 0.468 |
+| E13 (3-seed mean) | **0.502** | 0.119 | 1.247 | 0.285 |
+
+c = 0.5 m, p = 1, alpha = 2.
+GOSPA charges a missed person and a phantom alike, so its best thresholds sit high (0.97-0.99 for the single-frame detectors, 0.55-0.75 for the memory).
+
+### End-to-end latency (E22), the proposed detector streaming one scan at a time
+
+| device | stage 2 | decoding | memory | total, median (p99) |
+| --- | --- | --- | --- | --- |
+| RX 9060 XT (ROCm) | 5.76 | 2.27 | 4.82 | **12.92 (15.11) ms** |
+| CPU, 4 threads | 8.60 | 1.76 | 9.12 | **19.53 (22.38) ms** |
+| CPU, 8 threads | 8.60 | 1.72 | 9.10 | 19.47 (22.77) ms |
+
+FROG scans arrive every 25 ms.
+The memory's 4.82 ms here includes moving each frame's tensors from numpy, which `memory_ms_per_frame`'s 3.72 ms does not.
+
+### The predictions, scored
+
+| prediction | outcome |
+| --- | --- |
+| C2/C3: the best classical pipeline lands at 79-81%, the middle row | **held**: 80.96%. C2 stands (E13 +2.90 over it, intervals above zero); C3 is stated as a split -- a tuned rule takes 3.30 of the memory's 6.20 pp, the learned state the remaining 2.90 |
+| pure ByteTrack within +-0.5 pp of the candidates | **missed**: -1.17; its high threshold for starting tracks filters real people |
+| E15 within 1 pp of E14's best | **missed badly**: -11.4 pp. Association is not the difference, the scoring function is: the value rule saturates or demotes, and only CBMOT's own update functions with a decay work |
+| the memory halves GOSPA's false term | **missed**: -13% (0.328 to 0.285); the gain is spread over missed people (-9%) as much as phantoms |
+| LFE-PPN has the largest false term | **held** (1.015) |
+| larger gain for occluded people | **held, strongly**: +14.7 pp mostly occluded against +3.5 visible, and the learned state's edge over the rule is largest exactly there (+2.9 against +0.8) |
+| larger gain beyond 6 m than within 4 m | **missed**: flat, +3.4 to +5.0 at every range |
+| larger gain for stationary than moving people | **missed**: +3.5 still against +4.1 moving |
+| gain near zero in a trajectory's first 0.5 s | **partly**: the smallest gain (+2.1), not zero; the classical pipeline loses there (-0.9) |
+| the memory's first detection within a frame of the candidates' | **held**: same median (0 frames), first-frame share 85.8% against 84.1%; the tuned classical pipeline confirms late, 74.1% |
+
+### What changes in the paper
+
+- **C2 is stated against the strongest classical pipeline, not SORT**: +2.90 pp AP (intervals above zero at every seed) and +1.0 pp recall at matched false positives over ByteTrack + CBMOT tuned on val.
+- **C3 becomes a split**: a tuned track-confidence rule recovers about half the memory's gain on its own -- itself a new result for 2D LiDAR -- and the learned state the rest, concentrated on occluded people and new trajectories, where a rule cannot tell a remembered person from a stale track.
+- **C5 holds as stated, and sharpens**: the memory adds no confirmation latency, while the classical pipeline that comes closest to it does (first-frame detection 74% against 86%).
+- **C6 holds**: 12.9 ms per frame on the GPU and 19.5 ms on four CPU threads for the whole streaming detector, inside a 25 ms scan.
+- **C1 gains a formal metric but a smaller effect**: GOSPA ranks the memory best, 5% below its candidates, not by halving the phantom term.
+- **C4's mechanism claim is narrowed**: the gain is not range- or motion-specific; it is occlusion-specific.
+- **Nothing rests on the unlinked annotations**, since they are duplicate labels; proposed, awaiting the owner: state every number on the official labels, for comparability with every published FROG result, and give the de-duplicated margin (+2.71 mean over E14) once, in a footnote.

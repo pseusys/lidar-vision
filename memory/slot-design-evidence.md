@@ -30,7 +30,7 @@ history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/
 | claim | evidence |
 | --- | --- |
 | The memory earns its place | **+5.68 pp of AP over its own candidates** (83.34% mean against 77.66%), and **+3.7 pp of recall at the candidates' own false-positive rate** (92.5% against 88.8%), 3 seeds |
-| It is not just temporal filtering | SORT replayed on the same candidates **loses** at every setting (76.7 / 75.7 / 74.9% at `min_hits` 1/3/5 against 76.92%) -- `CHANGELOG.md` 2026-09-16. **Only against SORT**, which saw every candidate down to 0.01 but can only filter: a rule that *raises* scores from track confidence (CBMOT) has not been run (`../TODO.md` A56 E14, E15) |
+| It is not just temporal filtering | SORT replayed on the same candidates **loses** at every setting (77.40 / 76.67% at `min_hits` 1/3 against 77.66% on the current candidates). **The strongest classical pipeline does not lose but falls short**: ByteTrack with CBMOT's track confidence, tuned on val, reaches 80.96% (+3.30 [+2.83, +3.77]); the proposed memory (E13) is **+2.90 above it**, every seed's 95% block-bootstrap interval above zero (A56, `experiments/2026-09-tracking-claims.md`) |
 | Memory belongs inside the model, not behind it | every place-keyed variant failed first: persistence map 0.57 false positives removed per false negative added, background subtraction 1.90, acausal trail oracles 2.54 and 4.20, against the merge radius's 21.9 (`rejected-ideas.md`) |
 | It costs little | **4.4-4.6 ms per frame**, one stream, beside stage 2's 6.5 ms, inside FROG's 25 ms budget |
 | Its cost does not grow with the horizon | the memory is carried as state, so per-frame work is **constant in elapsed time**; window methods (DR-SPAAM, Li2Former) re-encode `T` scans every frame, so their cost scales with the horizon they want. This is the efficiency claim the design is built on (owner, 2026-09-25): linear-time memory for an embedded platform |
@@ -343,6 +343,41 @@ take any crossover from within a single sweep**. And `slot_experiments.py odomet
 **overwrote E2's `a51_odometry.json`** -- E2's numbers survive only in `results/a51_odometry.log`, and the script should take an
 output path.
 
+## The ladder against the tracking literature (A56, 2026-10-03)
+
+The question every tracking reviewer asks -- is the memory more than a tracker with a confidence rule? -- answered on identical
+candidates, every classical setting tuned on val and scored on test once. Full tables, intervals and the scored predictions are in
+[`experiments/2026-09-tracking-claims.md`](experiments/2026-09-tracking-claims.md).
+
+| what reads the candidates | test AP | recall at matched FP |
+| --- | --- | --- |
+| nothing | 77.66 | 88.80 |
+| SORT / ByteTrack as published | 77.40 / 76.49 | 88.52 / 88.83 |
+| the memory's own bookkeeping, its value used as the score (E15) | 69.51 | 89.77 |
+| ByteTrack + CBMOT, tuned (E14) | 80.96 | 92.17 |
+| a learned scorer on the bookkeeping, no state (E10, 2 seeds) | 81.94 | 90.88 |
+| learned state, no attention (E13, 3 seeds) | **83.86** | **93.16** |
+
+**What it settles.** A rule that raises a detection's score from its track's confidence recovers about half the memory's gain
+(+3.30 of +6.20 pp) -- but only with a confidence decay, without which persistent phantoms saturate exactly as people do. The
+learned state supplies the other +2.90, and its edge over the rule concentrates where a rule has nothing to go on: mostly occluded
+people (+2.9 pp recall at matched FP over the rule, against +0.8 for visible ones) and a trajectory's first half second (+3.0,
+where the rule's confirmation costs it 0.9 pp against the bare candidates). A learned scorer without state sits only ~1 pp above
+the tuned rule, so the state, not learning per se, is what the memory adds.
+
+**What it costs the story.** The value rule, used directly as a score, is worse than nothing (69.51%): below `gain = 1` it can
+demote a confident detection to a young slot's value. It is fine as bookkeeping and wrong as a score, which is one more reason the
+learned head reads it as an input rather than reporting it.
+
+**What it found on the way (2026-10-05): the memory double-reports.** At matched false positives E13 puts a second detection within
+0.5 m of 12-15% of people, B0 8-12%, E10 5%, against the candidates' 1.7%. FROG's 2,254 duplicate test labels reward exactly that
+(`data-model.md`), which is why the memory "found" 39% of them; without the copies E13's margin over E14 is +2.71 rather than +2.90,
+still above zero at every seed. Everywhere else a double report is a false positive, and stage 3 has no merge step. **It needs
+none** (A58, same day): the two detections sit a median 0.32 m apart, mostly a candidate with a coasting slot beside it, so a merge
+radius large enough to catch them removes close neighbours too, and val picks no radius or a negligible one. They rank low enough
+that even an oracle removing every redundant detection buys only +0.4-0.55 pp, about what it buys the tuned tracker
+(`rejected-ideas.md`).
+
 ## What is not established
 
 - **D2, D3, O1, O2, T1 and T2 each rest on one seed**, and none crosses the screening threshold; D1 has three. The memory as a
@@ -350,8 +385,9 @@ output path.
   attention mechanisms (E13, three seeds) -- but the smaller internal choices are single-seed screening and must be reported as
   that, not as results. **D3 matters most of the six**: a fixed 8 s decay costs 0.90 pp, inside its bar, so "the per-slot decay
   is learned" is currently unsupported even though E10 proves the state as a whole is load-bearing.
-- **Nothing says how the slots interact with a coasting head that knows about occlusion**, which is where the remaining recall
-  is (`TODO.md` A56 E19/E20).
+- **The occlusion gain is measured, but no input that knows about occlusion has helped yet**: A56 E20 puts the memory's largest
+  gain, and its largest edge over a tuned tracker, on occluded people, while A51 S2's free-space input improved coasting's ranking
+  and nothing end to end.
 - ~~**The calibration metrics have no noise estimate**~~ -- **superseded by E9, 2026-09-25**: recall at matched false positives
   has sd 0.29 (bar 0.86) and coasting precision sd 2.73 (bar 8.19) over B0's three seeds. Re-judged against those, T1's recall
   gain (+0.88) clears and its coasting gain (+6.72) does not.

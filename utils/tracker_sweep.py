@@ -27,6 +27,13 @@ Which tracker, stated precisely because the paper cites it
   eventually, the second lets a tracker emit detections on frames where the
   detector found nothing. Useful as an ablation, but it is not SORT.
 
+  `--tracker byte` is **ByteTrack** (Zhang et al., ECCV 2022) for points,
+  `ByteTracker` with the paper's thresholds (0.5 high, 0.1 low, 0.6 to start a
+  track): low-score detections may extend a track but never start one.
+  `--tracker byte-cbmot` additionally reports CBMOT's track confidence
+  (Benbarka et al., IROS 2021) instead of the detection's score, which is how a
+  tracker can *raise* a weak detection (`TODO.md` A56).
+
 Two implementation points that decide whether the numbers mean anything:
 
 * **The tracker sees every raw frame**, at the sensor's full rate, with real
@@ -63,10 +70,14 @@ from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector
 from follow_the_drow.utils.drow_utils import (
     _prec_rec_2d, project_cartesian_from_polar, false_positive_rate,
 )
-from follow_the_drow.utils.tracking import SimpleTracker, SortTracker
+from follow_the_drow.utils.tracking import ByteTracker, SimpleTracker, SortTracker
 from evaluate import _subsample_dataset, _frame_period_s, _EgoMotion
 from train import _safe_auc
 
+
+TRACKERS = {"sort": (SortTracker, {}), "simple": (SimpleTracker, {}),
+            "byte": (ByteTracker, dict(high_thresh=0.5, low_thresh=0.1, new_track_thresh=0.6)),
+            "byte-cbmot": (ByteTracker, dict(high_thresh=0.5, low_thresh=0.1, new_track_thresh=0.6, score_mode="track"))}
 
 MODELS = {
     "LFE-Peaks": lambda: LFEPeaksDetector(),
@@ -153,7 +164,7 @@ def main():
                     help="min_hits values to sweep (default: the paper's sweep). "
                          "A track must accumulate this many matched frames "
                          "before it is reported at all.")
-    ap.add_argument("--tracker", choices=["sort", "simple"], default="sort",
+    ap.add_argument("--tracker", choices=sorted(TRACKERS), default="sort",
                     help="Which tracker (default: sort, the citeable one). "
                          "'simple' confirms on total rather than consecutive "
                          "hits and reports coasted tracks -- see the module "
@@ -200,14 +211,14 @@ def main():
           f"{sum(len(s) for s in ds_off.scans)} raw frames tracked")
     print(f"transferred : {sum(len(d) for d in ds_tr.det_id)} scored person-free "
           f"frames, {sum(len(s) for s in ds_tr.scans)} raw frames tracked")
-    tracker_cls = SortTracker if args.tracker == "sort" else SimpleTracker
+    tracker_cls, tracker_extra = TRACKERS[args.tracker]
     print(f"tracker     : {args.tracker} ({tracker_cls.__name__}), "
           f"match_radius={args.match_radius} max_age={args.max_age}, "
           f"threshold {args.thresh}, AP at d={args.eval_r} m\n")
 
     configs = [("none", None)] + [
         (str(m), dict(match_radius=args.match_radius, min_hits=m,
-                      max_age=args.max_age))
+                      max_age=args.max_age, **tracker_extra))
         for m in args.min_hits]
     results = {}
 

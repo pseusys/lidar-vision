@@ -87,7 +87,8 @@ That's a structural gap, not a pending deploy — see §E below.
 | | **A53** rewrite `docs/RESEARCH.md` around TAKHeLiPeD | header note added 2026-09-23; the body still argues the superseded framing | a day of writing, no compute |
 | | **A54** a formal citation for prof. O. Aycard's `AlgorithmicDetector` | credit stated everywhere 2026-09-23; **blocked on the owner** for a reference | one question |
 | | **A55** revert the GPU driver to Adrenalin 26.2.2, the version AMD requires for ROCm 7.2.1 | queue stopped for it 2026-09-26 04:51; **owner installing** | ~30 min by hand, then one long run as the test |
-| | **A56** tracking-literature baselines and the paper's claims: CBMOT and ByteTrack on the same candidates, GOSPA, where the gain sits, latency | plan pre-registered 2026-09-30 (`memory/experiments/2026-09-tracking-claims.md`), **awaiting the owner** | ~6 h of machine, no training |
+| | ~~**A56** tracking-literature baselines and the paper's claims~~ | **done 2026-10-03**: E13 +2.90 pp over a tuned ByteTrack + CBMOT, which itself gains +3.30; the unlinked annotations were FROG duplicate labels (2026-10-05); E17-E18 wait for A49 | -- |
+| | ~~**A58** a merge radius on the memory's output~~ | **done 2026-10-05, negative**: val picks no merge or 0.10-0.15 m, test moves under 0.06 pp; even an oracle buys only ~0.5 pp | -- |
 
 **Stage-3 slot experiments (owner's call 2026-09-17) are planned in A51**, which supersedes the backbone choice below: the owner chose the **no-temporal** stage 2, not `default_s0`. Start from these facts:
 
@@ -197,6 +198,20 @@ Trained `--align-scans` checkpoints saw the bad headings in the windows touching
 
 **Why.** `AGENTS.md` rule 3 and the evidence rules: the paper's exchange-rate tables and the §2.4 numbers the proposal is argued from must be measured on correct odometry before they are quoted.
 
+### A58. A merge radius on the memory's output -- **DONE 2026-10-05, NEGATIVE** (`memory/rejected-ideas.md`)
+
+**Result** (`checkpoints_three_horizon/a56/merge.json`, `merge_oracle.json`): **no output gains from a merge.** Val picks no merge for E14, B0 and E10 and 0.10-0.15 m for E13's seeds; test AP moves -0.04 to -0.06 pp where anything is merged at all, and falls monotonically past 0.15-0.20 m (E13 -0.6 at 0.30 m, -2.3 at 0.50 m). The two detections of a double report sit a median 0.32 m apart, a neighbour's distance, so a radius that catches them also removes close neighbours. 85-87% are a candidate with a coasting slot beside it. **An oracle bounds any fix**: removing every detection that matches nobody within 0.5 m of a person, with the labels known, buys E13 +0.43 to +0.55 pp and E14 +0.52; slots alone +0.26 to +0.41. E13 over E14 with both merged: +2.90 / +3.16 / +2.51, all intervals above zero.
+
+**Predictions scored:** (1) missed: no radius in 0.2-0.4 m is chosen and nothing is gained; (2) held, vacuously: the candidates move -0.06 and E14 is not merged at all; (3) held: candidate + slot is 85-87% of E13's double reports (77% of E14's); (4) held: the smallest seed is +2.51.
+
+**What.** The memory emits two detections within 0.5 m of one person far more often than anything before it: at matched false positives, 12-15% of people for E13, 8-12% for B0, 5% for E10, 6.5% for the tuned ByteTrack + CBMOT, against 1.7% for the stage-2 candidates (`checkpoints_three_horizon/a56/duplicates/unlinked.json`). Off FROG's duplicate labels every second detection is a false positive, and stage 3 has no merge step; the stage-2 decoder and both LFE detectors do, and the merge radius is the best-priced precision lever measured here (21.9 FP per FN, `memory/rejected-ideas.md`).
+
+**How.** `tracking_baselines.py merge`, on the saved A56 frames, no retraining. `merge_detections` is `lfe_detector._merge_nearby`'s greedy merge (highest score first, drop anything within `r` of a kept detection), vectorised and pinned to it by a test. For every output -- candidates, E14, E10 x2, E13 x3, B0 x3 -- sweep `r` in {none, 0.10 ... 0.60} m on val (every 5th annotated frame, as E14 was tuned), pick each output's best, score test once; the full test curve is reported but not used for choosing. Block bootstrap of merged against unmerged per output, and of each learned arm merged against E14 merged, on the official labels and with the duplicate labels dropped. Then the anatomy of a double report at the matched-FP threshold: two candidates, a candidate and a coasting slot, or two slots (memory frames list candidates at their own positions first, so the split is exact).
+
+**Predicted before running:** (1) the memory arms choose `r` in 0.2-0.4 m and gain +0.3 to +1.0 pp test AP, interval above zero; (2) the candidates gain under 0.1 pp (already merged at decoding) and E14 less than E13; (3) most double reports are a candidate beside a coasting slot, which would mean association lost the person and a slot coasted on next to them; (4) E13 over E14, both merged, stays at least +2.5 pp.
+
+**Why.** If it moves AP, the fix is a post-merge (cheap, and it changes the headline) or a training target that stops two outputs claiming one person (the mechanism). If it does not, the double reports sit low in the ranking, which is worth knowing too.
+
 ### A57. Replace the PowerShell launchers with one typed Python queue runner -- **owner's suggestion 2026-10-01**
 
 **What.** `utils/run_queue.py`: one program that takes a list of jobs and runs them all, replacing the ~60-line PowerShell
@@ -245,8 +260,8 @@ an experiment.
 > | ~~**S2**~~ | Can the coasting head tell a remembered person from a remembered phantom, if it is told what is occluded? | ~5 h + code | **done 2026-10-01/02: no end to end, though the ranking did improve.** At matched false-positive cost the coasting head recovers **6-13% more people**; but the rest of the model turns conservative, covering 2,240 fewer before coasting starts, so recall at each model's own operating point is flat (92.58 against 92.47). Timing cleared: **4.74 ms at 256 slots** on a quiet host, not the 7.76 measured under load. Original fixed-threshold read: coasting precision 27.38 against 25.43 (+1.95, bar 8.19), reporting **58% fewer** slots to get it -- conservative, not discriminating. Every barred metric inside its bar. **Two follow-ups queued:** the coasting sweep on this checkpoint, for precision at a *matched* report rate rather than a fixed threshold; and a re-timing of its 7.76 ms/frame on a quiet host |
 > | ~~**S3**~~ | Does training with jittered odometry repair the room frame? (E11) | ~5 h + code | **done 2026-10-02: partly, and for free.** Room-frame AP **+1.75 pp at 0.05 m/s and +4.34 at 0.1**, -0.38 at zero; every clean-odometry metric inside its bar. **The crossover with the sensor frame does not move** (~0.015 m/s), so D1 stays conditional |
 >
-> **Left for later sessions, with their plans intact:** A56's tracking baselines and metrics (E14-E22, still awaiting the
-> owner), the coarse-convolution interaction (§D / A51 phase 4), extra seeds for the single-seed screening arms (D2, D3, O1,
+> **Left for later sessions, with their plans intact:** A56's tracking baselines and metrics (E14-E22; approved and run
+> 2026-10-02/03, see A56), the coarse-convolution interaction (§D / A51 phase 4), extra seeds for the single-seed screening arms (D2, D3, O1,
 > O2, T1, T2), and the cross-dataset work (A49).
 >
 > **Still open, small and cheap:** `slot_experiments.py` writes hardcoded output paths, and on 2026-10-02 the `odometry` and
@@ -718,42 +733,38 @@ truth than FROG has. Three recordings, about 7 minutes total, three participants
 
 **Why.** Stage 3 is the part of the design that should show temporal information pays, and its only result (80.10%, on a stage 2 that no longer loads) came from one run with a badly conditioned gate, a corrupted time step and a miscalibrated threshold.
 
-### A56. Tracking-literature baselines, metrics and the paper's claims -- **plan 2026-09-30, awaiting the owner**
+### A56. Tracking-literature baselines, metrics and the paper's claims -- **DONE 2026-10-03** (E14-E16, E20-E22); E17-E18 wait for A49
 
-**What.** The experiments that decide which paper claims survive the person-*tracking* literature (`docs/RESEARCH.md` §7.4).
-The claim ledger, the predictions and what each outcome changes are pre-registered in `memory/experiments/2026-09-tracking-claims.md`; read it before running anything here.
-Numbered on from A51's E-series so every ID stays unique; split out of A51 at the owner's request on 2026-09-29.
+**What it was.** The experiments that decide which paper claims survive the person-*tracking* literature (`docs/RESEARCH.md` §7.4), pre-registered in `memory/experiments/2026-09-tracking-claims.md` before they ran; that file now carries the outcome, every prediction scored, and what changes in the paper. Code: `utils/tracking_baselines.py` (`rule`, `track`, `arms`, `report`, `latency`), `ByteTracker` and `cbmot_update` in `follow_the_drow/utils/tracking.py`; results in `checkpoints_three_horizon/a56/`.
 
-**Why.** Every rung of the evidence ladder is measured except the one the tracking literature supplies:
+**Result, FROG test, every 5th annotated frame, 95% block-bootstrap intervals:**
 
-| rung | AP | status |
+| what reads the stage-2 candidates | AP | vs candidates |
 | --- | --- | --- |
-| candidates | 77.66 | fixed |
-| SORT, fed every candidate to 0.01 but only filtering | 74.9-76.7 | earlier chain's candidates |
-| **a rule that raises scores from track confidence (CBMOT, IROS 2021), with ByteTrack's association (ECCV 2022)** | **not measured** | E14, E15 |
-| learned scorer on bookkeeping statistics, no state (E10) | 81.84 | 1 seed, second running |
-| learned state, no attention (E13, the proposed architecture) | 83.86 | 3 seeds |
+| nothing | 77.66 | -- |
+| SORT (`min_hits` 1) / ByteTrack as published | 77.40 / 76.49 | -0.25 / -1.17 |
+| the memory's bookkeeping with its value as the score (E15) | 69.51 | -8.14 |
+| ByteTrack + CBMOT, tuned on val (E14) | 80.96 | +3.30 [+2.83, +3.77] |
+| learned scorer, no state (E10, 2 seeds) | 81.94 | +4.28 |
+| **learned state, no attention (E13, 3 seeds)** | **83.86** | **+6.20; +2.90 over E14, every interval above zero** |
 
-Correction recorded 2026-09-30: this repository's SORT replay already saw every sub-threshold candidate, so SORT's loss is not about visibility; it is that SORT cannot rescore. The comparison that matters is against a rule that can.
+- **The pre-registered decision landed in the middle row**: a tuned track-confidence rule recovers about half the gain, the learned state the rest. The rule needs a confidence decay; without it persistent phantoms saturate as people do.
+- **Where the learned state beats the rule**: occluded people (+2.9 pp recall at matched FP over the rule, +0.8 for visible ones) and a trajectory's first 0.5 s (+3.0). The gain is flat across range and motion.
+- **Latency**: no confirmation delay (first-frame detection 85.8% against the candidates' 84.1%; the tuned rule 74.1%); the whole streaming detector runs at 12.9 ms per frame on the GPU and 19.5 ms on four CPU threads.
+- **GOSPA** ranks the memory best (0.502 against the candidates' 0.530), a smaller margin than predicted.
+- **On the published LFE detectors** ByteTrack trades much better than SORT on LFE-PPN (27.6 against 10.4 false positives per false negative) and the merge radius still beats both (`docs/RESEARCH.md` §7.4.7).
 
-**How.** No training; about 6 h of machine time once it is free.
+**Left open:**
 
-| # | what | how | decides |
-| --- | --- | --- | --- |
-| E14 | the strongest classical pipeline on identical candidates | a `ByteTracker` for points in `tracking.py`: SORT's Kalman point, ego-motion, two-stage association with tracks born only from high-score candidates, CBMOT track score (eq. 6, decay, deletion on score), optional coasting at the decayed score; output as detection score, CBMOT score, or CBMOT plus coasting; tuned on **val**, scored on test once; SORT re-measured on this cache | C2, C3 |
-| E15 | the memory's own bookkeeping with CBMOT's rule instead of the learned head | replay `manage_slots` on the GPU; matched candidates rescored with CBMOT eq. 6 from their slot's value, alive unmatched slots coast at the decayed value; `gain` and `fade_time_s` tuned on val | C3: the rung directly below E10 |
-| E16 | GOSPA beside AP | per frame, c = 0.5 m, p = 1, alpha = 2, localisation / missed / false split, at each method's val-best threshold and at 0.3, for LFE-Peaks, LFE-PPN, candidates, E14, E15, E10, E13, B0 | C1 |
-| E20 | where the gain sits | recall at matched FP per stratum -- range, occluded in the raw scan, stationary or moving, trajectory age -- for candidates, E15 and E13 | C4; gates E19 |
-| E21 | first-detection latency | frames from a trajectory's first annotation to its first detection, per method at its own threshold | C5 |
-| E22 | end-to-end streaming latency of the proposed architecture | stages 1-3 of E13, one stream, median and p99 over 2,000 frames, GPU and CPU | C6 |
-| -- | uncertainty | paired block bootstrap, 30 s blocks, 1,000 resamples, per learned seed | C2 |
-| E17 | the slots scored as a tracker | HOTA, MOTA, IDF1, OSPA(2) on JRDB's 3D tracks projected to the ground plane, and Plozza et al.'s mocap if shared | waits for A49 |
-| E18 | self-supervised memory, or DROW label densification from slot tracks | Tokmakov et al. ICML 2022, Jia et al. ICRA 2021, Qi et al. CVPR 2021 | waits for A49 |
-| E19 | an occlusion input for the coasting head | one step 3a run | only if E20 puts coasting's failures on occluded people |
+| # | what | waits for |
+| --- | --- | --- |
+| E17 | the slots scored as a tracker: HOTA, MOTA, IDF1, OSPA(2) on JRDB's 3D tracks projected to the ground plane, and Plozza et al.'s mocap if they share it | A49's JRDB loader |
+| E18 | self-supervised memory, or DROW label densification from slot tracks (Tokmakov 2022, Jia 2021, Qi 2021) | A49 |
+| ~~--~~ | ~~the test annotations that link to no trajectory~~ | **explained 2026-10-05: duplicate labels, not people** (below) |
 
-**Tests first**, before any of this code: `ByteTracker` in `tests/test_tracker.py` (including frame-for-frame agreement with `SortTracker` in its degenerate setting), the rule scorer, GOSPA, the block bootstrap and the strata in a new `tests/test_tracking_baselines.py`, plus three real-data checks listed in the pre-registration.
+**The 2,254 unlinked test annotations are FROG's own duplicate labels** (2026-10-05, `checkpoints_three_horizon/a56/duplicates/`). The test file carries 2,254 circles that repeat another circle of the same frame in all six columns, and they are exactly the annotations the report could not place on a trajectory, one for one (its reverse lookup takes the first of two identical positions). They come in runs (54 runs, median 16 consecutive annotated frames) across 19 of 47 recordings: a tracked label copied by the annotation tool. The memory's "39%" on them was double reporting, a second detection beside a person matching the copy: at matched false positives E13 puts a second detection within 0.5 m of 12-15% of people against the candidates' 1.7%. **Every A56 claim survives the clean labels**: E13 over E14 +2.74 / +3.02 / +2.36 per seed, all intervals still above zero (from +2.95 / +3.20 / +2.56); every AP rises 0.7-1.05 pp, the double-reporting methods least. Facts and counts per file: `memory/data-model.md`; how to read a FROG number with them: `memory/interpreting-evaluation.md`. The double reporting itself was tested as a precision lever the same day and is not one (A58).
 
-**Order.** E15, then E14, then E16 and E21 from the saved detections, then E20, E22 and the bootstrap. Nothing here runs beside a training job (`memory/gotchas.md`): it waits for the machine to be free.
+E19 ran as A51 S2. The Mahalanobis gate turned out to need a re-tuned Kalman filter first (§D, per-track adaptive gating).
 
 ### A50. After the first FROG result: post-processing, deferred ablations, architecture experiments
 
@@ -1324,7 +1335,7 @@ Bundles: (1) confirm the C++ side still actually compiles — `.github/workflows
 
 ### Small tooling gaps found 2026-09-17
 
-- **ruff is not installed in `.venv`**, so the Python lint step of the development routine could not run on `utils/scan_anomalies.py` or the fine-convolution removal; only `py_compile` and the tests did. Install it, or document the intended runner in `memory/commands.md`.
+- ~~**ruff is not installed in `.venv`**~~ **installed 2026-10-02 (A56)**; `memory/commands.md` has the interim invocation. A project-level ruff config for `library/` and `utils/` is still to be written.
 - **`duration_curve.py --help` prints a `SystemExit: 0` traceback and exits 1.** Its `__main__` wrapper catches `BaseException`. Catch `Exception` or let `SystemExit` through, as the ROCm hang workaround allows.
 
 ### Per-track adaptive tracker gating
@@ -1332,6 +1343,8 @@ Bundles: (1) confirm the C++ side still actually compiles — `.github/workflows
 **What.** `SimpleTracker`'s one fixed `match_radius` cannot work at both fine and wide invocation strides (`memory/rejected-ideas.md`).
 
 **How.** Scale the gate by a track's own estimated speed, or use a proper covariance/Mahalanobis gate.
+
+**Checked 2026-10-02 (A56), and the covariance gate is not available off the shelf.** `SortTracker`'s and `ByteTracker`'s point Kalman filter carries SORT's noise scaling, which was set for pixel boxes: measurement noise `R = I` is 1 m^2 here, so the innovation covariance is at least 1 m^2 and a 99% chi-squared gate is at least 3 m wide -- useless in FROG's crowds. A Mahalanobis gate first needs the filter's `R` and `Q` set in metres for a 2D LiDAR point (centimetre-scale measurement noise, walking-pace process noise), and then the SORT rows would no longer be SORT. That is its own experiment, not a flag.
 
 **Why.** Would reopen the wide-invocation-stride tracker result — a real piece of engineering, not a parameter tweak, so not urgent against A1-A5 above.
 

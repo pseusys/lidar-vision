@@ -42,9 +42,15 @@ reached the end of its 1 s stage and stopped at 18:11, the minute the session tu
 **Use the Task Scheduler, which is a different service rather than a different process:**
 
 ```powershell
-schtasks /create /tn "lidar_<item>" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$chain`"" /sc once /st 23:59 /it /f
+$past = (Get-Date).AddMinutes(-5).ToString("HH:mm")     # a start time already gone, so the trigger never fires by itself
+schtasks /create /tn "lidar_<item>" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$chain`"" /sc once /st $past /it /f
 schtasks /run   /tn "lidar_<item>"
 ```
+
+**Never give the one-off trigger a future time.** An earlier version of this template used `/st 23:59`, and on 2026-10-02 the
+A56 tasks then fired a second time at 23:59, re-running two finished chains over their own outputs (their pickles survived, two
+logs were truncated). `schtasks` warns that a past `/st` "may not run"; that is the point, since `/run` starts it now.
+Delete the task once its chain is done.
 
 `/it` matters: the task then runs **in the logged-on user's interactive session**, which is what gives it the GPU. A task
 without it can land in session 0 and find no device. Verified 2026-10-02: the trainer came up under the scheduler reporting
@@ -84,7 +90,7 @@ advances every 2-13 minutes, and each wake-up costs a turn.
 
 | watcher | what it is | what it wakes you for |
 | --- | --- | --- |
-| **event** | waits on `progress.txt` for `END`, `RETRY`, `CHAIN STOPPED`, `DONE` | a step finished, crashed, retried, or the chain ended |
+| **event** | polls `progress.txt` for `END`, `RETRY`, `CHAIN STOPPED`, `DONE` -- by `wc -l` and `sed -n`, **never `tail -F`**, which locks the chain out of its own progress file (`gotchas.md`) | a step finished, crashed, retried, or the chain ended |
 | **clock** | `sleeper.sh <seconds>`: sleeps, prints the time, exits | the 2-3 hour status report falls due |
 
 They must be **separate background tasks**, because a single task that exits on "either an event or a deadline" lets an event
@@ -99,7 +105,7 @@ is what the restart check below is for.
 
 | symptom | what it is | what to do |
 | --- | --- | --- |
-| process alive, log unchanged >15 min | a finished ROCm process hanging at exit | kill it, so the chain moves on; 7.5 h was lost to one, and a watchdog with a wrong regex nearly lost another |
+| process alive, log unchanged >15 min | a finished ROCm process hanging at exit, even past `os._exit` (`gotchas.md`) | kill it, so the chain moves on; 7.5 h was lost to one, and a watchdog with a wrong regex nearly lost another. Better: let the chain do it -- wait for the step's final log line, then stop the process two minutes later (A56's `StepUntil`) |
 | process gone, no results file, no guard message | crash, kill, or a driver bugcheck | relaunch with `--resume`; it continues from the last evaluation |
 | a guard message in the log (`not finite at chunk`, `candidates' val AP moved`, `the training loss is`) | the run is **wrong**, not interrupted | stop, report immediately, do not retry |
 | free memory under ~2 GB | something else is competing | stop the intruder before the run dies |

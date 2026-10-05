@@ -414,3 +414,168 @@ class SortTracker:
         self.tracks = [t for t in self.tracks
                        if t.time_since_update <= self.max_age]
         return out
+
+
+# ---------------------------------------------------------------------------
+# ByteTrack with CBMOT's track confidence -- the strongest post-hoc baseline
+# ---------------------------------------------------------------------------
+
+CBMOT_RULES = ("addition", "maximum", "multiplication", "parallel_addition")
+
+
+def cbmot_update(track_score: float, det_score: float, rule: str = "multiplication") -> float:
+    """A matched track's new confidence from its own and the detection's (Benbarka, Schroeder & Zell, *IROS* 2021, eq. 4-7).
+
+    `addition` is the rule CBMOT argues against, as over-confident; the other three never fall below either input (its eq. 3).
+    """
+    c, s = track_score, det_score
+    if rule == "addition":
+        return c + s
+    if rule == "maximum":
+        return max(c, s)
+    if rule == "multiplication":
+        return 1.0 - (1.0 - c) * (1.0 - s)
+    if rule == "parallel_addition":
+        denominator = (1.0 - c) + (1.0 - s)
+        return 1.0 if denominator <= 0.0 else 1.0 - (1.0 - c) * (1.0 - s) / denominator
+    raise ValueError(f"unknown CBMOT rule {rule!r}; expected one of {CBMOT_RULES}")
+
+
+class _ByteTrack(_SortTrack):
+    __slots__ = ("track_score", "activated")
+
+    def __init__(self, x: float, y: float, score: float, track_id: int, activated: bool):
+        super().__init__(x, y, score, track_id)
+        self.track_score = score
+        self.activated = activated
+
+
+def _gated_matches(tracks: List[_ByteTrack], track_idx: List[int], det_pos: np.ndarray, det_idx: List[int],
+                   radius: float) -> List[Tuple[int, int]]:
+    """Hungarian assignment between the listed tracks and detections, pairs further apart than `radius` refused, exactly as
+    `SortTracker` gates it: matched `(track index, detection index)` pairs."""
+    if not track_idx or not det_idx:
+        return []
+    cost = cdist(np.array([tracks[t].position for t in track_idx]), det_pos[det_idx])
+    gated = np.where(cost > radius, 1e6, cost)
+    rows, cols = linear_sum_assignment(gated)
+    return [(track_idx[r], det_idx[c]) for r, c in zip(rows, cols) if gated[r, c] < 1e6]
+
+
+class ByteTracker:
+    """ByteTrack (Zhang et al., *ECCV* 2022) for point detections, carrying CBMOT's track confidence (`TODO.md` A56 E14).
+
+    The association is ByteTrack's (`two_stage=True`): detections at or above `high_thresh` are matched against every confirmed
+    track, tracked or lost; those between `low_thresh` and `high_thresh` against the confirmed tracks that were tracked last frame
+    and are still unmatched; unconfirmed tracks against the high detections left over. Only an unmatched high detection at or above
+    `new_track_thresh` starts a track, unconfirmed unless it is the first frame; a track is confirmed once `hit_streak >= min_hits`
+    (ByteTrack's own rule is `min_hits = 1`), an unconfirmed track that misses is dropped, and a confirmed one is lost until it is
+    matched again or `max_age` frames pass. Kalman filter, ego-motion and gating are `SortTracker`'s, Euclidean on points.
+
+    `two_stage=False` is one association of every detection at or above `low_thresh` against every track, with births and
+    reporting as in SORT; with both thresholds at zero it reproduces `SortTracker` frame for frame, which a test pins.
+
+    **Scores.** Every track keeps CBMOT's confidence: it starts at the creating detection's score, falls by `score_decay_per_s`
+    for every second of every frame, and on a match becomes `cbmot_update(confidence, detection score, score_rule)`; a track under
+    `delete_below` is deleted (CBMOT's confidence-based termination). `score_mode` chooses what a reported track carries: the
+    matched detection's score (`"detection"`, ByteTrack's own output) or the confidence (`"track"`).
+
+    `step()` returns what the tracker reports -- confirmed tracks matched this frame, plus confirmed tracks lost for at most
+    `coast_frames` frames -- at their filtered positions. `rescored` then holds every input detection at its own position, scored by
+    its track when that track is reported and by `unmatched_scale` times its own score otherwise, plus the same coasting reports:
+    the form in which a tracker *rescores* candidates for an AP comparison rather than filtering them.
+    """
+
+    def __init__(self, high_thresh: float = 0.5, low_thresh: float = 0.1, new_track_thresh: Optional[float] = None,
+                 match_radius: float = 0.5, low_match_radius: Optional[float] = None, max_age: int = 30, min_hits: int = 1,
+                 two_stage: bool = True, score_mode: str = "detection", score_rule: str = "multiplication",
+                 score_decay_per_s: float = 0.0, delete_below: Optional[float] = None, coast_frames: int = 0,
+                 unmatched_scale: float = 1.0):
+        if score_mode not in ("detection", "track"):
+            raise ValueError(f"score_mode must be 'detection' or 'track', not {score_mode!r}")
+        cbmot_update(0.5, 0.5, score_rule)
+        self.high_thresh, self.low_thresh = high_thresh, low_thresh
+        self.new_track_thresh = high_thresh if new_track_thresh is None else new_track_thresh
+        self.match_radius = match_radius
+        self.low_match_radius = match_radius if low_match_radius is None else low_match_radius
+        self.max_age, self.min_hits, self.two_stage = max_age, min_hits, two_stage
+        self.score_mode, self.score_rule = score_mode, score_rule
+        self.score_decay_per_s, self.delete_below = score_decay_per_s, delete_below
+        self.coast_frames, self.unmatched_scale = coast_frames, unmatched_scale
+        self.tracks: List[_ByteTrack] = []
+        self.rescored: List[Tuple[float, float, float]] = []
+        self._next_id = 0
+        self.frame_count = 0
+
+    def _associate(self, scores: List[float], det_pos: np.ndarray) -> Tuple[List[Tuple[int, int]], List[int]]:
+        """Matched `(track, detection)` pairs, and the detections that start tracks."""
+        if not self.two_stage:
+            use = [i for i, s in enumerate(scores) if s >= self.low_thresh]
+            matches = _gated_matches(self.tracks, list(range(len(self.tracks))), det_pos, use, self.match_radius)
+            claimed = {d for _, d in matches}
+            return matches, [d for d in use if d not in claimed and scores[d] >= self.new_track_thresh]
+        high = [i for i, s in enumerate(scores) if s >= self.high_thresh]
+        low = [i for i, s in enumerate(scores) if self.low_thresh <= s < self.high_thresh]
+        confirmed = [i for i, t in enumerate(self.tracks) if t.activated]
+        unconfirmed = [i for i, t in enumerate(self.tracks) if not t.activated]
+        first = _gated_matches(self.tracks, confirmed, det_pos, high, self.match_radius)
+        taken = {t for t, _ in first}
+        tracked_left = [i for i in confirmed if i not in taken and self.tracks[i].time_since_update == 1]
+        second = _gated_matches(self.tracks, tracked_left, det_pos, low, self.low_match_radius)
+        claimed = {d for _, d in first + second}
+        high_left = [d for d in high if d not in claimed]
+        third = _gated_matches(self.tracks, unconfirmed, det_pos, high_left, self.match_radius)
+        claimed |= {d for _, d in third}
+        return first + second + third, [d for d in high_left if d not in claimed and scores[d] >= self.new_track_thresh]
+
+    def _reported(self, t: _ByteTrack) -> bool:
+        if t.time_since_update != 0:
+            return False
+        return t.activated if self.two_stage else (t.hit_streak >= self.min_hits or self.frame_count <= self.min_hits)
+
+    def _coasting(self, t: _ByteTrack) -> bool:
+        if not 1 <= t.time_since_update <= self.coast_frames:
+            return False
+        return t.activated if self.two_stage else t.hits >= self.min_hits
+
+    def _score(self, t: _ByteTrack) -> float:
+        return t.track_score if self.score_mode == "track" else t.score
+
+    def step(self, detections: List[Tuple[float, float, float]], ego_dtheta: float = 0.0,
+             ego_dxy: Tuple[float, float] = (0.0, 0.0), dt: float = 0.025) -> List[Tuple[float, float, float]]:
+        self.frame_count += 1
+        detections = [d for d in detections if all(np.isfinite(v) for v in d)]
+        for t in self.tracks:
+            t.predict(ego_dtheta, ego_dxy)
+            t.track_score -= self.score_decay_per_s * dt
+
+        scores = [s for s, _, _ in detections]
+        det_pos = np.array([[x, y] for _, x, y in detections], dtype=np.float64).reshape(-1, 2)
+        matches, born = self._associate(scores, det_pos)
+        track_of = {}
+        for ti, di in matches:
+            t = self.tracks[ti]
+            score, x, y = detections[di]
+            t.update(x, y, score)
+            t.track_score = cbmot_update(t.track_score, score, self.score_rule)
+            t.activated = t.activated or t.hit_streak >= self.min_hits
+            track_of[di] = t
+        for di in born:
+            score, x, y = detections[di]
+            t = _ByteTrack(x, y, score, self._next_id, activated=self.frame_count == 1)
+            self._next_id += 1
+            self.tracks.append(t)
+            track_of[di] = t
+        if self.delete_below is not None:
+            self.tracks = [t for t in self.tracks if t.track_score >= self.delete_below]
+            track_of = {d: t for d, t in track_of.items() if t.track_score >= self.delete_below}
+
+        out = [(self._score(t), *t.position) for t in self.tracks if self._reported(t)]
+        coasted = [(self._score(t), *t.position) for t in self.tracks if self._coasting(t)]
+        self.rescored = [(self._score(track_of[i]), x, y) if i in track_of and self._reported(track_of[i]) else (s * self.unmatched_scale, x, y)
+                         for i, (s, x, y) in enumerate(detections)] + coasted
+        if self.two_stage:
+            self.tracks = [t for t in self.tracks if (t.activated or t.time_since_update == 0) and t.time_since_update <= self.max_age]
+        else:
+            self.tracks = [t for t in self.tracks if t.time_since_update <= self.max_age]
+        return out + coasted

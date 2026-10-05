@@ -44,6 +44,17 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 **DR-SPAAM `T=5` at 75.6% on FROG was the number to beat, and the object memory clears it by 7.7 pp.**
 That is ours measured here, three seeds, against theirs published, one paper figure — read footnote 5 and [`interpreting-evaluation.md`](interpreting-evaluation.md) before quoting it.
 
+**The comparison a tracking reviewer will ask for is within one model, on identical candidates** (`TODO.md` A56, 2026-10-03; FROG test, every 5th annotated frame, 95% block-bootstrap intervals; tables in [`experiments/2026-09-tracking-claims.md`](experiments/2026-09-tracking-claims.md)):
+
+| what reads TAKHeLiPeD's stage-2 candidates | AP | vs the candidates |
+| --- | --- | --- |
+| nothing | 77.66% | -- |
+| SORT (`min_hits` 1) / ByteTrack, as published | 77.40% / 76.49% | -0.25 / -1.17 |
+| ByteTrack + CBMOT track confidence, tuned on val | 80.96% | +3.30 [+2.83, +3.77] |
+| **object memory, no attention (A51 E13, 3 seeds)** | **83.86%** | **+6.20; +2.90 over the tuned tracker, every seed's interval above zero** |
+
+All on FROG's official test labels, which include 2,254 duplicate circles that only a second detection can match; without them every row rises 0.7-1.05 pp and the memory's margin over the tuned tracker is +2.71, still above zero at every seed ([`interpreting-evaluation.md`](interpreting-evaluation.md), 2026-10-05).
+
 **TAKHeLiPeD** (`T`emporal `A`daptive `K`nee-`He`ight `Li`dar `Pe`rson `D`etector, named 2026-09-23) is what earlier entries in this file, `CHANGELOG.md` and `TODO.md` call *the three-horizon detector*; the code still spells it `three_horizon`.
 
 ### The FROG column is AP @ d = 0.5 m, and it did not used to be
@@ -223,6 +234,7 @@ The paper's own figures in parentheses are **GPU** numbers and are not comparabl
 | **TemporalUNet** | **2.0 ms** | **2.7 ms** | **2.3 ms** |
 | **TAKHeLiPeD, stages 1-2 + decode** | n/a | **~10.4 ms**⁶ | n/a |
 | **TAKHeLiPeD, stage 3 alone** (object memory) | n/a | **4.4-4.6 ms**⁷ | n/a |
+| **TAKHeLiPeD, whole detector streaming** (A51 E13 memory) | n/a | **19.5 ms** *(4 threads; GPU 12.9 ms)*⁸ | n/a |
 
 ⁴ Was **315.5 / 243.8 / 278.3 ms** here until 2026-09-10, and blamed on the Python decode loop.
 It was not the loop: the decoder applied a second sigmoid to a channel `lfe_ppn.onnx` had already sigmoided, so every one of the 3,600 anchors cleared any threshold and entered an O(n²) greedy merge, 182 survivors per frame on scenes holding ~3 people.
@@ -236,6 +248,8 @@ Both LFE rows are otherwise real-data measurements (300 scans each) taken after 
 It is quoted only against the sensor: FROG's measured mean frame period is 24.99 ms (~40 Hz, corrected 2026-09-17 from a long-standing 26.2 Hz), so stages 1-2 plus the memory's 4.4 ms still stream in real time, with roughly a third of the budget spare. A proper single-frame latency benchmark of the whole detector, on one machine with the other rows, is `TODO.md` A50 phase 1.
 
 ⁷ Measured 2026-09-17 and confirmed across B0's three seeds (2026-09-19) by `memory_ms_per_frame`, timing one stream on the RX 9060 XT under ROCm: **4.42 ms** on the fixed end-of-run block, 4.5-4.6 ms across the seeds. Same caveat as footnote 6 -- not comparable with the CPU rows above.
+
+⁸ `TODO.md` A56 E22, 2026-10-03: `tracking_baselines.py latency`, one raw scan at a time through stage 2, DROW vote decoding and the E13 memory, 2,000 frames of FROG test, median (p99). CPU on this machine with 4 threads: **8.60 + 1.76 + 9.12 = 19.53 ms (22.38)**, 8 threads 19.47 ms (22.77); RX 9060 XT under ROCm: **5.76 + 2.27 + 4.82 = 12.92 ms (15.11)**. The CPU figure is the one comparable with this column, and it fits FROG's 25 ms scan period at the 99th percentile. The memory's share here includes moving each frame's tensors from numpy, which footnote 7 leaves out.
 
 **Exact parameter counts**, counted from the ONNX initializers now that `onnx` is installed, replacing the file-size estimates this table used to carry (~65K / ~180K): **LFE-Peaks 53,258**, **LFE-PPN 170,903**.
 For scale, `SpaceTimeCNN` is 476,262 — **2.8x LFE-PPN, for +0.5pp on the benchmark and no use of temporal order at all.**

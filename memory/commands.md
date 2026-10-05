@@ -49,6 +49,13 @@ python slot_experiments.py cost --memory ... --stage2 ...                       
 python score_memory.py --memory ... --stage2 ... --out <json>                    # score an interrupted run's best checkpoint (A51)
 python judge_arms.py                                                            # every A51 arm's deltas and verdicts against a control's three-sigma bars; stdlib only, safe beside a running job
 python train_three_horizon.py step3a --stage2 ... --visibility                   # give the coasting head the free space the laser saw past each slot (A51 S2); rebuilds the candidate cache once
+python tracking_baselines.py rule                                               # A56 E15: the memory's bookkeeping with a rule score, 54-config grid on val, then test (~2.5 h)
+python tracking_baselines.py track --workers 6                                  # A56 E14: SORT, ByteTrack, ByteTrack + CBMOT by coordinate descent on val, then test (~35 min); never beside another torch job
+python tracking_baselines.py arms                                               # every memory checkpoint's frames, test (every annotated frame) and val, plus LFE (~1 h)
+python tracking_baselines.py report                                             # AP with block-bootstrap intervals, GOSPA, strata, first-detection latency -> a56/report.json (~15 min)
+python tracking_baselines.py latency [--device cpu --threads 4]                 # A56 E22: the whole detector streamed one scan at a time, stage by stage
+python tracking_baselines.py merge --workers 6                                  # A58: merge radius per saved output, chosen on val, bootstrapped, double reports dissected -> a56/merge.json (~10 min, needs arms + track)
+python tracker_sweep.py --tracker byte | byte-cbmot                             # ByteTrack (with CBMOT confidence) on the published LFE detectors
 python train_three_horizon.py step3a --stage2 ... --train-drift-m-per-s 0.05    # train with odometry drifting at a rate drawn per stream, the repair for D1's conditional win (A51 S3/E11)
 python train_three_horizon.py step3b --stage2 ... --memory ... --oracle-prior    # feed stage 2 a ground-truth prior: the ceiling on what feedback could buy (A51 E12b)
 python train_three_horizon.py step3b --stage2 ... --memory ... --no-rescore      # drop the rescoring correction, leaving the prior as memory's only route to the loss (A51 E12a)
@@ -182,6 +189,7 @@ npx markdownlint-cli2 "**/*.md"                                  # markdown, if 
 ```
 
 No linter is configured yet for this project's own Python (`library/`, `utils/`), C++, or the `entrypoint.sh`/`Dockerfile` under `deploy/docker/` — see `coding-guidelines.md` and `TODO.md`.
+`ruff` itself is installed in `.venv` since 2026-10-02 (`python -m ruff`); until the project has a config, `python -m ruff check --isolated --line-length 320 --select E,F,B <files>` catches real errors without fighting the codebase's `typing.List` style.
 
 ## Commands whose output is easy to misread
 

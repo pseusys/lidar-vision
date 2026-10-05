@@ -38,6 +38,85 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A58: a merge radius on the memory's output buys nothing -- negative (2026-10-05)
+
+*keywords:* A58, merge radius, NMS, double report, merge_detections, drop_duplicate_annotations, double_report_anatomy, tracking_baselines.py merge, oracle bound, coasting slot beside a candidate
+
+The owner approved testing the double reporting found while closing A56 (entry below) as a precision lever. Predictions were written into `TODO.md` A58 before the run.
+
+**Built, tests first** (628 -> 636 tests): in `utils/tracking_baselines.py`, `merge_detections`, a vectorised copy of `lfe_detector._merge_nearby`'s greedy merge pinned to it by an equivalence test over random frames with tied scores; `drop_duplicate_annotations`; `double_report_anatomy`, which splits each double report into candidate + candidate, candidate + slot and slot + slot; and the `merge` subcommand (radius per output chosen on val from none / 0.10-0.60 m, test scored once, block bootstraps on the official and the de-duplicated labels, about 10 minutes on 6 torch-free workers).
+
+**Result: no output gains** (FROG test, every 5th annotated frame):
+
+| output | val chooses | test AP none -> chosen | at 0.30 m | doubled people at matched FP | oracle |
+| --- | --- | --- | --- | --- | --- |
+| candidates | 0.50 m | 77.66 -> 77.60 | 77.66 | 1.7% | +0.38 |
+| E14 ByteTrack + CBMOT | none | 80.96 | 80.51 | 6.5% | +0.52 |
+| E13, 3 seeds | 0.10-0.15 m | -0.04 to -0.05 | -0.56 to -0.63 | 12.4-14.7% | +0.43 to +0.55 |
+| B0 3 seeds / E10 2 seeds | none | unchanged | -0.5 to -0.6 | 8.4-11.5% / 4.9-5.4% | -- |
+
+- **Why**: a double report's two detections are a median 0.32 m apart, a neighbour's distance, so any radius that removes them removes close neighbours too. 85-87% of E13's are a candidate with a coasting slot beside it, and they fire at the matched-FP threshold (0.14-0.17), low in the ranking.
+- **The oracle** (`checkpoints_three_horizon/a56/merge_oracle.py`, a scratch analysis, not in the repo) removes every detection that matches nobody but lies within 0.5 m of a person. It buys about +0.5 pp and the same for E14, so the most a fix inside the model could buy is +0.26-0.41 pp (slots only).
+- **The headline is robust to merging**: E13 over E14 with both merged is +2.90 / +3.16 / +2.51, all intervals above zero; +2.75 / +3.02 / +2.37 on de-duplicated labels.
+- **Predictions**: (1) missed, no 0.2-0.4 m radius and no gain; (2) held, vacuously; (3) held, candidate + slot dominates; (4) held, +2.51 at the weakest seed.
+
+**Docs:** `memory/rejected-ideas.md` (new entry), `TODO.md` A58 closed, `memory/slot-design-evidence.md`, `memory/experiments/2026-09-tracking-claims.md`, `memory/commands.md`, `memory/keywords.md`.
+
+## A56 close-out: the "unlinked annotations" are FROG duplicate labels, and the memory double-reports (2026-10-05)
+
+*keywords:* A56, duplicate labels, duplicate annotations, circles, unlinked annotations, double report, de-duplicate, coast_targets, frog_16-41_test.h5, merge radius on memory output
+
+A56's last unblocked item: what are the 2,262 test annotations that link to no trajectory, which the memory "finds" 39% of against the candidates' 9.7%?
+
+**They are duplicate labels.** Counted in the raw `.h5` files, independent of every loader: `frog_16-41_test.h5` holds **2,254** circles that repeat another circle of the same frame in all six columns (1.47% of 153,655), in runs over consecutive frames (54 runs, median 16 annotated frames) across 19 of 47 recordings; `train_val` has 285 (0.06%), the extras 814-1,979 (0.6-1.55%). They are the report's 2,254 trajectory-less annotations one for one: its reverse lookup from trajectory point to annotation takes the first of two identical positions. The other 8 of the 2,262 are single-point trajectories with no speed. `dataset-properties.md`'s "2,254 collided with another person" round-trip shortfall was the same set, now explained.
+
+**The memory's 39% was double reporting**: a copy can only be matched by a second detection beside the original. At matched false positives, the share of people with a second detection within 0.5 m:
+
+| | AP official | AP de-duplicated | second detection |
+| --- | --- | --- | --- |
+| candidates | 77.66 | 78.70 | 1.7% |
+| E14 ByteTrack + CBMOT | 80.96 | 81.90 | 6.5% |
+| E10 (2 seeds) | 81.94 | 82.86 | 4.9-5.4% |
+| E13 (3 seeds) | 83.86 | 84.60 | 12.5-14.8% |
+| B0 (3 seeds) | 83.34 | 84.14 | 8.4-11.5% |
+
+**Every A56 claim survives the clean labels**: E13 over E14 +2.74 [+1.85, +3.68] / +3.02 [+2.01, +4.14] / +2.36 [+0.91, +3.66] (official +2.95 / +3.20 / +2.56), E14 over the candidates +3.19 [+2.75, +3.64].
+
+**Consequences:** the loaders keep the copies, since the published FROG and LFE numbers were scored on them, and every number stays on the official labels with the de-duplicated one as a sensitivity (proposed for the paper, awaiting the owner). In training a copy is an uncovered person to `coast_targets`, so it teaches a coasting slot to report beside a covered person: negligible on `train_val`, to be de-duplicated before anything trains on the extras. The double reporting itself was then tested as a precision lever (A58, the entry above). No code changed for this entry; scripts and outputs in `checkpoints_three_horizon/a56/duplicates/`.
+
+**Docs:** `memory/data-model.md` (new section, counts per file), `memory/interpreting-evaluation.md` (new section), `memory/experiments/2026-09-tracking-claims.md` (de-duplicated table), `memory/dataset-properties.md`, `memory/performance-log.md`, `memory/slot-design-evidence.md`, `memory/keywords.md`, `TODO.md` (A56 open row closed, §D item added).
+
+## A56 run: a tuned ByteTrack + CBMOT gains +3.30 pp on our candidates, and the memory beats it by +2.90 (2026-10-02/03)
+
+*keywords:* A56, E14, E15, E16, E20, E21, E22, tracking_baselines.py, ByteTracker, cbmot_update, PrecisionRecall, GOSPA, block bootstrap, compute_metrics, frames_out, tracker_sweep --tracker byte, occlusion strata, first-detection latency, end-to-end latency, StepUntil, schtasks /st, tail -F lock
+
+The owner approved A56 and asked for anything else tracking-related. Pre-registration, outcome and every prediction scored: `memory/experiments/2026-09-tracking-claims.md`.
+
+**Built, tests first** (581 -> 628 tests, all passing): `ByteTracker` and `cbmot_update` in `follow_the_drow/utils/tracking.py`, whose single-stage setting reproduces `SortTracker` frame for frame (a test, and on the real test cache: AP 0.774032 both); `utils/tracking_baselines.py` with an exact fast AP (`PrecisionRecall`, equal to `score_detections` to the last bit, float32 curves included), GOSPA, a paired block bootstrap, the occlusion and trajectory strata, and a streaming latency benchmark; `evaluate(frames_out=..., compute_metrics=False)`; `tracker_sweep.py --tracker byte | byte-cbmot`. `ruff` installed in `.venv`.
+
+**Results** (FROG test, every 5th annotated frame, 95% intervals over 30 s blocks):
+
+| | AP | vs candidates |
+| --- | --- | --- |
+| candidates | 77.66 | -- |
+| SORT `min_hits` 1 / ByteTrack as published | 77.40 / 76.49 | -0.25 / -1.17 |
+| E15: the memory's value rule as the score | 69.51 | -8.14 |
+| E14: ByteTrack + CBMOT, tuned on val | 80.96 | +3.30 [+2.83, +3.77] |
+| E10: learned scorer, no state (2 seeds) | 81.94 | +4.28 |
+| E13: learned state (3 seeds) | 83.86 | +6.20; **+2.95 / +3.20 / +2.56 over E14 per seed, all intervals above zero** |
+
+- **The decay is the whole trick for the rule**: without it val AP is 52.9%, with 0.1 per second 73.4%, tuned 76.5% (candidates 72.95%).
+- **E20**: the memory's gain is occlusion-specific (+14.7 pp recall at matched FP for mostly occluded people, +3.5 visible) and flat across range and motion; its edge over the tuned rule sits on occluded people (+2.9) and a trajectory's first 0.5 s (+3.0).
+- **E21**: no confirmation delay (first-frame detection 85.8% against the candidates' 84.1%); the tuned rule confirms late (74.1%).
+- **E16**: GOSPA 0.502 against the candidates' 0.530 and the rule's 0.516; the predicted halving of the phantom term did not happen (-13%).
+- **E22**: the whole streaming detector at 12.92 ms (p99 15.11) per frame on the RX 9060 XT, 19.53 ms (p99 22.38) on four CPU threads, inside FROG's 25 ms scan.
+- **On LFE** (`docs/RESEARCH.md` §7.4.7): ByteTrack trades 27.6 false positives per false negative on LFE-PPN against SORT's 10.4, and the merge radius still beats both.
+- **Four real-data checks passed**: candidate AP and recall at matched FP, the stored memory APs, the SORT row against `replay_sort`, and GOSPA's terms against LFE's documented FP/FN.
+
+**Operational incidents, each written into `memory/gotchas.md` / `memory/long-running-tasks.md`:** a Git-bash `tail -F` watcher locked the chains out of `progress.txt` and outlived `TaskStop`; a chain started early on a stale `STOPPED` line; the scheduler template's `/st 23:59` re-fired two finished chains at 23:59; the session's end killed chain B at 18:23; `evaluate()`'s scoring made the arms step 20x slower than its replay (fixed with `compute_metrics=False`); and a finished process hung at exit despite `os._exit` (chains now stop a step two minutes after its final log line). The two-torch-processes `MemoryError` repeated the known commit-limit gotcha. Nothing was lost but time; every output was checked against its log before being used.
+
+Docs: `memory/slot-design-evidence.md` (the ladder), `memory/performance-log.md` (the within-model comparison and footnote 8), `memory/rejected-ideas.md` (a hand rule in place of the learned head), `docs/RESEARCH.md` §3.5, §7.4.5, §7.4.6, §7.4.7, `docs/PAPER.md` (ByteTrack in the tracker section), `TODO.md` A56 (done; E17-E18 wait for A49).
+
 ## The paper's claims against the tracking literature, pre-registered; our SORT baseline already saw every candidate (2026-09-30)
 
 *keywords:* A56, pre-registration, memory/experiments/2026-09-tracking-claims.md, claim ledger, tracking ladder, replay_sort, CANDIDATE_FLOOR, CBMOT, ByteTrack, E14, E15, E16, E20, E21, E22, block bootstrap

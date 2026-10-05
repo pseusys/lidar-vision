@@ -210,6 +210,8 @@ The figures above run ~1.2 pp below the `recall` column of the result tables (86
 That was first recorded as a metric difference — the result tables sweeping a precision-recall curve — which is **wrong**.
 `utils/memory_diagnosis.py` scores the same per-frame gated Hungarian coverage without linking trajectories and gets 134,196 / 153,655 = **87.3%** for stage 2 and 130,131 / 153,655 = **84.7%** for stage 3, reproducing the reported recall exactly.
 The shortfall is the trajectory round-trip in this table: coverage is looked up by rounded world position, and 2,254 person-observations (1.5%) collided with another person in the same frame and were dropped or misattributed.
+**Those 2,254 are not people** (found 2026-10-05): they are FROG's duplicate labels, circles that repeat another circle of the same frame in all six columns (`data-model.md`).
+A lookup by position cannot tell a copy from its original, so the round-trip loses exactly them.
 So prefer the diagnostic's counts for anything per-person; this table's ceilings and fractions are trajectory-level and unaffected in their ordering, and its lost/gained counts (6,076 / 2,113) agree closely with the diagnostic's independent 6,119 / 2,054.
 The remaining caveat stands: this is a single threshold while AP integrates over all of them, so stage 3 losing recall at 0.3 does not contradict its higher AP.
 

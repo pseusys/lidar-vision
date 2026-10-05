@@ -290,3 +290,173 @@ class TestSortTrackerIsFaithfulToSort:
         tr.step([(0.9, 0.0, 2.0)])
         tr.step([(0.9, 0.0, 2.0), (0.9, 0.3, 2.0)])
         assert len(tr.tracks) == 2
+
+
+class TestCbmotScoreUpdates:
+    """CBMOT's four score-update functions (Benbarka, Schroeder & Zell, IROS 2021, eq. 4-7), which turn a track's confidence and a
+    matched detection's score into the track's new confidence (`TODO.md` A56)."""
+
+    def test_the_published_functions(self):
+        from follow_the_drow.utils.tracking import cbmot_update
+        assert cbmot_update(0.6, 0.3, "addition") == pytest.approx(0.9)
+        assert cbmot_update(0.6, 0.3, "maximum") == pytest.approx(0.6)
+        assert cbmot_update(0.6, 0.3, "multiplication") == pytest.approx(1 - 0.4 * 0.7)
+        assert cbmot_update(0.6, 0.3, "parallel_addition") == pytest.approx(1 - 0.4 * 0.7 / (0.4 + 0.7))
+
+    def test_every_bounded_rule_is_at_least_both_inputs(self):
+        """CBMOT's eq. 3: a match should leave the system at least as confident as either the track or the detection."""
+        from follow_the_drow.utils.tracking import cbmot_update
+        grid = np.linspace(0.0, 1.0, 11)
+        for rule in ("maximum", "multiplication", "parallel_addition"):
+            for c in grid:
+                for s in grid:
+                    assert cbmot_update(c, s, rule) >= max(c, s) - 1e-12, (rule, c, s)
+
+    def test_parallel_addition_is_defined_when_both_are_certain(self):
+        from follow_the_drow.utils.tracking import cbmot_update
+        assert cbmot_update(1.0, 1.0, "parallel_addition") == 1.0
+
+    def test_an_unknown_rule_is_refused(self):
+        from follow_the_drow.utils.tracking import cbmot_update
+        with pytest.raises(ValueError):
+            cbmot_update(0.5, 0.5, "average")
+
+
+def _byte(**kwargs):
+    from follow_the_drow.utils.tracking import ByteTracker
+    defaults = dict(high_thresh=0.5, low_thresh=0.1, match_radius=0.5, max_age=5, min_hits=1)
+    return ByteTracker(**{**defaults, **kwargs})
+
+
+class TestByteTracker:
+    """ByteTrack (Zhang et al., ECCV 2022) for point detections, with CBMOT's track confidence (`TODO.md` A56 E14). The
+    association is the paper's: high-score detections against every confirmed track, then low-score ones against the tracks that
+    were tracked last frame, then unconfirmed tracks against what is left of the high ones; only high-score detections start
+    tracks; an unconfirmed track that misses its second frame is dropped."""
+
+    def test_a_low_score_detection_extends_an_existing_track(self):
+        tr = _byte()
+        tr.step([(0.9, 0.0, 2.0)])
+        tr.step([(0.9, 0.0, 2.0)])
+        out = tr.step([(0.2, 0.0, 2.05)])
+        assert len(out) == 1 and len(tr.tracks) == 1
+        assert out[0][0] == pytest.approx(0.2), "the detection-score mode reports what the detector said"
+
+    def test_a_low_score_detection_never_starts_a_track(self):
+        tr = _byte()
+        for _ in range(5):
+            assert tr.step([(0.3, 0.0, 2.0)]) == []
+        assert tr.tracks == []
+
+    def test_detections_below_the_low_threshold_are_ignored(self):
+        tr = _byte()
+        tr.step([(0.9, 0.0, 2.0)])
+        tr.step([(0.9, 0.0, 2.0)])
+        assert tr.step([(0.05, 0.0, 2.0)]) == []
+
+    def test_a_new_track_is_reported_from_its_second_match(self):
+        tr = _byte()
+        tr.step([])                                         # frame 1 holds nothing, so the next track is not a first-frame track
+        assert tr.step([(0.9, 0.0, 2.0)]) == [], "a track born after the first frame starts unconfirmed"
+        assert len(tr.step([(0.9, 0.0, 2.0)])) == 1
+
+    def test_tracks_born_on_the_first_frame_are_confirmed_at_once(self):
+        assert len(_byte().step([(0.9, 0.0, 2.0)])) == 1
+
+    def test_an_unconfirmed_track_that_misses_is_dropped(self):
+        tr = _byte()
+        tr.step([])
+        tr.step([(0.9, 0.0, 2.0)])
+        tr.step([])
+        assert tr.tracks == []
+
+    def test_a_lost_track_is_matched_again_within_max_age(self):
+        tr = _byte(max_age=5)
+        tr.step([(0.9, 0.0, 2.0)])
+        tr.step([(0.9, 0.0, 2.0)])
+        for _ in range(3):
+            assert tr.step([]) == []
+        out = tr.step([(0.9, 0.0, 2.0)])
+        assert len(out) == 1 and len(tr.tracks) == 1, "a lost track joins the first association again"
+
+    def test_a_lost_track_is_not_matched_to_a_low_score_detection(self):
+        """ByteTrack's second pass only offers low-score detections to tracks that were tracked last frame."""
+        tr = _byte(max_age=5)
+        tr.step([(0.9, 0.0, 2.0)])
+        tr.step([(0.9, 0.0, 2.0)])
+        tr.step([])
+        assert tr.step([(0.2, 0.0, 2.0)]) == []
+
+    def test_a_lost_track_is_dropped_after_max_age(self):
+        tr = _byte(max_age=2)
+        tr.step([(0.9, 0.0, 2.0)])
+        tr.step([])
+        tr.step([])
+        assert len(tr.tracks) == 1
+        tr.step([])
+        assert tr.tracks == []
+
+    def test_ego_rotation_is_compensated(self):
+        dtheta = np.deg2rad(5.0)
+        r = 4.0
+        tr = _byte(match_radius=0.2)
+        for k in range(6):
+            p = -k * dtheta
+            out = tr.step([(0.9, r * -np.sin(p), r * np.cos(p))], ego_dtheta=dtheta)
+        assert len(tr.tracks) == 1 and len(out) == 1
+
+    def test_the_track_score_mode_lifts_a_weak_detection(self):
+        tr = _byte(score_mode="track", score_rule="multiplication")
+        tr.step([(0.9, 0.0, 2.0)])
+        out = tr.step([(0.2, 0.0, 2.0)])
+        assert out[0][0] == pytest.approx(1 - 0.1 * 0.8)
+
+    def test_the_track_score_decays_when_unmatched_and_the_track_is_deleted_below_the_floor(self):
+        tr = _byte(score_mode="track", score_decay_per_s=1.0, delete_below=0.5, max_age=100)
+        tr.step([(0.9, 0.0, 2.0)], dt=0.1)
+        tr.step([], dt=0.1)
+        assert tr.tracks[0].track_score == pytest.approx(0.8)
+        tr.step([], dt=0.2)
+        tr.step([], dt=0.2)
+        assert tr.tracks == [], "0.8 - 0.4 = 0.4 is under the 0.5 floor"
+
+    def test_coasting_reports_a_confirmed_lost_track_at_its_decayed_score(self):
+        tr = _byte(score_mode="track", score_decay_per_s=1.0, coast_frames=2, max_age=10)
+        tr.step([(0.9, 0.0, 2.0)], dt=0.1)
+        out = tr.step([], dt=0.1)
+        assert len(out) == 1 and out[0][0] == pytest.approx(0.8)
+        assert len(tr.step([], dt=0.1)) == 1
+        assert tr.step([], dt=0.1) == [], "coasting stops after coast_frames"
+
+    def test_the_rescored_output_keeps_every_detection(self):
+        tr = _byte(score_mode="track", unmatched_scale=0.5)
+        tr.step([(0.9, 0.0, 2.0)])
+        tr.step([(0.2, 0.0, 2.0), (0.3, 3.0, 3.0)])
+        scores = sorted(round(s, 6) for s, _, _ in tr.rescored)
+        assert scores == [0.15, round(1 - 0.1 * 0.8, 6)], "the matched one lifted, the unmatched one scaled"
+        xy = {(round(x, 6), round(y, 6)) for _, x, y in tr.rescored}
+        assert xy == {(0.0, 2.0), (3.0, 3.0)}, "rescored detections keep their own positions"
+
+    def test_non_finite_and_empty_input_are_fine(self):
+        tr = _byte()
+        assert tr.step([]) == []
+        assert tr.step([(float("nan"), 0.0, 2.0), (0.9, float("inf"), 2.0)]) == []
+
+    @pytest.mark.parametrize("min_hits,max_age", [(1, 1), (3, 1), (2, 3)])
+    def test_the_single_stage_setting_reproduces_sort_frame_for_frame(self, min_hits, max_age):
+        """With one association over every detection, births from every unmatched one and SORT's confirmation, the tracker is
+        `SortTracker` -- the anchor that lets E14's rows be read against the SORT rows already in the paper."""
+        from follow_the_drow.utils.tracking import ByteTracker, SortTracker
+        rng = np.random.default_rng(min_hits * 10 + max_age)
+        sort = SortTracker(match_radius=0.5, min_hits=min_hits, max_age=max_age)
+        byte = ByteTracker(two_stage=False, high_thresh=0.0, low_thresh=0.0, new_track_thresh=0.0, match_radius=0.5,
+                           min_hits=min_hits, max_age=max_age, score_mode="detection")
+        walkers = np.array([[0.0, 2.0], [1.5, 4.0], [-2.0, 3.0]])
+        velocity = np.array([[0.02, 0.01], [-0.03, 0.0], [0.0, 0.04]])
+        for t in range(150):
+            seen = walkers[rng.random(len(walkers)) > 0.2]
+            dets = [(float(rng.uniform(0.01, 1.0)), float(x + rng.normal(0, 0.03)), float(y + rng.normal(0, 0.03))) for x, y in seen]
+            dets += [(float(rng.uniform(0.01, 0.4)), float(rng.uniform(-4, 4)), float(rng.uniform(0.5, 8))) for _ in range(rng.integers(0, 4))]
+            dtheta, dxy = float(rng.normal(0, 0.003)), (float(rng.normal(0, 0.01)), float(rng.normal(0.02, 0.005)))
+            assert byte.step(dets, dtheta, dxy) == sort.step(dets, dtheta, dxy), f"frame {t}"
+            walkers = walkers + velocity

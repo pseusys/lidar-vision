@@ -1022,6 +1022,30 @@ class TestEvaluate:
         for part in ("candidates", "memory"):
             assert 0.0 <= result[part]["ap_0.3m"] <= 1.0
 
+    def test_the_scored_frames_can_be_handed_back_with_their_global_index(self):
+        """`TODO.md` A56 scores the memory's detections again -- GOSPA, a block bootstrap, per-person strata -- so `evaluate` can
+        return the frames it scored, each with the packed frame it came from."""
+        split, model = self._split(), self._model()
+        frames = {}
+        result = evaluate(model, split, torch.device("cpu"), 2, 2, evaluation_segments(split, 0, 0, 0), frames_out=frames)
+        assert len(frames["candidates"]) == len(frames["memory"]) == len(frames["index"]) == result["memory"]["frames"]
+        assert score_detections(frames["memory"])["ap"] == pytest.approx(result["memory"]["ap"])
+        expected = sorted(int(o) + i for o, n in zip(split.offsets, split.lengths) for i in range(0, int(n), 2))
+        assert sorted(frames["index"]) == expected
+        for f, (scores, xy, gt) in zip(frames["index"], frames["candidates"]):
+            assert np.array_equal(gt, split.data.gt_xy[f][split.data.gt_valid[f]])
+
+    def test_scoring_can_be_skipped_when_only_the_frames_are_wanted(self):
+        """Scoring every annotated test frame costs ~20 min per checkpoint in `score_detections`; A56 rescores the frames itself."""
+        split, model = self._split(), self._model()
+        scored, unscored = {}, {}
+        evaluate(model, split, torch.device("cpu"), 1, 2, evaluation_segments(split, 0, 0, 0), frames_out=scored)
+        result = evaluate(model, split, torch.device("cpu"), 1, 2, evaluation_segments(split, 0, 0, 0), frames_out=unscored, compute_metrics=False)
+        assert result == dict(candidates={}, memory={})
+        assert unscored["index"] == scored["index"]
+        for (a, xa, _), (b, xb, _) in zip(unscored["memory"], scored["memory"]):
+            assert np.array_equal(a, b) and np.array_equal(xa, xb)
+
 
 class TestMemoryMsPerFrame:
 

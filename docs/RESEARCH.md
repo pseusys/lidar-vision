@@ -325,7 +325,8 @@ score can remove a false positive but never lift a person above the threshold. O
 memory "loses" at a shared threshold were pushed under it by rescoring while a live slot sat on them**
 (`../memory/slot-design-evidence.md`), and rescoring before the threshold beats SORT on *identical* candidates at every setting.
 SORT cannot reach those people by construction -- not for want of seeing them (this repository's replay feeds it every candidate down to 0.01), but because it only filters.
-**The tracking literature does have a way to lift them:** CBMOT's score refinement raises a detection's score from its track's confidence (Benbarka et al., IROS 2021), and ByteTrack's second association pass is built for low-score detections (Zhang et al., ECCV 2022). Until E14 and E15 run (§7.4.5), the gap is measured against a tracker that cannot rescore, and that is the weakest possible comparison.
+**The tracking literature does have a way to lift them:** CBMOT's score refinement raises a detection's score from its track's confidence (Benbarka et al., IROS 2021), and ByteTrack's second association pass is built for low-score detections (Zhang et al., ECCV 2022).
+**Measured 2026-10-03 (§7.4.5):** ByteTrack with CBMOT's track confidence, tuned on val, lifts the same candidates from 77.66% to 80.96% AP -- about half of what the memory adds -- and the proposed memory is **+2.90 pp above it**, every seed's block-bootstrap interval above zero.
 **JRDB** ships image-plane (2D) and point-cloud (3D) person *tracking* benchmarks beside its detection ones, but none on its 2D laser (§7.4.1). The older
 laser-based people-tracking literature (Arras, Luber, Linder and the SPENCER work; Leigh et al., ICRA 2015) is substantial.
 So a reviewer will not accept "nobody combines a learned 2D-LiDAR detector with tracking" -- they do, modularly, and on embedded
@@ -359,7 +360,7 @@ The accurate name for the mechanism, from the tracking literature, is a **learne
 **What the write-up must therefore do:** cite 2412.15000 and JRDB's tracking benchmark rather than claiming the combination is
 untried; position against MAD and Tokmakov as memory-augmented detection in other modalities; and keep the comparison against a
 *properly tuned* detector-plus-tracker baseline, which is the SORT sweep this project already ran on its own candidates.
-SORT is not the strongest such baseline: the one a tracking reviewer will ask for is ByteTrack, with CBMOT's score refinement, on the same candidates including the sub-threshold ones (§7.4.5).
+SORT is not the strongest such baseline: the one a tracking reviewer will ask for is ByteTrack, with CBMOT's score refinement, on the same candidates including the sub-threshold ones -- now run, and the comparison to quote (§7.4.5).
 
 ## 4. Preprocessing
 
@@ -701,7 +702,7 @@ FROG carries no identities, so only the identity-free rows apply to this project
 
 #### 7.4.5 Experiments this suggests
 
-Proposed to the owner 2026-09-28 as `../TODO.md` A56; none is agreed yet.
+Proposed 2026-09-28 as `../TODO.md` A56, approved 2026-10-02, and **E14-E16 and E20-E22 run 2026-10-02/03**; the predictions and the scored outcome are in `../memory/experiments/2026-09-tracking-claims.md`. In one paragraph: SORT and ByteTrack as published lose to the bare candidates (77.40 / 76.49% against 77.66%); ByteTrack with CBMOT's track confidence, tuned on val, gains +3.30 pp (80.96%), but only with a confidence decay, since persistent phantoms otherwise saturate as people do; the proposed memory is +2.90 pp above that, every seed's interval above zero, and its edge over the tuned rule sits on occluded people and new trajectories; GOSPA ranks it best by a smaller margin (0.502 against 0.530); and the whole streaming detector runs at 12.9 ms per frame on the GPU and 19.5 ms on four CPU threads. E19 ran as A51 S2; E17 and E18 wait for JRDB (A49).
 
 | # | what | cost | what it decides |
 | --- | --- | --- | --- |
@@ -712,7 +713,7 @@ Proposed to the owner 2026-09-28 as `../TODO.md` A56; none is agreed yet.
 | E18 | self-supervised slot training, or label densification from slot tracks (Tokmakov 2022; Jia 2021; Qi et al., *CVPR* 2021, offboard auto-labelling) | a research branch | whether DROW's ~95% unlabelled scans and FROG's extra recordings can train the memory |
 | E19 | an occlusion input for the coasting head: whether a nearer return lies on the slot's bearing (after Arras 2008) | one training run | O2 found the head cannot tell a remembered person from a remembered phantom; occlusion explains a person's absence and not a chair's |
 
-E14 and E15 come first: they can falsify the headline claim at no training cost.
+E14 and E15 came first because they could falsify the headline claim at no training cost; they narrowed it instead (above).
 
 #### 7.4.6 Who claims a *detection* gain from tracking or object memory (checked 2026-09-29)
 
@@ -736,6 +737,20 @@ What this means for the write-up:
 - **The within-model gain is the defensible number, not 83.3% against 75.6%.** The latter is ours measured here against DR-SPAAM's published figure (`../memory/interpreting-evaluation.md`), and 75.6% is DR-SPAAM's, not DROW3's 73.9%.
 - **Cross-domain magnitudes do not compare.** MAD's and MoDAR's gains are 3D-box AP on Waymo and AV2; ours is point AP on FROG. Cite them as the same phenomenon in other sensors, never as a smaller number.
 - **E14 decides what the gain is attributed to, not whether it exists.** If ByteTrack on the same candidates recovers most of it, the finding "tracking raises 2D-LiDAR detection AP by several points" is still unclaimed on this sensor; the novelty then moves from the learned memory to the finding and its cheapest mechanism.
+  **Decided 2026-10-03 (§7.4.5): both halves.** A tuned ByteTrack + CBMOT recovers 3.30 of the memory's 6.20 pp and the learned state the remaining 2.90, so the write-up reports a detection gain from tracking on 2D LiDAR, which no one has published, and a learned memory that clearly beats the best rule.
+
+#### 7.4.7 Classical trackers on the published detectors
+
+The same trackers on LFE-Peaks' and LFE-PPN's detections (`../utils/tracker_sweep.py --tracker byte / byte-cbmot`, A56), read as `../docs/PAPER.md` reads SORT: false positives removed per false negative added, populated frames, against the untouched detector.
+
+| | LFE-Peaks | LFE-PPN |
+| --- | --- | --- |
+| SORT, `min_hits` 3 | 4.1 (AP 63.7%) | 10.4 (AP 68.6%) |
+| ByteTrack, `min_hits` 1 | 4.4 (AP 62.7%) | **27.6** (AP 68.0%) |
+| ByteTrack, `min_hits` 10 | 3.4 (AP 60.9%) | 17.8 (AP 67.2%) |
+| merge radius 0.30 -> 0.40 m (`PAPER.md`) | **21.9** | **~63** |
+
+ByteTrack trades far better than SORT on LFE-PPN's dense phantom field and about as well on LFE-Peaks, and the merge radius still dominates both: `PAPER.md`'s conclusion that no post-hoc stage beats a post-processing constant survives a 2022 tracker. Untuned CBMOT confidence (no decay) collapses AP on both detectors (49.8-51.2% and 36.6-39.4%), for the saturation reason above.
 
 ---
 

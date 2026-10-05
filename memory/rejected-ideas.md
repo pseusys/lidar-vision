@@ -7,6 +7,60 @@ Open questions live in [`../TODO.md`](../TODO.md); this file is for settled ones
 
 Each entry states what was proposed, what was measured, and what new evidence would be needed to reopen it.
 
+## A merge radius on the object memory's output (TODO.md A58)
+
+*keywords: A58, merge radius, NMS, double report, duplicate detection, coasting slot beside a candidate, merge_detections, oracle bound*
+
+**Idea.** The memory puts a second detection within 0.5 m of 12-15% of people at matched false positives (E13; the candidates
+1.7%), and stage 3 has no merge step, while the merge radius is the best-priced precision lever measured here. Merge its output
+as the LFE detectors merge theirs.
+
+**What was measured** (2026-10-05, `tracking_baselines.py merge`, the saved A56 frames; radius chosen per output on val from
+none / 0.10-0.60 m, test every 5th annotated frame scored once):
+
+| output | val chooses | test AP, none -> chosen | at 0.30 m | at 0.50 m | oracle: every redundant detection removed |
+| --- | --- | --- | --- | --- | --- |
+| candidates | 0.50 | 77.66 -> 77.60 | 77.66 | 77.60 | 78.04 (+0.38) |
+| E14 ByteTrack + CBMOT | none | 80.96 | 80.51 | 79.31 | 81.48 (+0.52) |
+| E13, 3 seeds | 0.10-0.15 | -0.04 to -0.05 | -0.56 to -0.63 | -2.3 | +0.43 to +0.55 |
+| B0 (3) / E10 (2) | none | unchanged | -0.5 to -0.6 | -1.7 to -2.2 | -- |
+
+**Why rejected: the double reports are a second person's distance away, and they sit low in the ranking.** The two detections
+are a median **0.32 m** apart, about two people side by side, so any radius that removes them removes close neighbours too: past
+0.15-0.20 m AP falls monotonically for E14 and every memory arm. 85-87% of E13's double reports are a candidate with a coasting
+slot beside it (77% for E14's coasted tracks), and they appear at E13's matched-FP threshold (0.14-0.17), low in the ranking. Even an oracle that
+removes every detection matching nobody within 0.5 m of a person, knowing the labels, buys only +0.4-0.55 pp, and E14 almost as
+much, so E13's margin over it does not move (+2.90 / +3.16 / +2.51 with both merged at their val radii, against +2.95 / +3.20 /
++2.56 unmerged).
+
+**What would reopen it.** An operating point well above the matched-FP threshold (a deployment threshold of 0.5+ where the
+doubles may rank higher), or a training change that makes the coasting slot beside a matched person a confident one. The bound
+for a fix inside the model, which would stop a slot coasting beside its own person, is the oracle's +0.26-0.41 pp on slots
+alone (`checkpoints_three_horizon/a56/merge_oracle.json`).
+
+## A hand-coded rescoring rule in place of the memory's learned head (TODO.md A56)
+
+*keywords: A56, E14, E15, CBMOT, ByteTrack, rule scorer, track confidence, score update, value as score, saturation, decay*
+
+**Idea.** Rescoring before the threshold is the memory's mechanism; a tracker's own confidence rule might do it with no learning.
+
+**What was measured** (FROG test, the same candidates, every setting tuned on val; `experiments/2026-09-tracking-claims.md`):
+
+| rule | test AP | vs candidates (77.66) |
+| --- | --- | --- |
+| the memory's value rule used directly as the score (E15) | 69.51 | -8.14 |
+| ByteTrack + CBMOT confidence, untuned (no decay), on LFE | collapses: LFE-Peaks 65 -> ~51, LFE-PPN 70 -> ~37 | -- |
+| ByteTrack + CBMOT, tuned, with a 0.1/s confidence decay (E14) | 80.96 | +3.30 |
+| the learned memory (E13) | 83.86 | +6.20 |
+
+**Why it is not the design.** A rule does recover half the gain -- but only with a decay, because without one a persistent phantom
+accumulates confidence exactly as a person does and the ranking collapses; and the value rule, below `gain = 1`, demotes a
+confident detection to a young slot's value. The learned state's remaining +2.90 pp sits where a rule has nothing to go on:
+occluded people and new trajectories.
+
+**What would reopen it.** A platform where a deployed rule must replace a learned head (no GPU, no training data); then E14's tuned
+configuration is the starting point, not the value rule.
+
 ## Four slot-memory ideas closed by measurement (TODO.md A51)
 
 *keywords: A51, slots, stage 3, S3, S4, T3, D2, more candidates, learned association, slot statistics, accumulated value, capacity*
