@@ -56,6 +56,10 @@ from train import _safe_auc, compute_loss, detect_device, make_targets
 
 VOTE_DECODING = dict(blur_sigma=2.0, blur_win=11, bin_size=0.1, vote_collect_radius=0.5, min_thresh=1e-3)
 MATCH_RADIUS_M = 0.5
+VOTE_FLOOR = VOTE_DECODING["min_thresh"]   # a beam this unlikely casts no vote, in either decoder
+NMS_DIST_M = 0.5                # `nms_predicted_center`'s `min_dist`, the official DR-SPAAM code's
+LABEL_RADIUS_M = 0.6            # `make_targets`' default, the radius every stage 2 so far trained with
+MIRROR_PROBABILITY = 0.5        # share of training clips `step2 --mirror` reverses
 CANDIDATE_FLOOR = 0.01
 TOP_P = 64
 OPERATING_THRESHOLD = 0.3
@@ -497,11 +501,42 @@ def voting_beams(scan: np.ndarray, prob: np.ndarray, max_range_m: float) -> Tupl
     return anchored, np.where(anchored < max_range_m, prob, 0.0)
 
 
+def beam_votes(scan: np.ndarray, angles: np.ndarray, votes: np.ndarray) -> np.ndarray:
+    """Where each beam `[N]` votes the person's centre `[N, 2]`, from its (across, along) offset `[N, 2]` (`make_targets`)."""
+    r, phi = _win2global(scan, angles, votes[:, 0], votes[:, 1])
+    return np.stack([r * -np.sin(phi), r * np.cos(phi)], axis=1)
+
+
+def nms_decode(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np.ndarray, min_dist: float = NMS_DIST_M, average: bool = False) -> np.ndarray:
+    """The official DR-SPAAM repository's `nms_predicted_center`: beams in order of probability, each kept beam's vote a detection
+    scored by that beam alone, and every vote within `min_dist` of it suppressed. Beams under the vote grid's floor cast nothing.
+    `average` places each detection at the probability-weighted mean of the votes it suppresses, itself included."""
+    voters = np.nonzero(prob > VOTE_FLOOR)[0]
+    voters = voters[np.argsort(-prob[voters], kind="stable")]
+    p, xy = prob[voters], beam_votes(scan[voters], angles[voters], votes[voters])
+    dist = np.linalg.norm(xy[:, None, :] - xy[None, :, :], axis=-1)
+    alive = np.ones(len(voters), dtype=bool)
+    kept, centres = [], []
+    for i in range(len(voters)):
+        if alive[i]:
+            members = alive & (dist[i] < min_dist)
+            kept.append(i)
+            centres.append(np.average(xy[members], axis=0, weights=p[members]) if average else xy[i])
+            alive[members] = False
+    return np.column_stack([p[kept], np.array(centres).reshape(-1, 2)])
+
+
+def decode_frame(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np.ndarray) -> np.ndarray:
+    """Stage 2's decoder (`TODO.md` A59, owner's call 2026-10-06): `nms-mean`, detections `(score, x, y)` `[K, 3]`. It beat DROW's vote
+    grid on all six checkpoints, +2.6 to +3.2 pp test AP, chosen on val; the vote grid merged people standing side by side."""
+    return nms_decode(scan, angles, prob, votes, NMS_DIST_M, average=True)
+
+
 def decode_candidates(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np.ndarray, top_p: int, max_range_m: float) -> Tuple[np.ndarray, np.ndarray]:
     """One frame's best `top_p` candidates `(score, x, y)` `[K, 3]` from raw ranges `[N]`, per-beam probabilities and votes `[N, 2]`,
-    through DROW's vote grid, with each candidate's pooling weights over the beams `[K, N]`; beams at the range limit cast no votes."""
+    through `decode_frame`, with each candidate's pooling weights over the beams `[K, N]`; beams at the range limit cast no votes."""
     clean, prob = voting_beams(scan, prob, max_range_m)
-    candidates = np.array(decode_votes(clean, angles, prob, votes), dtype=np.float64).reshape(-1, 3)
+    candidates = decode_frame(clean, angles, prob, votes)
     candidates = candidates[np.argsort(-candidates[:, 0], kind="stable")[:top_p]]
     r, phi = _win2global(clean, angles, votes[:, 0], votes[:, 1])
     vote_xy = np.stack([r * -np.sin(phi), r * np.cos(phi)], axis=1)
@@ -563,6 +598,23 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
     return memory
 
 
+def mirror_people(people_polar: np.ndarray, angles: np.ndarray) -> np.ndarray:
+    """People `(range, bearing)` `[G, 2]` as the beam-reversed scan sees them: bearing `a -> angles[0] + angles[-1] - a`, which sends
+    beam `i`'s bearing exactly onto beam `N - 1 - i`'s on any uniform grid, FROG's one-beam asymmetry included."""
+    mirrored = np.array(people_polar, dtype=np.float64).reshape(-1, 2)
+    mirrored[:, 1] = angles[0] + angles[-1] - mirrored[:, 1]
+    return mirrored
+
+
+def mirror_clips(ranges: torch.Tensor, poses: torch.Tensor, flip: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Clips `[B, T, N]` and their poses `[B, T, 3]` mirrored left to right where `flip` `[B]` is set: beams reversed, and each pose's
+    lateral position and heading negated, so that the motion the coarse convolution re-aligns by mirrors with the scan."""
+    mask = torch.from_numpy(np.asarray(flip)).to(ranges.device)
+    ranges = torch.where(mask[:, None, None], ranges.flip(-1), ranges)
+    poses = torch.where(mask[:, None, None], poses * torch.tensor([1.0, -1.0, -1.0], device=poses.device, dtype=poses.dtype), poses)
+    return ranges, poses
+
+
 def clip_frames(index: int, recording_start: int, length: int) -> np.ndarray:
     """Global frame indices of the `length`-frame clip ending at `index`, history clamped at the recording's first frame."""
     return np.maximum(np.arange(index - length + 1, index + 1), recording_start)
@@ -590,13 +642,15 @@ def network_candidates(net: CalibrationNetwork, scans: np.ndarray, poses: np.nda
     return out
 
 
-def decode_votes(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np.ndarray) -> List[Tuple[float, float, float]]:
+def decode_votes(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np.ndarray, weighted_avg: bool = False) -> List[Tuple[float, float, float]]:
     """Per-beam person probabilities and votes -> detections `(score, x, y)` in the detection frame, through DROW's vote grid
-    with `train.evaluate_auc`'s settings."""
+    with `train.evaluate_auc`'s settings; `weighted_avg` weights each detection's voters by their probability, in its position and
+    its score, instead of averaging them plainly (`utils/stage2_probe.py`)."""
     r, phi = _win2global(scan[None], angles[None], votes[None, :, 0], votes[None, :, 1])
     probas = np.zeros((1, len(scan), 4), np.float32)
     probas[0, :, 3] = prob
-    return [(float(p[3]), float(x), float(y)) for x, y, p in votes_to_detections(r * -np.sin(phi), r * np.cos(phi), probas, **VOTE_DECODING)[0]]
+    detections = votes_to_detections(r * -np.sin(phi), r * np.cos(phi), probas, weighted_avg=weighted_avg, **VOTE_DECODING)[0]
+    return [(float(p[3]), float(x), float(y)) for x, y, p in detections]
 
 
 # ---------------------------------------------------------------- data on the device
@@ -787,12 +841,18 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
 
 # ---------------------------------------------------------------- training
 
+def candidate_cache_path(name: str, limit: int, stage2: Optional[Path]) -> Path:
+    """Where split `name`'s candidates are cached: LFE-Peaks' when `stage2` is None, otherwise those of the checkpoint at `stage2`,
+    keyed by its run directory, file name and write time, and by the decoder, so a new checkpoint or decoder never reads stale ones."""
+    source = "lfe-peaks" if stage2 is None else f"network-{stage2.parent.name}-{stage2.stem}-{int(stage2.stat().st_mtime)}-nms-mean"
+    return CACHE_DIR / f"{source}_official_{name}_f{CANDIDATE_FLOOR}_p{TOP_P}_s{SECTORS}{f'_first{limit}' if limit else ''}.pkl"
+
+
 def load_split(name: str, limit: int, stage2: Optional[Path], device) -> Split:
     """Cached candidates of every recording of FROG `official` `name`: LFE-Peaks' when `stage2` is None, otherwise the trained
     calibration network's at `stage2`, with its decoder features."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    source = "lfe-peaks" if stage2 is None else f"network-{stage2.stem}-{int(stage2.stat().st_mtime)}-limit-silenced"
-    path = CACHE_DIR / f"{source}_official_{name}_f{CANDIDATE_FLOOR}_p{TOP_P}_s{SECTORS}{f'_first{limit}' if limit else ''}.pkl"
+    path = candidate_cache_path(name, limit, stage2)
     if path.exists():
         seqs = [SequenceCandidates(**fields_of) for fields_of in pickle.loads(path.read_bytes())]
     else:
@@ -1116,7 +1176,7 @@ def evaluate_calibration(net: CalibrationNetwork, split: FrameSplit, positions: 
         prob, votes = torch.sigmoid(logit).cpu().numpy(), votes.cpu().numpy()
         for j, a in enumerate(chunk):
             scan, p = voting_beams(split.scans[split.annotated[a]], prob[j], net.max_range_m)
-            dets = np.array(decode_votes(scan, angles, p, votes[j]), dtype=np.float64).reshape(-1, 3)
+            dets = decode_frame(scan, angles, p, votes[j])
             frames.append((dets[:, 0], dets[:, 1:], split.people_xy[a]))
     net.train()
     return score_detections(frames)
@@ -1170,8 +1230,15 @@ def train_calibration(args) -> None:
         for chunk in np.array_split(rng.permutation(len(train_split.annotated)), iterations):
             frames = train_split.annotated[chunk]
             ranges, poses = clip_batch(train_split, frames, args.clip_frames, device)
+            scans, people = [train_split.scans[f] for f in frames], [train_split.people_polar[c] for c in chunk]
+            if args.mirror:
+                flip = rng.random(len(frames)) < MIRROR_PROBABILITY
+                ranges, poses = mirror_clips(ranges, poses, flip)
+                scans = [np.ascontiguousarray(s[::-1]) if m else s for s, m in zip(scans, flip, strict=True)]
+                people = [mirror_people(g, angles) if m else g for g, m in zip(people, flip, strict=True)]
             logit, votes, _ = net(ranges, poses)
-            targets = [make_targets(anchor_ranges(train_split.scans[f], net.max_range_m), angles, {3: [tuple(p) for p in train_split.people_polar[c]]}) for c, f in zip(chunk, frames)]
+            targets = [make_targets(anchor_ranges(s, net.max_range_m), angles, {3: [tuple(p) for p in g]},
+                                    vote_collect_radius=args.label_radius, nearest=args.label_assign == "nearest") for s, g in zip(scans, people, strict=True)]
             labels = torch.from_numpy(np.stack([t[0] for t in targets])).to(device)
             vote_targets = torch.from_numpy(np.stack([t[1] for t in targets])).to(device)
             loss, _, _ = compute_loss(logit.reshape(-1, 1), votes.reshape(-1, 2), labels.reshape(-1), vote_targets.reshape(-1, 2))
@@ -1504,7 +1571,8 @@ def run_ablations(args) -> None:
     print(f"wrote {args.out_dir / 'step4_results.json'}", flush=True)
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Every step's command line."""
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="mode", required=True)
     for name in ("step1", "step2", "step3a", "step3b"):
@@ -1617,13 +1685,20 @@ def main() -> None:
     step2.add_argument("--min-lr", type=float, default=1e-5)
     step2.add_argument("--clip-frames", type=int, default=None, help="frames per training clip; default max(coarse_lags) + 1, "
                                                                      "the history the oldest tap reads")
-    step2.add_argument("--dropout", type=float, default=0.0, help="dropout on the head's input; 0 reproduces every result so far, "
+    step2.add_argument("--dropout", type=float, default=0.1, help="dropout on the head's input, 0.1 since 2026-10-06 (TODO.md A59); 0 reproduces every result before, "
                                                                  "`docs/RESEARCH.md` §5.4 intends 0.1 for this project's own architectures")
     step2.add_argument("--checkpoint-every", type=float, default=0.0, help="epochs between checkpoints kept whatever they score, "
                                                                           "so test AP can be measured against training duration; 0 keeps only the best")
     step2.add_argument("--max-range-m", type=float, default=MAX_RANGE_M, help="the model's range: a reading that is missing, non-positive or at or "
                                                                              "beyond it reads as this value, whatever the dataset's encoding (FROG is annotated to 10 m; "
                                                                              "DROW has 7.3%% of its labels beyond 10 m)")
+    step2.add_argument("--label-assign", choices=("last", "nearest"), default="nearest", help="which person a beam inside two people's radius "
+                       "trains for: its nearest, as the official DR-SPAAM code does (the default since 2026-10-06), or the last listed, as every "
+                       "run before it did (TODO.md A59)")
+    step2.add_argument("--label-radius", type=float, default=LABEL_RADIUS_M, help="distance from a person's centre within which a beam is "
+                       "a positive and votes for them; DR-SPAAM uses 0.35 m, FROG's circles are 0.4 m")
+    step2.add_argument("--mirror", action=argparse.BooleanOptionalAction, default=True, help="reverse half the training clips beam for beam, "
+                       "with their people and poses mirrored to match: exact on any uniform beam grid; on by default since 2026-10-06 (TODO.md A59)")
     step2.add_argument("--coarse-lags", type=int, nargs="+", default=[0, 8, 16, 24, 32], help="frames the coarse temporal convolution reaches back, per sector; "
                                                                                              "`--coarse-lags 0` alone removes it (A50 phase 2)")
     step2.add_argument("--batch", type=int, default=32)
@@ -1635,7 +1710,11 @@ def main() -> None:
     step2.add_argument("--max-hours", type=float, default=24.0)
     step2.add_argument("--val-frames", type=int, default=2000, help="evenly spaced annotated val frames per evaluation")
     step2.add_argument("--test-stride", type=int, default=1, help="score every Nth annotated test frame at the end")
-    args = ap.parse_args()
+    return ap
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
     keep_awake()
     # a ROCm process on Windows can hang in interpreter teardown, after success or failure alike, holding memory and blocking

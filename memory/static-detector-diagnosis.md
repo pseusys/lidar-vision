@@ -1,10 +1,11 @@
 # Static-detector diagnosis — where LFE loses, and to what
 
-*keywords:* range-stratified, scale vs capacity, distance normalisation, cutout, depth tunnel, sub-threshold, miss budget, Cover and Hart, 1-NN, Bayes error, range_probe.py, repr_probe.py, Tier 0
+*keywords:* range-stratified, scale vs capacity, distance normalisation, cutout, depth tunnel, sub-threshold, miss budget, Cover and Hart, 1-NN, Bayes error, range_probe.py, repr_probe.py, Tier 0, stage2_probe.py, decoder, vote grid, nms_predicted_center, close pairs, make_targets, label assignment, duration curve, weight averaging
 
 Why a single-frame detector misses what it misses, measured rather than assumed.
 Produced by `utils/range_probe.py` (one detector pass, per-person records) and `utils/repr_probe.py` (no detector at all, 1-NN on four window parameterisations).
 Both cache, both run in minutes, neither trains anything.
+`utils/stage2_probe.py` does the same for TAKHeLiPeD's stage 2 against LFE, with the decoder swapped under fixed weights (last section).
 This is `docs/PROPOSAL.md`'s Tier 0, run 2026-09-11 on the FROG `official` test recording.
 
 ## The question these answer
@@ -222,6 +223,87 @@ Read it as corroboration only.
 - **Range-conditioned dilation stays, demoted to second**, and now has a measured size: ~2.5 pp of 1-NN error overall, up to 6.4 pp at 8-10 m.
 - **The head swap gets a sharper motive.** It is no longer "why does PPN beat Peaks by 3.6 pp" but "PPN's metric decode is worth +10.2 pp at 8-10 m and -4.1 pp at 0-1 m — what happens if the Peaks head decodes metrically too?"
 - ~~**A Tier 1 item that needs no network at all:** ~5 pp of recall sits in close-pair over-merging.~~ **Withdrawn 2026-09-11**, by the measurement that was supposed to confirm it. Recall moves only **1.8 pp** across the entire merge-radius range 0.20-0.50 m (79.5% to 77.7%), while duplicates fall from 0.636 to 0.035 per frame. The radius governs duplicates, not close pairs, and there is no cheap recall here. See `rejected-ideas.md` and `TODO.md` A40.
+
+## TAKHeLiPeD's stage 2 against LFE: where a single frame reaches 77-80%
+
+`utils/stage2_probe.py` (`TODO.md` A59) runs one stage-2 network and decodes the *same* per-beam probabilities and votes several ways, then scores recall by range and by crowding at LFE's own false positives per frame.
+FROG `official` test, every 5th annotated frame, three no-temporal and three default checkpoints; people are counted once per frame in the breakdowns, the AP columns use the official labels.
+
+### The decoder is not the advantage -- ours is a handicap
+
+| decoder, same outputs | no-temporal (3 seeds) | default (3 seeds) | AP@0.3, no-temporal |
+| --- | --- | --- | --- |
+| DROW v2 vote grid, this project's | 77.27% | 76.75% | 75.79% |
+| official DR-SPAAM `nms_predicted_center`, 0.5 m | 79.88% | 79.42% | 76.58% |
+| the same, each detection at the probability-weighted mean of the votes it suppresses (`nms-mean`, chosen on val, 6 of 6) | **80.07%** | **79.61%** | **77.94%** |
+| the same NMS at 0.30 m | 71.80% | 71.01% | 69.93% |
+| LFE-Peaks' `find_peaks`, at the peak beam's endpoint | 71.26% | 71.14% | 68.65% |
+| the same peaks, at the peak beam's vote | 74.10% | 73.09% | 71.74% |
+
+NMS wins on all six checkpoints, +2.33 to +3.03 pp, and the comparison is paired: same weights, deterministic scoring.
+The vote grid scores a detection by the plain mean of every voter down to p = 0.001, so weak voters dilute well-supported people; NMS ranks by the best beam.
+At 0.30 m NMS keeps both legs' votes as two detections, which is why the suppression radius matters more than the scoring.
+The centre vote is worth ~3 pp over a surface point (peaks at the vote against peaks at the endpoint), which is LFE-Peaks' localisation.
+
+**The gap to LFE-Peaks, decomposed on fixed weights:** LFE-Peaks 65.11% -> our network through LFE-Peaks' own decoder 71.26 (+6.15, the network and its training) -> peaks at the vote 74.10 (+2.84, centre regression) -> the vote grid 77.27 (+3.17, aggregation over beams) -> NMS 79.88 (+2.61).
+About half of the lead is the output head and half the network; the network's +6.15 is a lower bound, since our probability map was trained for votes, not for peaks.
+
+### Where it wins and where it loses
+
+Recall at LFE's own false positives per frame at its published 0.3 threshold, no-temporal mean of three seeds (the default architecture agrees within ~2 pp in every row):
+
+| people | share of test | LFE-Peaks | stage 2 | LFE-PPN | stage 2 |
+| --- | --- | --- | --- | --- | --- |
+| at FP / frame | | 1.78 | 1.78 | 5.03 | 5.03 |
+| 1-4 m | 39% | 88.9-90.3% | 85.9-88.9% | 93.1-93.8% | 91.3-92.2% |
+| 5-6 m | 13% | 80.7% | 87.8% | 89.3% | 93.3% |
+| 6-8 m | 21% | 75.3% | 85.1% | 83.8% | 91.8% |
+| 8-10 m | 13% | **50.3%** | **83.2%** | **75.1%** | **93.8%** |
+| next person under 0.6 m | 9.3% | **83.2%** | **59.9%** | **84.0%** | **62.2%** |
+| next person 1-2 m | 30% | 78.6% | 92.8% | 87.1% | 98.7% |
+
+**Through the vote grid, the gain is far and isolated people and the loss is close pairs and 1-4 m.**
+**Both losses are the vote grid's**: through `nms-mean` the same outputs find 82.3% of close pairs (LFE-Peaks 83.2%) and beat LFE-Peaks in every range bin from 1 to 10 m (1-2 m 91.0%, 2-3 m 92.1%, 3-4 m 90.0%), giving some back far away and alone (8-10 m 77.7%, where aggregating few beams helps).
+The far-range gain matches Tier 0's reading -- the representation handles scale, and LFE's does not.
+Only 1.2% of test people have a neighbour under 0.3 m, so the close pairs are real people side by side, not one person annotated twice; test holds them at almost twice train's rate (9.3% against 4.9%).
+
+**A label rule that was first read as the close-pair cause, and is not.** `make_targets` lets the last-listed person within 0.6 m overwrite a beam's label and vote.
+On FROG train 6.9% of positive beams sit inside two people's radius and 3.3% vote for someone other than their nearest; the official DR-SPAAM code assigns each beam to the nearest person within 0.35 m (0.6 m is its wheelchair radius), where the share is 0.4%.
+`step2 --label-assign nearest` is still tested (A59 L1/L2), but the close-pair loss itself is the vote grid's.
+
+### What the input features can and cannot explain
+
+Eight of the ten `beam_features` -- each neighbour's endpoint along and across the beam -- are fixed linear combinations of the five ranges `r[i-2..i+2]`, because the angular steps are constant.
+So for a network whose stem is a learned linear map, they carry no information a 5-tap convolution on raw range lacks; the 1-NN advantage of Cartesian offsets above is an advantage for a *fixed* metric and does not transfer to a learned one.
+The one feature LFE's `1 - r/10` input cannot reproduce linearly is `r - median` over 11 deg, a depth-centring filter.
+Whether it matters is A59's arm F1, not yet run.
+
+**It goes blind up close.** The 11 deg window is sized for a person at 4 m, so nearer people fill it: a person's own beams read `r - median` ~0 for 98% of people at 0-1 m and 41% at 1-2 m, and only -0.19 m at 2-3 m (FROG test, every 50th frame).
+Over 33 deg the same beams read -1.2 m at 1-2 m and -2.5 m at 2-3 m.
+Its cost is unmeasured -- the 1-4 m deficit it was first blamed for is the vote grid's -- and a second, wider channel is A59's arm F3.
+
+### What it is not
+
+- **Not capacity against the cutouts:** 976,707 parameters against DROW3's 1,518,918 and DR-SPAAM's 1,978,054 (this project's ports).
+  Against LFE (53,258 / 170,903) the 6-18x gap is untested (A59 arm W).
+- **Not training compute:** the selected checkpoint has seen ~108k scans, against DR-SPAAM's 541k and LFE's up to 100 epochs.
+
+### Training duration moves it more than any architecture arm
+
+Test AP of the no-temporal seed 0 by epoch, every annotated frame (`checkpoints_three_horizon/step2_static/duration_curve_test.json`): 75.19% at 0.25, **77.60% at 1.00**, 76.54% at 2.00, 74.45% at 3.00, 72.36% at 4.00, precision rising from 50.9% to 69.4% while recall falls from 88.8% to 76.5%.
+The network memorises the two training recordings, and only validation on *other* recordings sees it.
+The published recipes cannot: DR-SPAAM trains a fixed 5 epochs, and LFE early-stops on loss over `split == 1` frames interleaved with its own training frames, for up to 100 epochs (`robotics-upo/2DLaserPeopleBenchmark`).
+LFE's segmentation trainer also never shuffles: `SegDataGenerator.__call__` shuffles a copy and iterates the original.
+**Whether this explains the gap to the baselines is A59's arm R**, our network trained on DR-SPAAM's recipe; the duration curve says it is a candidate of the right size, not that it is the answer.
+
+### What lifts it (`TODO.md` A59 phase 2)
+
+Three seeds per arm, every 5th annotated test frame, through `nms-mean` against a control at 79.75%: **mirror augmentation 81.49%** (+1.74, every seed above every control seed; it selects later checkpoints, epochs 2.25-2.75 against 0.75-2.0, and gains most at 8-10 m), nearest-person labels 80.89% (+1.14), dropout 0.1 80.45% (+0.71), a second median channel over 33 deg 80.23% (+0.48).
+Only mirror clears the three-seed bar; the others are leads.
+Together, on the trainer's new defaults: mirror + nearest labels 81.60%, **+ dropout 0.1 81.95%, averaged 82.20%** -- the best stage 2, and the best at AP@0.3 (80.43%) and on close pairs (86.0%), where mirroring alone loses some.
+The blind spot of the 11 deg window costs little once the decoder is right: the extra channel moves 1-4 m recall by +0.6 pp.
+
+Averaging the weights of a run's checkpoints helps on the same curve: epochs 0.5-1.5, chosen on val, score 78.53% against the selected checkpoint's 77.58% on seed 0; over eighteen runs it gains in fifteen, +0.66 pp on average, and most reliably with dropout (every seed).
 
 ## Caveats that apply to every number here
 

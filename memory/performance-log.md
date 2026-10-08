@@ -39,7 +39,7 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 | **FullScanTCN** | ours, novel | re-measuring | re-measuring | n/a |
 | **TemporalUNet** | ours, novel | re-measuring | re-measuring | n/a |
 | **TAKHeLiPeD, stages 1-2** (calibration network) | ours, novel | gap | **77.7%**⁴ | n/a |
-| **TAKHeLiPeD, stages 1-3** (+ object memory) | ours, novel | gap | **83.3%**⁵ | n/a |
+| **TAKHeLiPeD, stages 1-3** (+ object memory) | ours, novel | gap | **85.9%**⁹ *(old recipe 83.3%⁵)* | n/a |
 
 **DR-SPAAM `T=5` at 75.6% on FROG was the number to beat, and the object memory clears it by 7.7 pp.**
 That is ours measured here, three seeds, against theirs published, one paper figure — read footnote 5 and [`interpreting-evaluation.md`](interpreting-evaluation.md) before quoting it.
@@ -93,6 +93,7 @@ Degraded by construction, so it is recorded here as a footnote rather than repor
 ⁴ `TODO.md` A51's backbone, measured 2026-09-19 over the whole FROG `official` test split: **77.66%**, the no-temporal stage 2 (seed 0) whose decoded candidates the object memory in the row below rescores, at 2.620 false positives per frame and 88.8% recall at the 0.3 operating point.
 That backbone's own three-seed mean is **77.23%**; the default architecture, which keeps the coarse temporal convolution, means **77.92%** over three seeds. The pooled per-run spread across five three-seed arms is ~0.95 pp (`interpreting-evaluation.md`), so those two are a tie, not a ranking.
 Both are scored under the limit-beam decoding rule and the running time step adopted 2026-09-17.
+**The vote-grid decoder understates the network** (`TODO.md` A59): the same no-temporal weights through `nms-mean`, NMS chosen on val on all six checkpoints, score **80.07%** (three seeds, every 5th annotated frame; default architecture 79.61%). Mirror augmentation lifts it further, to **81.49%**, and the whole adopted recipe with dropout 0.1 and weight averaging to **82.20%** (three seeds each, every 5th annotated frame). Neither is this row's figure yet, because every stage-3 result rests on vote-grid candidates and moves only once stage 3 is retrained on the new ones.
 **The 76.9% this row used to carry is retired, not corrected**: a different backbone, measured before both of those changes (`CHANGELOG.md`, 2026-09-15 to 2026-09-17).
 ⁵ `TODO.md` A51's B0 baseline, measured 2026-09-19: stage 3 (object memory, 256 slots) trained by `step3a --chunk-s 1 10` on footnote 4's cached candidates with stage 2 frozen, **three seeds**; every test recording played from empty memory, every annotated frame.
 Test AP **82.96 / 83.17 / 83.88%** (mean **83.34**, sd **0.47**), AP at 0.3 m 81.36 / 81.52 / 82.17%, and recall at the candidates' own false-positive rate 92.2 / 92.5 / 92.7% against 88.8% -- **+5.68 pp over its own input**.
@@ -109,9 +110,9 @@ Two things still keep the FROG comparison from being perfectly clean once our nu
 - Our val is three held-out recordings; theirs is an interleaved per-frame holdout inside the training data.
   A different — and stricter — model-selection signal, on the same test set.
   This does not flatter us either way; it just means our early stopping optimises for cross-recording generalization rather than for interpolation.
-- Training budget differs hugely, **in our favour**: the FROG authors trained DROW3/DR-SPAAM for exactly 5 epochs at batch 8 (~67,700 minibatches), deliberately matched to DROW's scale.
-  A 100-epoch run at batch 4 over 102,356 frames is up to ~2.56M.
-  Beating them on ~38x the compute is a weaker claim than beating them at parity, and must be reported as such.
+- Training budget: the FROG authors trained DROW3/DR-SPAAM for exactly 5 epochs at batch 8 (~67,700 minibatches, 541k scans seen), deliberately matched to DROW's scale, and LFE for up to 100 epochs.
+  **TAKHeLiPeD's stage 2 sees fewer scans than any of them, not more**: its selected checkpoint sits at epoch ~1 at batch 32, ~3,400 minibatches and 108k scans, and its test AP *falls* with longer training (77.60% at epoch 1 to 72.36% at epoch 4, `TODO.md` A59).
+  The "~38x the compute, in our favour" this bullet used to carry described the retired full-scan architectures' 100-epoch runs and does not apply to the TAKHeLiPeD rows.
 
 The metric is not a caveat: `wp-AUC` and the papers' `AP` are the same trapezoidal-AUC-over-a-Hungarian-matched-PR-curve quantity, verified by direct source comparison against the official DR-SPAAM repo (`interpreting-evaluation.md`).
 Both sides now score the same `frog_16-41` test recording, which was not true before 2026-09-10.
@@ -248,6 +249,8 @@ Both LFE rows are otherwise real-data measurements (300 scans each) taken after 
 It is quoted only against the sensor: FROG's measured mean frame period is 24.99 ms (~40 Hz, corrected 2026-09-17 from a long-standing 26.2 Hz), so stages 1-2 plus the memory's 4.4 ms still stream in real time, with roughly a third of the budget spare. A proper single-frame latency benchmark of the whole detector, on one machine with the other rows, is `TODO.md` A50 phase 1.
 
 ⁷ Measured 2026-09-17 and confirmed across B0's three seeds (2026-09-19) by `memory_ms_per_frame`, timing one stream on the RX 9060 XT under ROCm: **4.42 ms** on the fixed end-of-run block, 4.5-4.6 ms across the seeds. Same caveat as footnote 6 -- not comparable with the CPU rows above.
+
+⁹ `TODO.md` A60 / A59 phase 3a, 2026-10-08: E13's stage 3 (no attention) on the no-temporal stage 2 trained with the adopted recipe -- `nms-mean` decoding, mirror augmentation, nearest-person labels, dropout 0.1, weight averaging (stage 2 alone 82.20%) -- three seeds, every 5th annotated test frame: **86.35 / 85.77 / 85.49%, mean 85.87**, AP@0.3 84.68%. Against E13 on the old recipe, 83.86%, +2.01. The A56 tracking comparison above is on the old recipe's candidates and has not been repeated.
 
 ⁸ `TODO.md` A56 E22, 2026-10-03: `tracking_baselines.py latency`, one raw scan at a time through stage 2, DROW vote decoding and the E13 memory, 2,000 frames of FROG test, median (p99). CPU on this machine with 4 threads: **8.60 + 1.76 + 9.12 = 19.53 ms (22.38)**, 8 threads 19.47 ms (22.77); RX 9060 XT under ROCm: **5.76 + 2.27 + 4.82 = 12.92 ms (15.11)**. The CPU figure is the one comparable with this column, and it fits FROG's 25 ms scan period at the 99th percentile. The memory's share here includes moving each frame's tensors from numpy, which footnote 7 leaves out.
 

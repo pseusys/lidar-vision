@@ -3,6 +3,7 @@
 Targets, the candidate cache, the stream sampler for truncated backpropagation, early stopping and the exchange rate.
 """
 import math
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,10 +16,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
 from follow_the_drow.detectors.three_horizon import MAX_RANGE_M, CalibrationNetwork, ObjectMemory, SlotRules
+from follow_the_drow.utils.drow_utils import _win2global
 from train_three_horizon import (
-    BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, clip_frames, clip_length, coast_targets, decode_votes, evaluate, evaluation_segments,
+    BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, clip_frames, clip_length, coast_targets, decode_votes, evaluate, evaluation_segments,
     FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
-    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, coasting_hits, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
+    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, coasting_hits, mirror_clips, mirror_people, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
 )
 
 
@@ -298,6 +300,79 @@ class TestCalibrationNetworkFor:
         assert rebuilt.max_range_m == MAX_RANGE_M and rebuilt.coarse.lags == [0, 8, 16, 24, 32]
 
 
+class TestCandidateCachePath:
+    """Stage-3 candidate caches are keyed by the stage-2 checkpoint they come from. Every run writes the same file names
+    (`step2_calibration.best.pth`, `.averaged.pth`), so the run's directory must be in the key: two runs whose checkpoints were
+    written in the same second would otherwise share one cache (`TODO.md` A60)."""
+
+    def test_two_runs_with_identically_named_checkpoints_get_different_caches(self, tmp_path):
+        a, b = tmp_path / "run_a" / "step2_calibration.averaged.pth", tmp_path / "run_b" / "step2_calibration.averaged.pth"
+        for p in (a, b):
+            p.parent.mkdir()
+            p.write_bytes(b"")
+            os.utime(p, (1_000_000_000, 1_000_000_000))
+        assert candidate_cache_path("test", 0, a) != candidate_cache_path("test", 0, b)
+
+    def test_lfe_candidates_need_no_checkpoint(self):
+        assert "lfe-peaks" in candidate_cache_path("val", 0, None).name
+
+
+class TestStage2Recipe:
+    """Stage 2's recipe, decided by the owner 2026-10-06 (`TODO.md` A59): nearest-person labels, mirror augmentation and dropout 0.1 by default,
+    each still switchable off for an ablation, and candidates decoded by `nms-mean` -- a detection scored by its best beam and placed
+    at the probability-weighted mean of the votes it suppresses."""
+
+    ANGLES = np.linspace(-np.pi / 2, np.pi / 2, 720, endpoint=False)
+
+    def test_step2_defaults_to_the_adopted_recipe(self):
+        args = build_parser().parse_args(["step2"])
+        assert args.label_assign == "nearest" and args.mirror is True and args.dropout == 0.1
+
+    def test_each_part_can_still_be_switched_off_for_an_ablation(self):
+        args = build_parser().parse_args(["step2", "--label-assign", "last", "--no-mirror"])
+        assert args.label_assign == "last" and args.mirror is False
+
+    def test_a_candidate_is_scored_by_its_best_beam_and_placed_at_its_votes_weighted_mean(self):
+        scan, prob, votes = np.full(720, 8.0), np.zeros(720), np.zeros((720, 2))
+        beams = np.arange(355, 365)
+        prob[beams] = np.linspace(0.1, 0.9, len(beams))
+        target = np.array([0.5, 4.0])
+        r_gt, phi_gt = np.hypot(*target), np.arctan2(-target[0], target[1])
+        dphi = phi_gt - self.ANGLES[beams]
+        votes[beams, 0], votes[beams, 1] = r_gt * np.sin(dphi), r_gt * np.cos(dphi) - scan[beams]
+        candidates, _ = decode_candidates(scan, self.ANGLES, prob, votes, TOP_P, MAX_RANGE_M)
+        assert candidates[0, 0] == pytest.approx(0.9)            # the vote grid would score the voters' mean, ~0.5
+        assert np.allclose(candidates[0, 1:], target, atol=1e-6)
+        assert len(candidates) == 1
+
+
+class TestMirror:
+    """`step2 --mirror` (`TODO.md` A59 arm M): a clip reversed beam for beam, with its people's bearings and its poses mirrored to
+    match, is a valid new training sample only if the targets built from it are exactly the mirror of the original targets."""
+
+    ANGLES = np.linspace(-np.pi / 2, np.pi / 2, 720, endpoint=False)      # FROG's grid: not symmetric about 0, by one beam
+
+    def test_mirrored_targets_are_the_mirror_of_the_targets(self):
+        from train import make_targets
+        rng = np.random.default_rng(0)
+        scan = rng.uniform(1.0, 8.0, 720)
+        people = np.array([[3.0, 0.4], [5.0, -0.9], [2.0, 1.2]])
+        labels, votes = make_targets(scan, self.ANGLES, {3: [tuple(p) for p in people]}, nearest=True)
+        m_labels, m_votes = make_targets(np.ascontiguousarray(scan[::-1]), self.ANGLES, {3: [tuple(p) for p in mirror_people(people, self.ANGLES)]}, nearest=True)
+        assert (m_labels == labels[::-1]).all()
+        assert np.allclose(m_votes[:, 0], -votes[::-1, 0], atol=1e-5) and np.allclose(m_votes[:, 1], votes[::-1, 1], atol=1e-5)
+
+    def test_a_mirrored_bearing_lands_on_the_mirrored_beam(self):
+        people = np.array([[4.0, self.ANGLES[100]]])
+        assert mirror_people(people, self.ANGLES)[0, 1] == pytest.approx(self.ANGLES[719 - 100])
+
+    def test_only_the_flagged_clips_are_mirrored(self):
+        ranges = torch.arange(2 * 3 * 4, dtype=torch.float32).view(2, 3, 4)
+        poses = torch.tensor([[[1.0, 2.0, 0.3]] * 3, [[1.0, 2.0, 0.3]] * 3])
+        m_ranges, m_poses = mirror_clips(ranges, poses, np.array([False, True]))
+        assert torch.equal(m_ranges[0], ranges[0]) and torch.equal(m_ranges[1], ranges[1].flip(-1))
+        assert torch.equal(m_poses[0], poses[0]) and m_poses[1, 0].tolist() == pytest.approx([1.0, -2.0, -0.3])
+
 class TestObjectMemoryFor:
     """A stage-3 checkpoint carries the rescoring arms it was trained with (`TODO.md` A51 T1, O1), so anything rebuilding it from
     disk must read them rather than assume the defaults -- a T1 checkpoint has no `rescore_gate` parameter at all."""
@@ -442,6 +517,60 @@ class TestDecodeVotes:
         best = max(detections)
         assert best[0] > 0.5
         assert math.hypot(best[1] - px, best[2] - py) < 0.1
+
+
+class TestNearestLabelAssignment:
+    """`make_targets(nearest=True)` gives each beam the label and vote of the nearest person within the radius, as the official
+    DR-SPAAM code's `_closest_detection` does; the default lets the last-listed person within the radius win, which on FROG train
+    sends 3.3% of positive beams to someone other than their nearest (`TODO.md` A59)."""
+
+    ANGLES = np.linspace(-np.pi / 2, np.pi / 2, 720, endpoint=False)
+    PEOPLE_XY = ((0.25, 3.0), (-0.25, 3.0))          # shoulder to shoulder, 0.5 m apart
+
+    def _scan(self):
+        """A wall at 3.2 m behind both people, every beam a surface the 0.6 m radius can reach from one of them or both."""
+        return np.full(720, 3.2)
+
+    def _polar(self):
+        return [(math.hypot(x, y), math.atan2(-x, y)) for x, y in self.PEOPLE_XY]
+
+    def _voted(self, scan, votes):
+        r, phi = _win2global(scan, self.ANGLES, votes[:, 0], votes[:, 1])
+        return np.stack([r * -np.sin(phi), r * np.cos(phi)], axis=1)
+
+    def test_every_positive_beam_votes_for_its_nearest_person(self):
+        from train import make_targets
+        scan = self._scan()
+        labels, votes = make_targets(scan, self.ANGLES, {3: self._polar()}, vote_collect_radius=0.6, nearest=True)
+        endpoints = np.stack([scan * -np.sin(self.ANGLES), scan * np.cos(self.ANGLES)], axis=1)
+        nearest = np.argmin(np.linalg.norm(endpoints[:, None] - np.array(self.PEOPLE_XY)[None], axis=-1), axis=1)
+        positive = labels == 3
+        assert positive.sum() > 0
+        assert np.allclose(self._voted(scan, votes)[positive], np.array(self.PEOPLE_XY)[nearest[positive]], atol=1e-6)
+
+    def test_the_default_still_lets_the_last_listed_person_win(self):
+        from train import make_targets
+        scan = self._scan()
+        labels, votes = make_targets(scan, self.ANGLES, {3: self._polar()}, vote_collect_radius=0.6)
+        endpoints = np.stack([scan * -np.sin(self.ANGLES), scan * np.cos(self.ANGLES)], axis=1)
+        in_both = (np.linalg.norm(endpoints[:, None] - np.array(self.PEOPLE_XY)[None], axis=-1) < 0.6).all(axis=1)
+        assert in_both.sum() > 0
+        assert np.allclose(self._voted(scan, votes)[in_both], self.PEOPLE_XY[1], atol=1e-6)
+
+    def test_the_radius_still_bounds_who_is_positive(self):
+        from train import make_targets
+        scan = self._scan()
+        wide, _ = make_targets(scan, self.ANGLES, {3: self._polar()}, vote_collect_radius=0.6, nearest=True)
+        narrow, _ = make_targets(scan, self.ANGLES, {3: self._polar()}, vote_collect_radius=0.4, nearest=True)
+        assert (narrow == 3).sum() < (wide == 3).sum()
+        assert ((narrow == 3) <= (wide == 3)).all()
+
+    def test_one_person_alone_gets_the_same_targets_either_way(self):
+        from train import make_targets
+        scan = self._scan()
+        last = make_targets(scan, self.ANGLES, {3: self._polar()[:1]})
+        nearest = make_targets(scan, self.ANGLES, {3: self._polar()[:1]}, nearest=True)
+        assert (last[0] == nearest[0]).all() and np.allclose(last[1], nearest[1])
 
 
 class TestJointStep:

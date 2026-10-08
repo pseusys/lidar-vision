@@ -38,6 +38,113 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A60 verdict: drop the coarse convolution; the retrained detector scores 85.87% (2026-10-08)
+
+*keywords:* A60, coarse convolution, CausalTemporalConv, verdict, drop, first-second recall, coarse_e2e.py, a60.json, phase 3a, 85.87
+
+Six E13 stage-3 runs on A59's adopted recipe, the no-temporal and the default (coarse) stage 2 at three seeds each, scored by `utils/coarse_e2e.py` (tests 9/9 and the full suite 673/673 first; it reproduces every run's recorded test AP exactly), FROG test, every 5th annotated frame for AP:
+
+| | AP | AP@0.3 | recall at 1.056 FP/frame | first-second recall |
+| --- | --- | --- | --- | --- |
+| no-temporal | **85.87%** | **84.68%** | **85.26%** | 75.11% |
+| default (coarse) | 85.01% | 83.82% | 84.61% | 75.71% |
+
+By the rule written before the runs -- keep only past +1.5 pp AP or +2 pp first-second recall -- **drop**: -0.87 and +0.59. Both predictions held. The coarse arm's stage-2 candidates are not worse (82.1-82.5% against 82.1-82.2%), but the memory adds less on top of them (+2.4 to +3.0 against +3.3 to +4.1). The no-temporal half is A59 phase 3a: **the full detector on the new recipe scores 85.87%, against 83.86% (E13) on the old one.** The removal itself awaits the owner.
+
+## A60 stopped by input to its console, resumed hidden (2026-10-07)
+
+*keywords:* A60, 0xC000013A, STATUS_CONTROL_C_EXIT, Kernel-Power 566, InputHid, -WindowStyle Hidden, watch_a59.sh, LAST_START
+
+The A60 chain and its stage-3 run ended at 2026-10-06 21:49 with no traceback and no driver event, the task's result `0xC000013A`, in the second of a Kernel-Power 566 session transition with `Reason InputHid` -- the signature of 2026-10-05's 18:14 stop too. The chain ran in a visible console (`schtasks /it`), so a keystroke into it or a close of it is the likely mechanism (`memory/gotchas.md`, new entry; `memory/long-running-tasks.md`'s template now launches hidden). Relaunched 2026-10-07 05:17 with `-WindowStyle Hidden`: the four finished steps were skipped and `stage3_static_s0` resumed at its 10 s stage. The event watcher now reads a chain's finish only after its latest START line, since the earlier STOPPED line would otherwise have switched its hang check off.
+
+## A60's scoring written, tests not yet run (2026-10-06)
+
+*keywords:* A60, coarse_e2e.py, trajectory_ages, first_second_recall, verdict, first-second recall, build_tracks, copied labels
+
+Owner's call: write it now and test it once A60 frees the machine. `utils/coarse_e2e.py` saves each A60 memory's test frames, links annotations into trajectories (no identities, no model; FROG's copied labels excluded), and applies A60's rule: drop the coarse convolution unless the default's mean AP beats the no-temporal mean by more than 1.5 pp or its first-second recall by more than 2 pp, every recall at the no-temporal arm's false-positive rate at 0.3. It reuses A56's `PrecisionRecall`, `subset`, `stride_frames`, `save`/`load` and coverage rule rather than repeating them, and replaces A60's earlier plan to define a first second by the memory's own slots, which would have measured the model by itself. 9 tests in `tests/test_coarse_e2e.py`, **written, not run**; ruff clean.
+
+## Dropout 0.1 and weight averaging adopted; averaging moves into the repo; A60 launched as resumable steps (2026-10-06)
+
+*keywords:* A59, A60, average_checkpoints.py, WINDOWS, window_members, average_window, step2_calibration.averaged.pth, --dropout default 0.1, run_a60.ps1, lidar_a60, resumable steps, watch_a59.sh
+
+**Owner's call**: A60's stage 2 is C1 averaged, so dropout 0.1 and weight averaging join stage 2's recipe. **Tests first** (4 in the new `tests/test_average_checkpoints.py`, 1 extended in `TestStage2Recipe`): `step2 --dropout` defaults to 0.1, and `utils/average_checkpoints.py` averages a run's periodic checkpoints over each of the six windows the A59 numbers used, chooses on val's 2,000-frame sample, and saves `step2_calibration.averaged.pth` with `averaging.json`. **Checked on real runs before use**: on the three C1 seeds it chose the scratch analysis's windows (1.00-2.00, 0.25-2.25, 1.00-2.00) with identical val AP to six decimals. 664 tests pass.
+
+**A60 launched as named steps** (owner: cancellable and resumable): `stage2_default_s{0,1,2}`, `average_default`, `stage3_{static,default}_s{0,1,2}`; each skipped when its output exists, training resuming from its state, every attempt logged under its own timestamp so a relaunch overwrites nothing (`checkpoints_three_horizon/run_a60.ps1`, task `lidar_a60`). The event watcher now takes a prefix, a chain, a stale limit and a log glob (`watch_a59.sh A60 '' 60 'a60_*'`), since a stage-3 cache build is silent for ~30 min.
+
+## A59 combination run: the recipe plus dropout, averaged, is the best stage 2 at 82.2% (2026-10-06)
+
+*keywords:* A59, combination, c0_recipe, c1_recipe_dropout01, weight averaging, a59_save_average.py, candidate_cache_path, run_a60.ps1
+
+No-temporal stage 2 on the new defaults, three seeds per arm, `nms-mean`, every 5th annotated test frame (same frames as every A59 arm):
+
+| | AP | averaged | AP@0.3 | close pairs | 8-10 m |
+| --- | --- | --- | --- | --- | --- |
+| control (old recipe) | 79.75% | -- | 77.46% | 83.6% | 78.2% |
+| mirror alone | 81.49% | -- | 79.29% | 79.4% | 81.4% |
+| C0: mirror + nearest labels | 81.60% | 81.90% | 79.52% | 81.6% | 80.2% |
+| **C1: C0 + dropout 0.1** | **81.95%** | **82.20%** | **80.43%** | **86.0%** | **81.7%** |
+
+All four written predictions held; by the rule written before the runs, C1 averaged is the stage 2 for `TODO.md` A60, the owner to confirm. Also: `candidate_cache_path` (2 tests) keys stage-3 caches by run directory, since every run writes identically named checkpoints; `checkpoints_three_horizon/a59_save_average.py` saves a run's val-chosen average as a loadable checkpoint and re-scores it; `run_a60.ps1` is prepared, not launched. 660 tests pass.
+
+## A59 recipe made the default; F3's code removed (2026-10-06)
+
+*keywords:* A59, decode_frame, nms_decode, beam_votes, NMS_DIST_M, VOTE_FLOOR, build_parser, --label-assign, --mirror, --no-mirror, -nms-mean cache key, median_windows_deg removed, n_beam_features removed
+
+**Tests first** (3 new in `TestStage2Recipe`, red before the change): `step2` now defaults to `--label-assign nearest` and `--mirror`, both still switchable (`--label-assign last`, `--no-mirror`) for ablations; and stage 2 decodes through `decode_frame`, which is `nms_decode(average=True)` -- moved, with `beam_votes`, from `utils/stage2_probe.py` into `utils/train_three_horizon.py` -- in `decode_candidates` (stage-3 caches, the joint step, `tracking_baselines.py`) and in `evaluate_calibration` (stage 2's val selection and test). Candidate caches are keyed `-nms-mean`, so every one rebuilds. `main()`'s parser is now `build_parser()`, so the defaults are testable. 658 tests pass.
+
+**What no longer reproduces from the command line:** every stage-2 and stage-3 number before this entry was decoded by the vote grid (`decode_votes`, still there and still the probe's `vote-grid` row) and trained without mirroring; re-scoring an old checkpoint now gives its `nms-mean` figure.
+
+**F3 removed, never committed, so recorded here:** `beam_features(median_windows_deg=)` took a list of window widths, computed `r - median` over each, and appended every window after the first as an extra channel after the ten (so the default network was unchanged); `n_beam_features(windows)` gave the stem's width; `CalibrationNetwork(median_windows_deg=)` stored it and `calibration_network` rebuilt it from the checkpoint's `args`; `step2 --median-windows-deg` set it; four tests pinned it, including one where a 15-degree object vanishes from the 11-degree channel and shows in a 33-degree one. `library/follow_the_drow/detectors/three_horizon.py`, `tests/test_three_horizon.py` and `utils/measure_prior_share.py` are back to their committed state; the `a59_f3_median33_s*` checkpoints no longer load.
+
+## A59 decided: stage 2 adopts the `nms-mean` decoder, mirror augmentation and nearest-person labels; F3 dropped (2026-10-06)
+
+*keywords:* A59, adoption, nms-mean, --mirror, --label-assign nearest, F3 rejected, median_windows_deg, stage 2 recipe
+
+**Owner's call**, on the evidence in the entry below: the three become stage 2's recipe, and the second median channel (F3, +0.48 pp) is rejected (`memory/rejected-ideas.md`). Dropout 0.1 and weight averaging stay leads for the combination run. The coarse-convolution end-to-end test (`TODO.md` A60) runs before stage 3 is retrained, so that the retrain need not carry a module that may be dropped. Making the defaults and removing F3's code follow in their own entry.
+
+## A59: what stage 2's score is made of -- the decoder is a handicap, the gain is far and isolated people, close pairs are a deficit (2026-10-05)
+
+*keywords:* A59, stage2_probe.py, decoder, vote grid, nms_predicted_center, nms-mean, peaks decoder, close pairs, make_targets, --label-assign, --label-radius, label overlap, duration_curve_test.json, weight averaging, SWA, 2DLaserPeopleBenchmark, SegDataGenerator shuffle, coarse convolution
+
+The owner asked two questions: are the coarse convolutions worth keeping beside the slots, and why does stage 2 alone, with no temporal input, beat DR-SPAAM and LFE -- and is it below its potential? Everything below is evaluation only, on existing checkpoints, except where marked.
+
+**Built, tests first:** `utils/stage2_probe.py` (12 tests in `tests/test_stage2_probe.py`): one network's per-beam outputs through seven decoders -- the vote grid and its probability-weighted variant, the official DR-SPAAM `nms_predicted_center` at 0.5 m and 0.30 m and a variant placing each detection at the weighted mean of the votes it suppresses, LFE-Peaks' `find_peaks` at the endpoint and at the vote -- and recall by range and crowding at LFE's own false positives per frame. `decode_votes(weighted_avg=)` passes the existing `votes_to_detections` option through, default off.
+
+**Also built, for the training arms the owner approved** (all opt-in, defaults reproduce every earlier run and checkpoint): `step2 --label-assign {last,nearest} --label-radius` (`make_targets(nearest=)`, the official DR-SPAAM assignment; 4 tests), `step2 --median-windows-deg` (`beam_features(median_windows_deg=)`, `n_beam_features`, extra `r - median` channels appended after the ten; 3 tests), and `step2 --mirror` (`mirror_clips`, `mirror_people`, exact on FROG's asymmetric grid; 3 tests, including that mirrored targets are the mirror of the targets). Queued as three chains through the Task Scheduler: a three-seed no-temporal control with a checkpoint every 0.25 epoch, then L1/L2, then F3/M/D, each followed by weight averaging and the probe (`TODO.md` A59).
+
+**A tooling lesson, written down in place of an apology:** `pytest` was run three times beside a live training run, against `memory/long-running-tasks.md`, once after the guard had said busy (`;` where `&&` belonged); the third hit an internal `MemoryError` at the end of a passing run. Nothing died, but `memory/gotchas.md` already says why it was wrong -- the limit is commit, not RAM, so nothing that imports torch runs beside a training job; the decoder probe, started two minutes before the control chain, broke the same rule until it finished. The later chains run strictly one after another, and the F3/M/D chain runs the full suite itself, as its gated first step, when nothing else is running.
+
+**Results** (FROG `official` test, every 5th annotated frame, `results/stage2_probe.json`):
+
+| | no-temporal, 3 seeds | default, 3 seeds |
+| --- | --- | --- |
+| vote grid (ours) | 77.27% | 76.75% |
+| DR-SPAAM NMS, 0.5 m | **79.88%** | **79.42%** |
+| LFE peaks / peaks at the vote | 71.26 / 74.10% | 71.14 / 73.09% |
+
+- **The decoder is a handicap**: NMS wins on all six checkpoints, +2.33 to +3.03 pp, paired. Our LFE reproductions on the same frames: 65.11 / 69.44%, against the published 65.6 / 69.2.
+- **Far and isolated people carry the gain over LFE; close pairs are a deficit.** At LFE-Peaks' 1.78 FP/frame, 8-10 m recall 50.3% -> 83.2%, people 1-2 m from the next 78.6 -> 92.8%, and people within 0.6 m of another 83.2 -> 59.9%; at 1-4 m stage 2 is 1-3 pp worse.
+- **The default architecture's coarse convolution changes no row** by more than ~2 pp, and ties at the AP level under both decoders.
+- **The gap to LFE-Peaks on fixed weights**: 65.11% -> our network through LFE's own peak decoder 71.26 (+6.15) -> peaks at the vote 74.10 (+2.84) -> vote grid 77.27 (+3.17) -> NMS 79.88 (+2.61); half the lead is the output head.
+- **The depth-centring channel is blind up close**: over its 11 deg window a person's own beams read `r - median` ~0 for 98% of people at 0-1 m and 41% at 1-2 m; over 33 deg the signal survives (A59 arm F3). Its cost to recall is unmeasured: the 1-4 m deficit it was first matched to is the vote grid's.
+- **The three-seed no-temporal control on current code** (`a59_static_ckpt_s*`, a checkpoint every 0.25 epoch): 77.29 / 77.18 / 76.60%, mean 77.02 (sd 0.37), every annotated test frame, against the earlier 77.23.
+- **Label assignment, trained at three seeds** (`a59_l1_nearest_s*`, `a59_l2_nearest_s*`): L1 (nearest within 0.6 m) 78.64 / 78.66 / 77.68%, L2 (within 0.4 m) 77.37 / 78.55 / 78.56%, +1.31 and +1.14 pp over the control through the vote grid, every annotated frame. Under `nms-mean` (every 5th frame): control 79.75, **L1 80.89 (+1.14)**, L2 80.48 (+0.73); AP@0.3 +1.3 / +1.6. Every L1 seed beats every control seed under both NMS decoders, yet no arm clears the ~1.5 pp three-seed bar. Predicted close-pair recall >= 70% missed (64.7% through the vote grid). Recommended for adoption, the owner's call.
+- **Weight averaging at three seeds, scored**: predicted +0.5 to +1.0 on every seed, missed -- mean +0.54 over nine runs, two of them negative (control +0.96 / -0.27 / +0.82, L1 +0.36 / -0.75 / +0.26, L2 +2.09 / +0.89 / +0.48). L2 averaged reaches 79.30% (79.39 / 79.38 / 79.12) through the vote grid, +1.69 over the averaged control, a comparison not registered in advance.
+- **Phase 1 decoder choice, scored**: `nms-mean` (NMS placing each detection at the probability-weighted mean of the votes it suppresses) wins on val on all six checkpoints and gains +2.60 to +3.15 pp on test (no-temporal **80.07%**, AP@0.3 77.94). Predicted, and missed: that NMS would keep the close-pair deficit. It recovers it (59.9% -> 82.3%, LFE-Peaks 83.2%) and erases the 1-4 m deficit, so **both were the vote grid merging neighbours**; it gives some back at 8-10 m (83.2 -> 77.7%).
+- **`make_targets`' label rule was first read as the close-pair cause** (the decoder result above says otherwise): the last-listed person within 0.6 m wins a beam, so on FROG train 3.3% of positive beams vote for someone other than their nearest (6.9% sit in two radii); at DR-SPAAM's nearest-within-0.35 m it is 0.4%.
+- **Training duration**: the no-temporal seed 0 scores 75.19 / 77.60 / 76.54 / 74.45 / 72.36% at epochs 0.25 / 1 / 2 / 3 / 4 on every annotated test frame (`step2_static/duration_curve_test.json`), precision 43.0% -> 69.4%, recall 90.5% -> 76.5%.
+- **Weight averaging**: the mean of epochs 0.5-1.5, chosen on val, scores 78.53% against the selected checkpoint's 77.58% (stride 5); every window tried gains +0.52 to +0.95 (`results/swa_step2_static.json`, a scratch analysis).
+- **Neither capacity against the cutouts nor compute**: 976,707 parameters against our DROW3 port's 1,518,918 and DR-SPAAM's 1,978,054; the selected checkpoint has seen ~108k scans against DR-SPAAM's 541k.
+- **Read from the FROG authors' code** (`robotics-upo/2DLaserPeopleBenchmark`): LFE's training code is published, contrary to `TODO.md` A32c (corrected); its segmentation trainer never shuffles (`SegDataGenerator.__call__` iterates the unshuffled list) and early-stops on loss over frames interleaved with its training frames; LFE-PPN trains only on scans with at least 3 people; DR-SPAAM's FROG numbers come from the official repository's NMS decoder.
+
+**Further arms, and a pause** (vote grid, every annotated test frame, control mean 77.02): F3 77.20 / 78.15 / 76.82% (+0.37, noise); M 78.13 / 78.38 / 77.01% (+0.82, under the bar; selected later, epochs 2.25 / 2.25 / 2.75); D seeds 0-1 78.96 / 78.07%. **The owner paused the tests at ~18:14**; D seed 2 resumes from epoch 1.75 and F3/M/D's averaging and probe are still to run (`checkpoints_three_horizon/run_a59_arms_resume.ps1`, `TODO.md` A59).
+
+**Resumed 2026-10-06 04:17 and finished 05:59.** D 78.96 / 78.07 / 77.91% (+1.29; seed 2 resumed, a different draw); averaged, D 79.50% (+1.89 over the averaged control, every seed gaining), M 78.39, F3 78.13. **Under `nms-mean` (every 5th frame): control 79.75, L1 80.89, L2 80.48, F3 80.23, M 81.49 (81.48 / 81.95 / 81.03), D 80.45.** Mirror augmentation is the one arm that clears the three-seed bar, +1.74, every seed above every control seed; it gains at 8-10 m (+3.2 pp recall) and gives some back on close pairs (-4.2). F3 missed its prediction (1-4 m recall +0.6 against +1 to +3). Twelve arm-decoder comparisons, so the rest are leads. Recommended: adopt `nms-mean`, mirror and nearest labels, drop F3, run the combination next (`TODO.md` A59).
+
+**Coarse convolution:** owner's call -- test it end to end and drop it if it earns nothing, recording where it lived; planned with a written decision rule as `TODO.md` A60, which replaces the §D item.
+
+**Docs:** `memory/static-detector-diagnosis.md` (new section), `memory/detector-architectures.md`, `memory/performance-log.md` (the "~38x the compute in our favour" caveat does not apply to TAKHeLiPeD: it sees fewer scans than any baseline), `memory/commands.md`, `memory/keywords.md`, `TODO.md` A59 (new), A32c and the §D coarse-horizon item (unblocked, planned).
+
 ## A58: a merge radius on the memory's output buys nothing -- negative (2026-10-05)
 
 *keywords:* A58, merge radius, NMS, double report, merge_detections, drop_duplicate_annotations, double_report_anatomy, tracking_baselines.py merge, oracle bound, coasting slot beside a candidate

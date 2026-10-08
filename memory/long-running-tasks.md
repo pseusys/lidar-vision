@@ -43,7 +43,7 @@ reached the end of its 1 s stage and stopped at 18:11, the minute the session tu
 
 ```powershell
 $past = (Get-Date).AddMinutes(-5).ToString("HH:mm")     # a start time already gone, so the trigger never fires by itself
-schtasks /create /tn "lidar_<item>" /tr "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$chain`"" /sc once /st $past /it /f
+schtasks /create /tn "lidar_<item>" /tr "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$chain`"" /sc once /st $past /it /f
 schtasks /run   /tn "lidar_<item>"
 ```
 
@@ -52,7 +52,7 @@ A56 tasks then fired a second time at 23:59, re-running two finished chains over
 logs were truncated). `schtasks` warns that a past `/st` "may not run"; that is the point, since `/run` starts it now.
 Delete the task once its chain is done.
 
-`/it` matters: the task then runs **in the logged-on user's interactive session**, which is what gives it the GPU. A task
+`-WindowStyle Hidden` matters too: without it the chain's console sits on the desktop, and a keystroke into it or a close of it ends the chain with `0xC000013A` (`gotchas.md`, twice in 2026-10). `/it` matters: the task then runs **in the logged-on user's interactive session**, which is what gives it the GPU. A task
 without it can land in session 0 and find no device. Verified 2026-10-02: the trainer came up under the scheduler reporting
 `CUDA / ROCm: AMD Radeon RX 9060 XT (1 device(s))`.
 

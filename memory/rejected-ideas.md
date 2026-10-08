@@ -7,6 +7,18 @@ Open questions live in [`../TODO.md`](../TODO.md); this file is for settled ones
 
 Each entry states what was proposed, what was measured, and what new evidence would be needed to reopen it.
 
+## A second, wider depth-centring channel in stage 2 (TODO.md A59 arm F3)
+
+*keywords: A59, F3, median_windows_deg, --median-windows-deg, MEDIAN_WINDOW_DEG, range minus median, blind spot, 33 deg*
+
+**Idea.** `beam_features`' `r - median` channel uses an 11 deg window, sized for a person at 4 m; nearer people fill it, so a person's own beams read ~0 for 98% of people at 0-1 m and 41% at 1-2 m. Add a second channel over 33 deg, where the signal survives.
+
+**What was measured** (2026-10-05, three seeds on the no-temporal stage 2, FROG test every 5th annotated frame): AP 80.23% through `nms-mean` against the control's 79.75% (+0.48), 77.43 against 77.10 through the vote grid; 1-4 m recall +0.6 pp, against a predicted +1 to +3.
+
+**Why rejected (owner's call, 2026-10-06): the blind spot is real in the input and costs almost nothing in the output.** The 1-4 m deficit it was meant to fix turned out to be the vote-grid decoder's, and once the decoder is right the network finds near people from the neighbour offsets and the 3-tap context alone.
+
+**Reopen if** a dataset puts most people within 2 m of the sensor (a service robot in a corridor), where the blind spot covers the bulk of the data rather than 14% of it.
+
 ## A merge radius on the object memory's output (TODO.md A58)
 
 *keywords: A58, merge radius, NMS, double report, duplicate detection, coasting slot beside a candidate, merge_detections, oracle bound*

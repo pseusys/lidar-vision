@@ -392,6 +392,6 @@ that even an oracle removing every redundant detection buys only +0.4-0.55 pp, a
   has sd 0.29 (bar 0.86) and coasting precision sd 2.73 (bar 8.19) over B0's three seeds. Re-judged against those, T1's recall
   gain (+0.88) clears and its coasting gain (+6.72) does not.
 - **Coarse convolutions were excluded throughout**, so nothing here says how the slots interact with a temporal stage 2; that is
-  `TODO.md` §D's question and A51 phase 4's job.
+  `TODO.md` A60's question, answered 2026-10-08: on the new recipe the memory adds +3.3 to +4.1 pp over a no-temporal stage 2 and +2.4 to +3.0 over a coarse one, ending 85.87% against 85.01%, so the convolution is dropped.
 - **Only FROG.** DROW and JRDB are A49.
 - **The oracle bound is an interpolation bound, not an achievable target**: it assumes a perfect decision about when to bridge a gap, which is exactly what stage 3 has to learn.

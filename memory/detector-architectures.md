@@ -50,6 +50,16 @@ It breaks the lifecycle above in two places: there is no `T`-scan window (one sc
 - **Still there, still conditional:** room coordinates win only below ~0.02 m/s of odometry drift (D1, E2); training with jittered poses is the untried repair (`../TODO.md` E11).
 Design rationale: [`../docs/PROPOSAL.md`](../docs/PROPOSAL.md). Evidence for each slot decision, or an explicit note that there is none: [`slot-design-evidence.md`](slot-design-evidence.md). Numbers: [`performance-log.md`](performance-log.md).
 
+**Stage 2's recipe, decided 2026-10-06 (owner, `../TODO.md` A59):** decode with `nms-mean` (NMS over the beams' votes, each detection at the probability-weighted mean of the votes it suppresses), train with mirror augmentation, and assign each training beam to its nearest person within 0.6 m. Together these take the no-temporal stage 2 from 77.1% to ~81.5% on FROG test; a second median channel (F3) was tested and dropped (`rejected-ideas.md`). **With dropout 0.1 and weight averaging, also adopted 2026-10-06** (`step2 --dropout 0.1 --checkpoint-every 0.25`, then `utils/average_checkpoints.py`), the no-temporal stage 2 reaches **82.20%**. **They are the trainer's defaults since 2026-10-06** (`decode_frame`, `step2 --label-assign nearest --mirror --dropout 0.1`; averaging is its own step); every stage-3 number until A59 phase 3a rests on the old recipe -- vote grid, no mirror, last-listed labels.
+
+**What A59 found about stage 2 (2026-10-05)** (`static-detector-diagnosis.md`, last section):
+
+- **Its decoder understates it.** The official DR-SPAAM decoder (`nms_predicted_center`, 0.5 m) on the same outputs scores +2.33 to +3.03 pp higher on all six stage-2 checkpoints.
+  The vote grid stays the default until a decoder is chosen on val and stage 3 is retrained on the new candidates.
+- **Its gain over LFE is far and isolated people.** Through the vote grid it also loses close pairs (60% recall against LFE's 83%) and 1-4 m, but both are the vote grid merging neighbours: through `nms-mean` (chosen on val on all six) it reaches 82% of close pairs and beats LFE at every range, at **80.07%** AP.
+- **The coarse convolution: dropped by A60's rule (2026-10-08)** -- end to end, on the new recipe, three seeds each, the default architecture scores 85.01% against the no-temporal 85.87%, and +0.59 pp on people in their first second against a +2 pp bar (`../TODO.md` A60). Its removal awaits the owner. Before that measurement it already earned nothing measured: a tie at stage 2 under either decoder, the same recall in every range and crowding bin, at +20.6% parameters, ~3.3x the training time, a 1.8 MB streaming cache and odometry inside stage 2.
+  The end-to-end test, with the rule that drops it, is `../TODO.md` A60; until it runs, the no-temporal stage 2 -- one frame per call -- is the one every stage-3 result uses.
+
 **Two architecture names appear in the logs.** With `--fine-lags` removed on 2026-09-17, the runs formerly called "no-fine" are the **default** architecture (coarse convolution only) and "static" is **no-temporal** (`--coarse-lags 0`); directory names keep the old words. The B0 chain and the A51 slot ablations sit on the no-temporal stage 2, by the owner's call.
 
 ## The three earlier full-scan architectures — superseded

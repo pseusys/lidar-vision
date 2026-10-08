@@ -363,7 +363,7 @@ def _freeze_backbone(net) -> None:
 # ---------------------------------------------------------------------------
 
 def make_targets(scan: np.ndarray, angles: np.ndarray,
-                 gt_per_class: dict, vote_collect_radius: float = 0.6):
+                 gt_per_class: dict, vote_collect_radius: float = 0.6, nearest: bool = False):
     """
     Compute per-beam class labels and vote-offset targets.
 
@@ -373,6 +373,8 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
     angles        : (N,)  beam angles in radians
     gt_per_class  : {class_id: [(r, phi), ...]}  1=wc, 2=wa, 3=wp
     vote_collect_radius : radius (m) around GT that marks a beam as positive
+    nearest       : give each beam the nearest annotation within the radius, as the official DR-SPAAM code does; the default
+                    lets the last-listed one within it win, which in a crowd sends a beam's vote to a neighbour (TODO.md A59)
 
     Returns
     -------
@@ -387,6 +389,21 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
 
     beam_x = scan * -np.sin(angles)
     beam_y = scan *  np.cos(angles)
+
+    if nearest:
+        anns = [(class_id, r_gt, phi_gt) for class_id, class_anns in sorted(gt_per_class.items()) for r_gt, phi_gt in class_anns]
+        if not anns:
+            return labels, vote_targets
+        cls, r_gt, phi_gt = (np.array(column) for column in zip(*anns, strict=True))
+        dist = np.hypot(r_gt * -np.sin(phi_gt) - beam_x[:, None], r_gt * np.cos(phi_gt) - beam_y[:, None])
+        owner = dist.argmin(axis=1)
+        mask = dist[np.arange(N), owner] < vote_collect_radius
+        owner = owner[mask]
+        labels[mask] = cls[owner]
+        dphi = phi_gt[owner] - angles[mask]
+        vote_targets[mask, 0] = r_gt[owner] * np.sin(dphi)
+        vote_targets[mask, 1] = r_gt[owner] * np.cos(dphi) - scan[mask]
+        return labels, vote_targets
 
     for class_id, anns in sorted(gt_per_class.items()):
         for r_gt, phi_gt in anns:
