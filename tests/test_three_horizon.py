@@ -19,7 +19,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
 from follow_the_drow.detectors.three_horizon import (
-    N_BEAM_FEATURES, CalibrationNetwork, CausalTemporalConv, ObjectMemory, SlotRules, align_sectors, beam_features, fold_legacy_calibration,
+    N_BEAM_FEATURES, CalibrationNetwork, ObjectMemory, SlotRules, beam_features, fold_legacy_calibration,
     free_range_profile, initial_slots, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
     sensor_to_world, visibility_feature, world_to_sensor,
 )
@@ -109,74 +109,6 @@ class TestBeamFeatures:
 
 def _pose(x, y, th):
     return torch.tensor([[x, y, th]], dtype=torch.float32)
-
-
-class TestAlignSectors:
-
-    def test_rotation_by_whole_sectors_is_an_index_shift_with_empty_sectors_zero(self):
-        angles = _angles(720)                      # 90 sectors of 2 degrees
-        feats = torch.arange(90, dtype=torch.float32).view(1, 1, 90)
-        out = align_sectors(feats, _pose(0, 0, 0), _pose(0, 0, math.radians(10)), angles)
-        assert out.shape == (1, 4, 90)
-        assert out[0, 0, 0].item() == 5.0
-        assert out[0, 0, 84].item() == 89.0
-        assert (out[0, 0, 85:] == 0).all()
-
-    def test_pose_channels_hold_the_past_pose_in_the_current_frame(self):
-        angles = _angles(720)
-        out = align_sectors(torch.zeros(1, 1, 90), _pose(1, 0, 0), _pose(0, 0, math.pi / 2), angles)
-        # past pose is 1 m ahead in world x; the robot now faces world y, so that point is 1 m to its right
-        assert out[0, 1:, 0].tolist() == pytest.approx([0.0, -1.0, -math.pi / 2], abs=1e-6)
-        assert torch.allclose(out[0, 1:], out[0, 1:, :1].expand(-1, 90))
-
-
-def _walk(batch, steps, seed):
-    g = torch.Generator().manual_seed(seed)
-    moves = torch.randn(batch, steps, 3, generator=g) * torch.tensor([0.02, 0.01, 0.01])
-    return moves.cumsum(dim=1)
-
-
-class TestCausalTemporalConv:
-    """The coarse convolution over bottleneck sectors; the per-beam fine convolution was removed 2026-09-17 (`TODO.md` A50)."""
-
-    def _setup(self, steps=40):
-        torch.manual_seed(0)
-        conv = CausalTemporalConv(4, 6, [0, 8, 16, 24, 32], _angles(36), kernel_size=3)
-        return conv, torch.randn(2, steps, 4, 12), _walk(2, steps, seed=1)
-
-    def test_streaming_reproduces_the_clip_frame_by_frame(self):
-        conv, x, poses = self._setup()
-        clip = conv(x, poses)
-        cache = None
-        for t in range(x.shape[1]):
-            y, cache = conv.step(x[:, t], poses[:, t], cache)
-            assert torch.allclose(y, clip[:, t], atol=1e-5), t
-
-    def test_frames_before_the_clip_read_its_first_frame(self):
-        conv, x, poses = self._setup(steps=1)
-        repeated = conv(x.expand(-1, 3, -1, -1), poses.expand(-1, 3, -1))
-        assert torch.allclose(conv(x, poses)[:, 0], repeated[:, 2], atol=1e-5)
-
-    def test_a_future_frame_never_changes_an_earlier_output(self):
-        conv, x, poses = self._setup(steps=10)
-        before = conv(x, poses)
-        x2 = x.clone()
-        x2[:, 7] += 1.0
-        after = conv(x2, poses)
-        assert torch.allclose(before[:, :7], after[:, :7])
-        assert not torch.allclose(before[:, 7], after[:, 7])
-
-    def test_an_empty_cache_starts_over_exactly(self):
-        conv, x, poses = self._setup(steps=20)
-        cache = None
-        for t in range(10):
-            _, cache = conv.step(x[:, t], poses[:, t], cache)
-        cache = None
-        fresh = None
-        for t in range(10, 20):
-            y, cache = conv.step(x[:, t], poses[:, t], cache)
-            y_fresh, fresh = conv.step(x[:, t], poses[:, t], fresh)
-            assert torch.equal(y, y_fresh)
 
 
 class TestFrames:
@@ -584,96 +516,77 @@ def _small_network():
     return CalibrationNetwork(_angles(48), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1).eval()
 
 
-def _scans(steps, n=48, seed=0):
+def _scans(frames, n=48, seed=0):
     g = torch.Generator().manual_seed(seed)
-    return torch.rand(1, steps, n, generator=g) * 4 + 1, _walk(1, steps, seed=seed + 1)
+    return torch.rand(frames, n, generator=g) * 4 + 1
 
 
 class TestCalibrationNetwork:
 
-    def test_streaming_reproduces_the_clip_frame_by_frame(self):
-        net = _small_network()
-        ranges, poses = _scans(40)
-        state, streamed = None, []
-        with torch.no_grad():
-            for t in range(40):
-                logit, votes, features, state = net.step(ranges[:, t], poses[:, t], state)
-                streamed.append((logit, votes, features))
-            for t in (0, 1, 5, 20, 39):
-                for got, want in zip(net(ranges[:, :t + 1], poses[:, :t + 1]), streamed[t]):
-                    assert torch.allclose(got, want, atol=1e-4), t
-
-    def test_the_clip_reads_exactly_the_frames_its_taps_need(self):
-        # last frame 39; coarse taps 39, 31, 23, 15, 7, each reading only its own frame
-        net = _small_network()
-        ranges, poses = _scans(40)
-        with torch.no_grad():
-            base = net(ranges, poses)[0]
-            for frame, used in ((35, False), (4, False), (30, False), (5, False), (31, True), (7, True)):
-                changed = ranges.clone()
-                changed[:, frame] += 1.0
-                assert torch.allclose(net(changed, poses)[0], base) != used, frame
-
     def test_readings_beyond_the_range_limit_are_the_same_as_no_return(self):
         """`max_range_m` is the model's configurable range: past it, a real return and a missing one are indistinguishable."""
-        ranges, poses = _scans(3)
+        ranges = _scans(3)
         far, missing = ranges.clone(), ranges.clone()
-        far[:, :, 10] = 14.0
-        missing[:, :, 10] = float("inf")
+        far[:, 10] = 14.0
+        missing[:, 10] = float("inf")
         with torch.no_grad():
             short = _small_network()
-            assert torch.allclose(short(far, poses)[0], short(missing, poses)[0])
+            assert torch.allclose(short(far)[0], short(missing)[0])
             torch.manual_seed(0)
             long = CalibrationNetwork(_angles(48), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, max_range_m=20.0).eval()
-            assert not torch.allclose(long(far, poses)[0], long(missing, poses)[0])
+            assert not torch.allclose(long(far)[0], long(missing)[0])
 
-    def test_output_has_a_score_a_vote_and_decoder_features_per_beam(self):
-        net = _small_network()
-        ranges, poses = _scans(3)
-        logit, votes, features = net(ranges.expand(2, -1, -1), poses.expand(2, -1, -1))
-        assert logit.shape == (2, 48) and votes.shape == (2, 48, 2) and features.shape == (2, 8, 48)
+    def test_frames_in_a_batch_do_not_see_each_other(self):
+        ranges = _scans(4)
+        with torch.no_grad():
+            together = _small_network()(ranges)
+            alone = [_small_network()(ranges[i:i + 1]) for i in range(4)]
+        for i, single in enumerate(alone):
+            for got, want in zip(single, together, strict=True):
+                assert torch.allclose(got[0], want[i], atol=1e-5)
 
 
 # ---------------------------------------------------------------- feedback: memory drawn into stage 2's bottleneck
 
-class TestTemporalAblations:
-    """`TODO.md` A50 phase 2 removes the coarse convolution by passing `0` as its whole lag list. The conv then spans only the
-    current frame, so the test is not that the network still builds but that it has genuinely stopped reading its history."""
+class TestStage2WithoutTime:
+    """The coarse temporal convolution was removed 2026-10-08 (`TODO.md` A60: end to end it lost 0.87 pp). Every stage-3 result
+    rests on no-temporal checkpoints, whose one-lag `coarse.conv` was a plain 3-tap convolution across bottleneck sectors; it is now
+    `context`, and such a checkpoint must load into today's network and compute exactly what it did. The fixture was written by the
+    code at commit e76aa94 (`tests/fixtures/make_no_temporal_stage2.py`). A checkpoint whose convolution read past frames cannot be
+    carried over, and the error says where the code that can still run it lives."""
 
-    def _net(self, coarse):
-        torch.manual_seed(0)
-        return CalibrationNetwork(_angles(48), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, coarse_lags=coarse).eval()
+    FIXTURE = Path(__file__).parent / "fixtures" / "no_temporal_stage2.pt"
 
-    def _same_present_different_past(self):
-        """Two clips sharing their last frame and differing in every earlier one."""
-        ranges, poses = _scans(6)
-        other, _ = _scans(6, seed=7)
-        return ranges, torch.cat([other[:, :-1], ranges[:, -1:]], dim=1), poses
+    def _net(self, saved, prior_channels):
+        net = CalibrationNetwork(saved["angles"], channels=(4, 8, 16), blocks=(1, 1, 1), bottleneck_blocks=1, expansion=2, prior_channels=prior_channels).eval()
+        load_calibration_weights(net, saved["plain" if not prior_channels else "with_prior"]["state"])
+        return net
 
-    def test_lag_zero_alone_makes_the_network_ignore_its_history(self):
-        net = self._net((0,))
-        ranges, rewritten, poses = self._same_present_different_past()
+    def test_a_no_temporal_checkpoint_from_before_the_removal_computes_exactly_what_it_did(self):
+        saved = torch.load(self.FIXTURE, weights_only=False)
         with torch.no_grad():
-            assert torch.allclose(net(ranges, poses)[0], net(rewritten, poses)[0], atol=1e-5)
+            got = self._net(saved, 0)(saved["ranges"])
+        for g, want in zip(got, (saved["plain"]["logit"], saved["plain"]["votes"], saved["plain"]["features"]), strict=True):
+            assert torch.equal(g, want)
 
-    def test_the_coarse_convolution_reads_history(self):
-        net = self._net((0, 2, 4))
-        ranges, rewritten, poses = self._same_present_different_past()
+    def test_so_does_one_with_a_trained_memory_prior(self):
+        saved = torch.load(self.FIXTURE, weights_only=False)
         with torch.no_grad():
-            assert not torch.allclose(net(ranges, poses)[0], net(rewritten, poses)[0], atol=1e-5)
+            got = self._net(saved, 2)(saved["ranges"], saved["prior"])
+        for g, want in zip(got, (saved["with_prior"]["logit"], saved["with_prior"]["votes"], saved["with_prior"]["features"]), strict=True):
+            assert torch.equal(g, want)
 
-    def test_repeating_lag_zero_keeps_the_width_without_the_history(self):
-        """The capacity-matched control `TODO.md` A50 phase 2 recommends for the coarse ablation: tapping the current frame five
-        times leaves the convolution as wide as five real lags, so a fall in AP cannot be blamed on the lost capacity instead of
-        the lost time span."""
-        matched = self._net((0, 0, 0, 0, 0))
-        single = self._net((0,))
-        spanning = self._net((0, 8, 16, 24, 32))
-        assert matched.coarse.conv.in_channels == 5 * single.coarse.conv.in_channels
-        assert matched.coarse.conv.in_channels < spanning.coarse.conv.in_channels      # the real lags also carry pose channels
-        ranges, rewritten, poses = self._same_present_different_past()
-        with torch.no_grad():
-            assert torch.allclose(matched(ranges, poses)[0], matched(rewritten, poses)[0], atol=1e-5)
+    def test_a_checkpoint_whose_convolution_read_past_frames_is_refused_with_where_to_run_it(self):
+        state = {k: v.clone() for k, v in _small_network().state_dict().items()}
+        c2 = state["context.weight"].shape[0]
+        del state["context.weight"], state["context.bias"]
+        state["coarse.conv.weight"], state["coarse.conv.bias"] = torch.randn(c2, 5 * c2 + 4 * 3, 3), torch.randn(c2)
+        with pytest.raises(ValueError, match="e76aa94"):
+            load_calibration_weights(_small_network(), state)
+
+    def test_one_scan_in_needs_no_pose_and_no_state(self):
+        logit, votes, features = _small_network()(_scans(2))
+        assert logit.shape == (2, 48) and votes.shape == (2, 48, 2) and features.shape == (2, 8, 48)
 
 
 class TestLegacyCheckpoints:
@@ -695,7 +608,7 @@ class TestLegacyCheckpoints:
 
     def test_a_one_tap_checkpoint_folds_exactly(self):
         net, state = self._legacy_state(taps=1)
-        features = beam_features(_scans(1)[0][:, 0], _angles(48))                     # [1, 10, 48]
+        features = beam_features(_scans(1), _angles(48))                              # [1, 10, 48]
         legacy_input = torch.cat([features[:, :2], torch.ones_like(features[:, :1]), features[:, 2:]], dim=1)
         stem = torch.nn.functional.conv1d(legacy_input, state["stem.weight"], state["stem.bias"])
         want = torch.nn.functional.conv1d(stem, state["fine.conv.weight"], state["fine.conv.bias"])
@@ -722,30 +635,30 @@ class TestCalibrationDropout:
         return CalibrationNetwork(_angles(48), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, dropout=dropout)
 
     def test_the_default_leaves_train_and_eval_identical(self):
-        net, (ranges, poses) = self._net(0.0), _scans(6)
+        net, ranges = self._net(0.0), _scans(6)
         with torch.no_grad():
             net.train()
-            trained = net(ranges, poses)
+            trained = net(ranges)
             net.eval()
-            evaluated = net(ranges, poses)
+            evaluated = net(ranges)
         for got, want in zip(trained, evaluated):
             assert torch.allclose(got, want, atol=1e-6)
 
     def test_it_perturbs_the_logits_in_train_mode_and_never_in_eval(self):
-        net, (ranges, poses) = self._net(0.5), _scans(6)
+        net, ranges = self._net(0.5), _scans(6)
         with torch.no_grad():
             net.train()
-            first, second = net(ranges, poses)[0], net(ranges, poses)[0]
+            first, second = net(ranges)[0], net(ranges)[0]
             net.eval()
-            once, twice = net(ranges, poses)[0], net(ranges, poses)[0]
+            once, twice = net(ranges)[0], net(ranges)[0]
         assert not torch.allclose(first, second)
         assert torch.allclose(once, twice)
 
     def test_the_decoder_features_stage_3_pools_are_never_dropped(self):
-        net, (ranges, poses) = self._net(0.5), _scans(6)
+        net, ranges = self._net(0.5), _scans(6)
         net.train()
         with torch.no_grad():
-            assert torch.allclose(net(ranges, poses)[2], net(ranges, poses)[2])
+            assert torch.allclose(net(ranges)[2], net(ranges)[2])
 
     def test_it_adds_no_parameters_so_existing_checkpoints_still_load(self):
         assert set(self._net(0.5).state_dict()) == set(self._net(0.0).state_dict())
@@ -877,23 +790,8 @@ class TestCalibrationPrior:
         base = _small_network()
         net = self._with_prior()
         load_calibration_weights(net, base.state_dict())
-        ranges, poses = _scans(10)
-        prior = torch.rand(1, 10, 2, 6)
+        ranges = _scans(10)
+        prior = torch.rand(10, 2, 6)
         with torch.no_grad():
-            for got, want in zip(net(ranges, poses, prior), base(ranges, poses)):
+            for got, want in zip(net(ranges, prior), base(ranges), strict=True):
                 assert torch.allclose(got, want, atol=1e-6)
-
-    def test_streaming_with_a_prior_reproduces_the_clip(self):
-        net = self._with_prior()
-        with torch.no_grad():
-            net.aggregate.weight[:, -2:].normal_()
-        ranges, poses = _scans(20)
-        prior = torch.rand(1, 20, 2, 6)
-        state, streamed = None, []
-        with torch.no_grad():
-            for t in range(20):
-                logit, votes, features, state = net.step(ranges[:, t], poses[:, t], state, prior[:, t])
-                streamed.append((logit, votes, features))
-            for t in (0, 9, 19):
-                for got, want in zip(net(ranges[:, :t + 1], poses[:, :t + 1], prior[:, :t + 1]), streamed[t]):
-                    assert torch.allclose(got, want, atol=1e-4), t

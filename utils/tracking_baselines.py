@@ -816,7 +816,7 @@ def run_latency(args) -> None:
     ds = FROG_Dataset(split="test", mode="official", auto_download=False, verbose=False, missing_return_m=None)
     s = int(np.argmax([len(x) for x in ds.scans]))
     scans, poses = ds.scans[s][:args.frames + 1], np.asarray(ds.odoms[s]["xya"])[:args.frames + 1]
-    state, slots, memory = None, None, None
+    slots, memory = None, None
     timings = {"stage2": [], "decode": [], "memory": []}
 
     def tick():
@@ -827,8 +827,7 @@ def run_latency(args) -> None:
     with torch.no_grad():
         for i, (scan, pose) in enumerate(zip(scans, poses)):
             t0 = tick()
-            logit, votes, features, state = net.step(torch.from_numpy(np.asarray(scan, np.float32)[None]).to(device),
-                                                     torch.from_numpy(np.asarray(pose, np.float32)[None]).to(device), state)
+            logit, votes, features = net(torch.from_numpy(np.asarray(scan, np.float32)[None]).to(device))
             t1 = tick()
             candidates, weights = decode_candidates(np.asarray(scan), angles, torch.sigmoid(logit)[0].cpu().numpy(), votes[0].cpu().numpy(), TOP_P, net.max_range_m)
             pooled = weights @ features[0].T.cpu().numpy()

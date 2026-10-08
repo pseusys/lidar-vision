@@ -49,8 +49,8 @@ from follow_the_drow.datasets.frog_dataset import frog_laser_angles  # noqa: E40
 from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
 from follow_the_drow.detectors.lfe_detector import _merge_nearby  # noqa: E402
 from train_three_horizon import (  # noqa: E402
-    MATCH_RADIUS_M, NMS_DIST_M, OPERATING_THRESHOLD, FrameSplit, beam_votes, calibration_network, candidate_targets, clip_batch, clip_length, decode_votes,
-    detect_device, load_frames, nms_decode, score_detections, voting_beams,
+    MATCH_RADIUS_M, NMS_DIST_M, OPERATING_THRESHOLD, FrameSplit, beam_votes, calibration_network, candidate_targets, decode_votes,
+    detect_device, frame_batch, load_frames, nms_decode, score_detections, voting_beams,
 )
 
 LFE_MERGE_M = 0.30                  # `LFEPeaksDetector.merge_radius`
@@ -110,8 +110,7 @@ def stage2_outputs(net, split: FrameSplit, positions: np.ndarray, device) -> Lis
     net.eval()
     out = []
     for chunk in np.array_split(positions, math.ceil(len(positions) / EVAL_BATCH)):
-        ranges, poses = clip_batch(split, split.annotated[chunk], clip_length(net.coarse.lags), device)
-        logit, votes, _ = net(ranges, poses)
+        logit, votes, _ = net(frame_batch(split, split.annotated[chunk], device))
         prob, votes = torch.sigmoid(logit).cpu().numpy(), votes.cpu().numpy()
         for j, a in enumerate(chunk):
             scan, p = voting_beams(split.scans[split.annotated[a]], prob[j], net.max_range_m)
@@ -209,7 +208,7 @@ def main() -> None:
         people = [split.people_xy[a] for a in positions]
         decoded = {name: [(d[:, 0], d[:, 1:], g) for d, g in zip((decode(s, angles, p, v) for s, p, v in outputs), people, strict=True)] for name, decode in DECODERS.items()}
         run = dict(decoders={name: ap_row(frames) for name, frames in decoded.items()})
-        print(f"\n=== {path.parent.name}/{path.name} ({sum(p.numel() for p in net.parameters()):,} parameters, coarse lags {net.coarse.lags}) ===", flush=True)
+        print(f"\n=== {path.parent.name}/{path.name} ({sum(p.numel() for p in net.parameters()):,} parameters) ===", flush=True)
         for name, row in run["decoders"].items():
             print(f"  {name:<11} AP {row['ap']:.2%}  AP@0.3 {row['ap_03']:.2%}  at {OPERATING_THRESHOLD}: recall {row['recall_03']:.1%}  FP/frame {row['fp_per_frame_03']:.3f}", flush=True)
         run["matched"] = {}

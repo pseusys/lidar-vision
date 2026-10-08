@@ -38,6 +38,18 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A60 done: the coarse convolution is removed; stage 2 reads one frame (2026-10-08)
+
+*keywords:* A60, removal, CausalTemporalConv, TemporalCache, CalibrationState, align_sectors, POSE_CHANNELS, coarse_lags, clip_length, clip_frames, clip_batch, mirror_clips, mirror_scans, frame_batch, context, fold_legacy_calibration, LAST_TEMPORAL_COMMIT, e76aa94, no_temporal_stage2.pt
+
+**Owner's call**, on A60's verdict (entry below). **The last commit with the coarse convolution is e76aa94**; `memory/rejected-ideas.md` lists every symbol and flag it held, the checkpoints that need it, and the restore (`git show e76aa94:<path> > <path>`).
+
+- **Library** (`three_horizon.py`): `align_sectors`, `TemporalCache`, `CausalTemporalConv`, `CalibrationState`, `POSE_CHANNELS` and `CalibrationNetwork.step` are gone; `CalibrationNetwork(...)(ranges, prior=None)` takes one scan `[B, N]`, no pose, no state. The bottleneck's 3-tap convolution across sectors, which a one-lag `coarse.conv` always was, is now `context`.
+- **Old checkpoints**: `fold_legacy_calibration` renames a no-temporal checkpoint's `coarse.conv.*` to `context.*` -- every stage-3 result rests on such checkpoints -- and refuses one whose convolution read past frames, naming e76aa94 (`LAST_TEMPORAL_COMMIT`).
+- **Trainer and scripts**: `clip_length`, `clip_frames`, `clip_batch`, `mirror_clips` and `step2 --coarse-lags/--clip-frames` are gone; `frame_batch` and `mirror_scans` replace the clip and pose plumbing; `network_candidates`, `evaluate_calibration` and `joint_step` run single frames; `JointState` carries the slots alone; step 2's results drop the shuffled-history score, which meant nothing without history. `duration_curve.py`, `stage2_probe.py`, `average_checkpoints.py`, `measure_prior_share.py` and `tracking_baselines.py latency` follow.
+- **Tests first**: `TestStage2WithoutTime` loads `tests/fixtures/no_temporal_stage2.pt` -- a small no-temporal network, its inputs and its outputs, written by e76aa94's code (`tests/fixtures/make_no_temporal_stage2.py`) -- and requires **bit-identical** outputs with and without a memory prior, and the refusal; obsolete tests of the alignment, the temporal convolution, streaming and clips are removed. **662 tests pass.**
+- **Checked on real data**: a real averaged stage 2 (`a59_c1_recipe_dropout01_s0`) gives **bit-identical** outputs on 500 FROG test scans and identical stage-3 candidates over a whole 373-frame recording, old code against new, on the CPU. On the GPU the two graphs pick different kernels: logits differ by at most 4e-5 on 2,000 scans, and the three averaged stage 2s re-score at 82.284826 / 82.082105% (identical to the recorded values) and, for seed 2, 82.220811% in one process and 82.220823% in another, against the recorded 82.220805% (which e76aa94's own code reproduces). Within one process every pass repeats exactly; across processes the GPU's kernel choice moves the seventh digit, so stage-3 numbers re-run on the new code may differ there and nowhere meaningful. A smoke step 2 trains on the new defaults; the whole detector streams at 20.79 ms per frame (p99 24.08) on the CPU at 4 threads, with a 138 KB state.
+
 ## A60 verdict: drop the coarse convolution; the retrained detector scores 85.87% (2026-10-08)
 
 *keywords:* A60, coarse convolution, CausalTemporalConv, verdict, drop, first-second recall, coarse_e2e.py, a60.json, phase 3a, 85.87

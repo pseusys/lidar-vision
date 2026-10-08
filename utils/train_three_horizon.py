@@ -6,8 +6,8 @@ of FROG `official` train, val and test, cached once. Recordings play as parallel
 backpropagation over a chunk-length curriculum, selected on val AP over warmed-up windows, and scored on the whole test
 recording against the candidates alone: AP, false positives and negatives per frame at 0.3, and the exchange rate.
 
-`step2` -- stages 1-2, training phase A: 35-frame clips ending at annotated frames, DROW head loss, selected on val AP, and
-scored on every annotated test frame with clip histories in order and shuffled.
+`step2` -- stages 1-2, training phase A: single annotated frames, DROW head loss, selected on val AP, and scored on every
+annotated test frame. Stage 2 reads one frame; its coarse temporal convolution was dropped by `TODO.md` A60 (code at e76aa94).
 
 Usage (from utils/)
 -----
@@ -47,7 +47,7 @@ sys.path.insert(0, str(_HERE))
 from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from follow_the_drow.detectors import LFEPeaksDetector
 from follow_the_drow.detectors.three_horizon import (
-    MAX_RANGE_M, CalibrationNetwork, CalibrationState, MemoryOutput, ObjectMemory, SlotRules, Slots, TemporalCache, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
+    MAX_RANGE_M, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
     world_to_sensor,
 )
 from follow_the_drow.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
@@ -543,25 +543,17 @@ def decode_candidates(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, vo
     return candidates, candidate_pooling_weights(candidates[:, 1:], vote_xy, prob, VOTE_DECODING["vote_collect_radius"])
 
 
-def clip_length(coarse_lags: Sequence[int]) -> int:
-    """Frames a training clip must hold so that no temporal tap reads before its start: the coarse convolution's oldest tap and the
-    current frame. A shorter clip silently repeats its first frame in training and in clip-based scoring while streaming inference
-    reads the real frames (`memory/gotchas.md`)."""
-    return max(coarse_lags) + 1
-
-
 def calibration_network(checkpoint: dict, angles: np.ndarray, **overrides) -> CalibrationNetwork:
     """The checkpoint's weights in a network shaped the way they were trained.
 
-    The coarse lag list changes a layer's input width and `max_range_m` changes what the input means, so both are read from the
-    checkpoint's `args` (stored as strings); a checkpoint written before a flag existed falls back to the constructor's own default
-    rather than to a second copy of it here. `overrides` (e.g. `prior_channels`) go straight to the constructor. Weights load through
-    `load_calibration_weights`, which folds checkpoints from before the fine convolution's removal.
+    `max_range_m` changes what the input means, so it is read from the checkpoint's `args` (stored as strings); a checkpoint written
+    before the flag existed falls back to the constructor's own default rather than to a second copy of it here. `overrides` (e.g.
+    `prior_channels`) go straight to the constructor. Weights load through `load_calibration_weights`, which folds checkpoints of
+    earlier architectures and refuses those whose temporal convolutions read past frames (`TODO.md` A50, A60).
     """
     args = checkpoint.get("args", {})
     parameters = signature(CalibrationNetwork).parameters
-    shape = {"coarse_lags": parameters["coarse_lags"].default if args.get("coarse_lags") is None else literal_eval(args["coarse_lags"]),
-             "max_range_m": parameters["max_range_m"].default if args.get("max_range_m") is None else float(args["max_range_m"])}
+    shape = {"max_range_m": parameters["max_range_m"].default if args.get("max_range_m") is None else float(args["max_range_m"])}
     net = CalibrationNetwork(torch.from_numpy(angles), **shape, **overrides)
     load_calibration_weights(net, checkpoint["model"])
     return net
@@ -606,18 +598,15 @@ def mirror_people(people_polar: np.ndarray, angles: np.ndarray) -> np.ndarray:
     return mirrored
 
 
-def mirror_clips(ranges: torch.Tensor, poses: torch.Tensor, flip: np.ndarray) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Clips `[B, T, N]` and their poses `[B, T, 3]` mirrored left to right where `flip` `[B]` is set: beams reversed, and each pose's
-    lateral position and heading negated, so that the motion the coarse convolution re-aligns by mirrors with the scan."""
+def mirror_scans(ranges: torch.Tensor, flip: np.ndarray) -> torch.Tensor:
+    """Scans `[B, N]` mirrored left to right, beam for beam, where `flip` `[B]` is set."""
     mask = torch.from_numpy(np.asarray(flip)).to(ranges.device)
-    ranges = torch.where(mask[:, None, None], ranges.flip(-1), ranges)
-    poses = torch.where(mask[:, None, None], poses * torch.tensor([1.0, -1.0, -1.0], device=poses.device, dtype=poses.dtype), poses)
-    return ranges, poses
+    return torch.where(mask[:, None], ranges.flip(-1), ranges)
 
 
-def clip_frames(index: int, recording_start: int, length: int) -> np.ndarray:
-    """Global frame indices of the `length`-frame clip ending at `index`, history clamped at the recording's first frame."""
-    return np.maximum(np.arange(index - length + 1, index + 1), recording_start)
+def frame_batch(split: "FrameSplit", frames: np.ndarray, device) -> torch.Tensor:
+    """The scans `[B, N]` of global `frames`."""
+    return torch.from_numpy(split.scans[frames]).to(device)
 
 
 def anchor_ranges(scans: np.ndarray, max_range_m: float) -> np.ndarray:
@@ -628,15 +617,14 @@ def anchor_ranges(scans: np.ndarray, max_range_m: float) -> np.ndarray:
 
 
 @torch.no_grad()
-def network_candidates(net: CalibrationNetwork, scans: np.ndarray, poses: np.ndarray, device) -> List[Tuple[np.ndarray, np.ndarray]]:
-    """Stream one recording `[T, N]` at `poses` `[T, 3]` through the calibration network and decode each frame's candidates
-    `(score, x, y)` with DROW's vote grid, each with the decoder features pooled from the beams whose votes land near it."""
+def network_candidates(net: CalibrationNetwork, scans: np.ndarray, device) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """One recording `[T, N]` through the calibration network a frame at a time, each frame's candidates `(score, x, y)` decoded by
+    `decode_frame`, each with the decoder features pooled from the beams whose votes land near it."""
     net.eval()
     angles = net.angles.cpu().numpy()
-    state, out = None, []
-    for scan, pose in zip(scans, poses):
-        logit, votes, features, state = net.step(torch.from_numpy(np.asarray(scan, np.float32)[None]).to(device),
-                                                 torch.from_numpy(np.asarray(pose, np.float32)[None]).to(device), state)
+    out = []
+    for scan in scans:
+        logit, votes, features = net(torch.from_numpy(np.asarray(scan, np.float32)[None]).to(device))
         candidates, weights = decode_candidates(np.asarray(scan), angles, torch.sigmoid(logit)[0].cpu().numpy(), votes[0].cpu().numpy(), TOP_P, net.max_range_m)
         out.append((candidates, weights @ features[0].T.cpu().numpy()))
     return out
@@ -869,7 +857,7 @@ def load_split(name: str, limit: int, stage2: Optional[Path], device) -> Split:
             net = calibration_network(torch.load(stage2, map_location="cpu"), angles).to(device)
 
             def candidates_of(s):
-                return network_candidates(net, ds.scans[s], ds.odoms[s]["xya"], device)
+                return network_candidates(net, ds.scans[s], device)
         seqs = build_candidates(ds, candidates_of, TOP_P, MATCH_RADIUS_M, recordings=limit)
         # plain dicts of arrays, so the cache loads from any module, not only from this script run as __main__
         path.write_bytes(pickle.dumps([{f.name: getattr(s, f.name) for f in fields(SequenceCandidates)} for s in seqs]))
@@ -1078,8 +1066,7 @@ def frames_from_dataset(ds) -> FrameSplit:
 
 @dataclass
 class JointState:
-    """What the whole detector carries between frames: stage 2's caches, stage 3's slots, and the slots' last person logits."""
-    calibration: CalibrationState
+    """What the whole detector carries between frames: stage 3's slots and the slots' last person logits; stage 2 carries nothing."""
     slots: Slots
     slot_logit: torch.Tensor
 
@@ -1123,7 +1110,7 @@ def oracle_prior(people: Sequence[np.ndarray], angles: torch.Tensor, sectors: in
 def joint_step(net: CalibrationNetwork, memory: ObjectMemory, ranges: torch.Tensor, pose: torch.Tensor, dt: torch.Tensor,
                state: Optional[JointState], prior: Optional[torch.Tensor] = None) -> Tuple[JointOutput, JointState]:
     """One frame `[B, N]` of the whole detector for streams that start together (`state` None starts all of them from empty memory):
-    the slots' predicted positions drawn into stage 2's bottleneck, stage 2, candidates decoded with DROW's vote grid and their
+    the slots' predicted positions drawn into stage 2's bottleneck, stage 2, candidates decoded by `decode_frame` and their
     features pooled from stage 2's decoder -- the path by which stage 3's loss reaches stage 2 -- and stage 3.
 
     `prior` `[B, 2, N/8]` replaces what the slots would have drawn and skips drawing it, which is how A51 E12b feeds the oracle."""
@@ -1131,15 +1118,15 @@ def joint_step(net: CalibrationNetwork, memory: ObjectMemory, ranges: torch.Tens
     device = ranges.device
     sectors = n // 8
     if state is None:
-        calibration, slots = None, memory.initial_state(b, device)
+        slots = memory.initial_state(b, device)
         if prior is None:
             prior = torch.zeros(b, 2, sectors, device=device)
     else:
-        calibration, slots = state.calibration, state.slots
+        slots = state.slots
         if prior is None:
             predicted = world_to_sensor(slots.position + slots.velocity * dt[:, None, None], pose)
             prior = render_prior(predicted, slots.value, torch.sigmoid(state.slot_logit), slots.alive, net.angles, sectors)
-    logit, votes, features, calibration = net.step(ranges, pose, calibration, prior)
+    logit, votes, features = net(ranges, prior)
     angles = net.angles.cpu().numpy()
     prob, votes_np, scans = torch.sigmoid(logit).detach().cpu().numpy(), votes.detach().cpu().numpy(), ranges.cpu().numpy()
     xy, score = np.zeros((b, TOP_P, 2), np.float32), np.zeros((b, TOP_P), np.float32)
@@ -1152,27 +1139,17 @@ def joint_step(net: CalibrationNetwork, memory: ObjectMemory, ranges: torch.Tens
     cand_features = torch.einsum("bpn,bcn->bpc", torch.from_numpy(weights).to(device), features)
     out = memory.step(cand_xy, cand_score, cand_valid, pose, dt, slots, cand_features=cand_features,
                       free_range=free_range_profile(ranges, sectors, net.max_range_m), angles=net.angles)
-    return JointOutput(logit, votes, cand_xy, cand_score, cand_valid, cand_features, prior, out), JointState(calibration, out.slots, out.slot_logit)
-
-
-def clip_batch(split: FrameSplit, frames: np.ndarray, length: int, device, rng: np.random.Generator = None) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Ranges `[B, length, N]` and poses of the clips ending at global `frames`; with `rng`, each clip's history is shuffled."""
-    index = np.stack([clip_frames(int(f), int(split.start[f]), length) for f in frames])
-    if rng is not None:
-        index[:, :-1] = rng.permuted(index[:, :-1], axis=1)
-    return torch.from_numpy(split.scans[index]).to(device), torch.from_numpy(split.poses[index]).to(device)
+    return JointOutput(logit, votes, cand_xy, cand_score, cand_valid, cand_features, prior, out), JointState(out.slots, out.slot_logit)
 
 
 @torch.no_grad()
-def evaluate_calibration(net: CalibrationNetwork, split: FrameSplit, positions: np.ndarray, length: int, device, batch: int, shuffle_seed: int = None) -> Dict[str, float]:
-    """AP and operating point of the network on annotated frames `positions` of `split`; `shuffle_seed` shuffles clip histories."""
+def evaluate_calibration(net: CalibrationNetwork, split: FrameSplit, positions: np.ndarray, device, batch: int) -> Dict[str, float]:
+    """AP and operating point of the network on annotated frames `positions` of `split`."""
     net.eval()
     angles = net.angles.cpu().numpy()
-    rng = None if shuffle_seed is None else np.random.default_rng(shuffle_seed)
     frames = []
     for chunk in np.array_split(positions, math.ceil(len(positions) / batch)):
-        ranges, poses = clip_batch(split, split.annotated[chunk], length, device, rng)
-        logit, votes, _ = net(ranges, poses)
+        logit, votes, _ = net(frame_batch(split, split.annotated[chunk], device))
         prob, votes = torch.sigmoid(logit).cpu().numpy(), votes.cpu().numpy()
         for j, a in enumerate(chunk):
             scan, p = voting_beams(split.scans[split.annotated[a]], prob[j], net.max_range_m)
@@ -1183,8 +1160,6 @@ def evaluate_calibration(net: CalibrationNetwork, split: FrameSplit, positions: 
 
 
 def train_calibration(args) -> None:
-    if args.clip_frames is None:
-        args.clip_frames = clip_length(args.coarse_lags)
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     device, _ = detect_device()
@@ -1192,7 +1167,7 @@ def train_calibration(args) -> None:
     for name, split in splits.items():
         print(f"{name}: {len(split.scans)} frames, {len(split.annotated)} annotated", flush=True)
     angles = frog_laser_angles(720)
-    net = CalibrationNetwork(torch.from_numpy(angles), coarse_lags=args.coarse_lags, dropout=args.dropout, max_range_m=args.max_range_m).to(device)
+    net = CalibrationNetwork(torch.from_numpy(angles), dropout=args.dropout, max_range_m=args.max_range_m).to(device)
     if args.init:
         load_calibration_weights(net, torch.load(args.init, map_location=device)["model"])
         print(f"starting from {args.init}", flush=True)
@@ -1229,14 +1204,14 @@ def train_calibration(args) -> None:
     while not done:
         for chunk in np.array_split(rng.permutation(len(train_split.annotated)), iterations):
             frames = train_split.annotated[chunk]
-            ranges, poses = clip_batch(train_split, frames, args.clip_frames, device)
+            ranges = frame_batch(train_split, frames, device)
             scans, people = [train_split.scans[f] for f in frames], [train_split.people_polar[c] for c in chunk]
             if args.mirror:
                 flip = rng.random(len(frames)) < MIRROR_PROBABILITY
-                ranges, poses = mirror_clips(ranges, poses, flip)
+                ranges = mirror_scans(ranges, flip)
                 scans = [np.ascontiguousarray(s[::-1]) if m else s for s, m in zip(scans, flip, strict=True)]
                 people = [mirror_people(g, angles) if m else g for g, m in zip(people, flip, strict=True)]
-            logit, votes, _ = net(ranges, poses)
+            logit, votes, _ = net(ranges)
             targets = [make_targets(anchor_ranges(s, net.max_range_m), angles, {3: [tuple(p) for p in g]},
                                     vote_collect_radius=args.label_radius, nearest=args.label_assign == "nearest") for s, g in zip(scans, people, strict=True)]
             labels = torch.from_numpy(np.stack([t[0] for t in targets])).to(device)
@@ -1253,7 +1228,7 @@ def train_calibration(args) -> None:
             if step % eval_every:
                 continue
             epoch, train_s = step / iterations, time.time() - t_block
-            val = evaluate_calibration(net, val_split, val_positions, args.clip_frames, device, args.eval_batch)
+            val = evaluate_calibration(net, val_split, val_positions, device, args.eval_batch)
             improved = stopper.update(val["ap"])
             if args.schedule == "plateau":
                 schedule.step(val["ap"])
@@ -1281,11 +1256,9 @@ def train_calibration(args) -> None:
         print("no validation score was ever defined, so no checkpoint was selected: testing the last weights", flush=True)
     test = splits["test"]
     positions = np.arange(0, len(test.annotated), args.test_stride)
-    results = dict(history=history, test=dict(
-        ordered=evaluate_calibration(net, test, positions, args.clip_frames, device, args.eval_batch),
-        shuffled_history=evaluate_calibration(net, test, positions, args.clip_frames, device, args.eval_batch, shuffle_seed=args.seed)))
-    for name, r in results["test"].items():
-        print(f"\ntest ({name}, every {args.test_stride} annotated frame): AP {r['ap']:.2%}  FP {r['fp_per_frame']:.3f}  FN {r['fn_per_frame']:.3f}", flush=True)
+    results = dict(history=history, test=evaluate_calibration(net, test, positions, device, args.eval_batch))
+    r = results["test"]
+    print(f"\ntest (every {args.test_stride} annotated frame): AP {r['ap']:.2%}  FP {r['fp_per_frame']:.3f}  FN {r['fn_per_frame']:.3f}", flush=True)
     (args.out_dir / "step2_results.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
     print(f"wrote {args.out_dir / 'step2_results.json'}", flush=True)
 
@@ -1327,9 +1300,7 @@ def joint_frame_loss(joint: JointOutput, scans: np.ndarray, angles: np.ndarray, 
 
 
 def detach_joint(state: JointState) -> JointState:
-    coarse = state.calibration.coarse
-    cache = TemporalCache([f.detach() for f in coarse.features], [q.detach() for q in coarse.poses])
-    return JointState(CalibrationState(cache), detach(state.slots), state.slot_logit.detach())
+    return JointState(detach(state.slots), state.slot_logit.detach())
 
 
 @torch.no_grad()
@@ -1683,8 +1654,6 @@ def build_parser() -> argparse.ArgumentParser:
     step2.add_argument("--lr-factor", type=float, default=0.3)
     step2.add_argument("--lr-patience", type=int, default=4, help="evaluations without improvement before a cut (4 = one epoch)")
     step2.add_argument("--min-lr", type=float, default=1e-5)
-    step2.add_argument("--clip-frames", type=int, default=None, help="frames per training clip; default max(coarse_lags) + 1, "
-                                                                     "the history the oldest tap reads")
     step2.add_argument("--dropout", type=float, default=0.1, help="dropout on the head's input, 0.1 since 2026-10-06 (TODO.md A59); 0 reproduces every result before, "
                                                                  "`docs/RESEARCH.md` §5.4 intends 0.1 for this project's own architectures")
     step2.add_argument("--checkpoint-every", type=float, default=0.0, help="epochs between checkpoints kept whatever they score, "
@@ -1699,8 +1668,6 @@ def build_parser() -> argparse.ArgumentParser:
                        "a positive and votes for them; DR-SPAAM uses 0.35 m, FROG's circles are 0.4 m")
     step2.add_argument("--mirror", action=argparse.BooleanOptionalAction, default=True, help="reverse half the training clips beam for beam, "
                        "with their people and poses mirrored to match: exact on any uniform beam grid; on by default since 2026-10-06 (TODO.md A59)")
-    step2.add_argument("--coarse-lags", type=int, nargs="+", default=[0, 8, 16, 24, 32], help="frames the coarse temporal convolution reaches back, per sector; "
-                                                                                             "`--coarse-lags 0` alone removes it (A50 phase 2)")
     step2.add_argument("--batch", type=int, default=32)
     step2.add_argument("--eval-batch", type=int, default=64)
     step2.add_argument("--max-epochs", type=float, default=20)

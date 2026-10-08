@@ -38,7 +38,7 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 | **SpaceTimeCNN** | ours, novel | re-measuring | re-measuring³ | n/a |
 | **FullScanTCN** | ours, novel | re-measuring | re-measuring | n/a |
 | **TemporalUNet** | ours, novel | re-measuring | re-measuring | n/a |
-| **TAKHeLiPeD, stages 1-2** (calibration network) | ours, novel | gap | **77.7%**⁴ | n/a |
+| **TAKHeLiPeD, stages 1-2** (calibration network) | ours, novel | gap | **82.2%**⁹ *(old recipe 77.7%⁴)* | n/a |
 | **TAKHeLiPeD, stages 1-3** (+ object memory) | ours, novel | gap | **85.9%**⁹ *(old recipe 83.3%⁵)* | n/a |
 
 **DR-SPAAM `T=5` at 75.6% on FROG was the number to beat, and the object memory clears it by 7.7 pp.**
@@ -91,7 +91,7 @@ Degraded by construction, so it is recorded here as a footnote rather than repor
 ² Li2Former was never evaluated on FROG by its authors, and training it here has never completed (DirectML crashes, impractical CPU-only speed — `gotchas.md` I4).
 ³ In progress: `T=5, dtime=10` on the fixed pipeline (`TODO.md` A1).
 ⁴ `TODO.md` A51's backbone, measured 2026-09-19 over the whole FROG `official` test split: **77.66%**, the no-temporal stage 2 (seed 0) whose decoded candidates the object memory in the row below rescores, at 2.620 false positives per frame and 88.8% recall at the 0.3 operating point.
-That backbone's own three-seed mean is **77.23%**; the default architecture, which keeps the coarse temporal convolution, means **77.92%** over three seeds. The pooled per-run spread across five three-seed arms is ~0.95 pp (`interpreting-evaluation.md`), so those two are a tie, not a ranking.
+That backbone's own three-seed mean is **77.23%**; the default architecture, which kept the coarse temporal convolution (removed 2026-10-08, `TODO.md` A60), means **77.92%** over three seeds. The pooled per-run spread across five three-seed arms is ~0.95 pp (`interpreting-evaluation.md`), so those two are a tie, not a ranking.
 Both are scored under the limit-beam decoding rule and the running time step adopted 2026-09-17.
 **The vote-grid decoder understates the network** (`TODO.md` A59): the same no-temporal weights through `nms-mean`, NMS chosen on val on all six checkpoints, score **80.07%** (three seeds, every 5th annotated frame; default architecture 79.61%). Mirror augmentation lifts it further, to **81.49%**, and the whole adopted recipe with dropout 0.1 and weight averaging to **82.20%** (three seeds each, every 5th annotated frame). Neither is this row's figure yet, because every stage-3 result rests on vote-grid candidates and moves only once stage 3 is retrained on the new ones.
 **The 76.9% this row used to carry is retired, not corrected**: a different backbone, measured before both of those changes (`CHANGELOG.md`, 2026-09-15 to 2026-09-17).
@@ -235,7 +235,7 @@ The paper's own figures in parentheses are **GPU** numbers and are not comparabl
 | **TemporalUNet** | **2.0 ms** | **2.7 ms** | **2.3 ms** |
 | **TAKHeLiPeD, stages 1-2 + decode** | n/a | **~10.4 ms**⁶ | n/a |
 | **TAKHeLiPeD, stage 3 alone** (object memory) | n/a | **4.4-4.6 ms**⁷ | n/a |
-| **TAKHeLiPeD, whole detector streaming** (A51 E13 memory) | n/a | **19.5 ms** *(4 threads; GPU 12.9 ms)*⁸ | n/a |
+| **TAKHeLiPeD, whole detector streaming** (A60 recipe and memory) | n/a | **20.8 ms** *(4 threads, p99 24.1)*⁹ *(old recipe 19.5 ms, GPU 12.9 ms⁸)* | n/a |
 
 ⁴ Was **315.5 / 243.8 / 278.3 ms** here until 2026-09-10, and blamed on the Python decode loop.
 It was not the loop: the decoder applied a second sigmoid to a channel `lfe_ppn.onnx` had already sigmoided, so every one of the 3,600 anchors cleared any threshold and entered an O(n²) greedy merge, 182 survivors per frame on scenes holding ~3 people.
@@ -250,7 +250,7 @@ It is quoted only against the sensor: FROG's measured mean frame period is 24.99
 
 ⁷ Measured 2026-09-17 and confirmed across B0's three seeds (2026-09-19) by `memory_ms_per_frame`, timing one stream on the RX 9060 XT under ROCm: **4.42 ms** on the fixed end-of-run block, 4.5-4.6 ms across the seeds. Same caveat as footnote 6 -- not comparable with the CPU rows above.
 
-⁹ `TODO.md` A60 / A59 phase 3a, 2026-10-08: E13's stage 3 (no attention) on the no-temporal stage 2 trained with the adopted recipe -- `nms-mean` decoding, mirror augmentation, nearest-person labels, dropout 0.1, weight averaging (stage 2 alone 82.20%) -- three seeds, every 5th annotated test frame: **86.35 / 85.77 / 85.49%, mean 85.87**, AP@0.3 84.68%. Against E13 on the old recipe, 83.86%, +2.01. The A56 tracking comparison above is on the old recipe's candidates and has not been repeated.
+⁹ `TODO.md` A60 / A59 phase 3a, 2026-10-08: E13's stage 3 (no attention) on the no-temporal stage 2 trained with the adopted recipe -- `nms-mean` decoding, mirror augmentation, nearest-person labels, dropout 0.1, weight averaging (stage 2 alone 82.20%) -- three seeds, every 5th annotated test frame: **86.35 / 85.77 / 85.49%, mean 85.87**, AP@0.3 84.68%. Against E13 on the old recipe, 83.86%, +2.01. Stage 2 alone is the no-temporal network averaged over its val-chosen epochs, 82.28 / 82.08 / 82.22% (mean 82.20). Streamed one scan at a time on this machine's CPU at 4 threads (`tracking_baselines.py latency`, 2,000 frames, 2026-10-08): stage 2 8.75 ms, decoding 2.77 ms (`nms-mean`'s per-voter loop, ~1 ms more than the vote grid), memory 9.22 ms, **20.79 ms median, p99 24.08** -- inside FROG's 25 ms period with under a millisecond to spare at p99. The A56 tracking comparison above is on the old recipe's candidates and has not been repeated.
 
 ⁸ `TODO.md` A56 E22, 2026-10-03: `tracking_baselines.py latency`, one raw scan at a time through stage 2, DROW vote decoding and the E13 memory, 2,000 frames of FROG test, median (p99). CPU on this machine with 4 threads: **8.60 + 1.76 + 9.12 = 19.53 ms (22.38)**, 8 threads 19.47 ms (22.77); RX 9060 XT under ROCm: **5.76 + 2.27 + 4.82 = 12.92 ms (15.11)**. The CPU figure is the one comparable with this column, and it fits FROG's 25 ms scan period at the 99th percentile. The memory's share here includes moving each frame's tensors from numpy, which footnote 7 leaves out.
 

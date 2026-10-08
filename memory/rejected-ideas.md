@@ -7,6 +7,20 @@ Open questions live in [`../TODO.md`](../TODO.md); this file is for settled ones
 
 Each entry states what was proposed, what was measured, and what new evidence would be needed to reopen it.
 
+## Stage 2's coarse temporal convolution (TODO.md A60)
+
+*keywords: A60, coarse convolution, CausalTemporalConv, coarse_lags, --coarse-lags, align_sectors, TemporalCache, CalibrationState, calibration horizon, e76aa94, restore*
+
+**Idea.** `docs/PROPOSAL.md` §5.4: a causal space-time convolution at stage 2's bottleneck, five taps eight frames apart (~0.8 s at FROG's 40 Hz), each past frame's sectors re-aligned by odometry, so the detector sees a walking person's motion before the object memory has met them.
+
+**What was measured.** At stage 2 alone it tied or lost: 77.92% (old controls) or 76.65% (fresh) against the no-temporal 77.23%, and on the adopted recipe 81.09% against 81.93%. **End to end** (2026-10-08, E13's stage 3 on each, three seeds, FROG test): **85.01% against 85.87%** AP, -0.86 at AP@0.3, and on people in their first second in view -- the only place a memory cannot help -- **+0.59 pp** against a +2 pp bar written before the runs (`utils/coarse_e2e.py`, `checkpoints_three_horizon/a60/a60.json`). The memory added less on top of a coarse stage 2 (+2.4 to +3.0) than on top of a no-temporal one (+3.3 to +4.1). It cost +201,216 parameters (+20.6%), ~3.3x the training time per epoch, a ~1.8 MB streaming cache, and odometry inside stage 2.
+
+**Why rejected (owner's call, 2026-10-08): the object memory gets more out of the same sub-second span** -- emptied every 0.5 s it already adds +1.75 pp (A51 E1) -- and the convolution earns nothing anywhere it was measured.
+
+**Where it lives, to restore it.** Commit **e76aa94**, `library/follow_the_drow/detectors/three_horizon.py`: `align_sectors`, `TemporalCache`, `CausalTemporalConv`, `CalibrationState`, `POSE_CHANNELS`, and `CalibrationNetwork`'s `coarse_lags`, `poses` and `step`; `utils/train_three_horizon.py`: `clip_length`, `clip_frames`, `clip_batch`, `mirror_clips` (which also mirrored poses), `network_candidates`' poses, `JointState.calibration`, `detach_joint`'s cache copy, and `step2 --coarse-lags/--clip-frames`. One line restores either file: `git show e76aa94:<path> > <path>`. Checkpoints that need it: `default_s*`, `confirm_nofine_s*`, `step2_no_fine`, `step2_control`, `exclude_limit_s*`, `a60_default_c1_s*`.
+
+**Reopen if** a dataset or sensor makes the memory's first second matter more -- a lower frame rate, where 0.8 s is a few scans (A49), or a scene where people mostly appear briefly -- and measure it end to end again, not at stage 2.
+
 ## A second, wider depth-centring channel in stage 2 (TODO.md A59 arm F3)
 
 *keywords: A59, F3, median_windows_deg, --median-windows-deg, MEDIAN_WINDOW_DEG, range minus median, blind spot, 33 deg*

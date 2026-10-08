@@ -18,9 +18,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 from follow_the_drow.detectors.three_horizon import MAX_RANGE_M, CalibrationNetwork, ObjectMemory, SlotRules
 from follow_the_drow.utils.drow_utils import _win2global
 from train_three_horizon import (
-    BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, clip_frames, clip_length, coast_targets, decode_votes, evaluate, evaluation_segments,
+    BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, coast_targets, decode_votes, evaluate, evaluation_segments,
     FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
-    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, coasting_hits, mirror_clips, mirror_people, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
+    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, coasting_hits, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
 )
 
 
@@ -109,7 +109,7 @@ class TestNetworkCandidates:
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
         net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1).eval()
         scans = (np.random.default_rng(0).random((6, 48)) * 4 + 1).astype(np.float32)
-        per_frame = network_candidates(net, scans, np.zeros((6, 3), np.float32), "cpu")
+        per_frame = network_candidates(net, scans, "cpu")
         assert len(per_frame) == 6
         for cands, feats in per_frame:
             assert cands.shape[1] == 3 and feats.shape == (len(cands), 8)
@@ -126,15 +126,14 @@ class TestNetworkCandidates:
         missing = at_limit.copy()
         missing[:, 10:12] = np.inf
         missing[:, 12:14] = 61.0
-        poses = np.zeros((4, 3), np.float32)
-        for (want, _), (got, _) in zip(network_candidates(net, at_limit, poses, "cpu"), network_candidates(net, missing, poses, "cpu")):
+        for (want, _), (got, _) in zip(network_candidates(net, at_limit, "cpu"), network_candidates(net, missing, "cpu"), strict=True):
             assert np.allclose(want, got)
 
     def test_evaluation_scores_a_missing_return_like_a_reading_at_the_limit(self):
         from follow_the_drow.detectors.three_horizon import CalibrationNetwork
         torch.manual_seed(0)
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
-        net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, coarse_lags=(0,))
+        net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1)
         with torch.no_grad():                            # every beam confidently votes for its own endpoint, so a dropped beam changes the detections
             net.head.weight.zero_()
             net.head.bias.copy_(torch.tensor([3.0, 0.0, 0.0]))
@@ -150,8 +149,8 @@ class TestNetworkCandidates:
             xy = [np.array([[-3.0 * np.sin(phi), 3.0 * np.cos(phi)]])] * 3
             return FrameSplit(scans, np.zeros((3, 3), np.float32), np.zeros(3, np.int64), np.arange(3), people, xy, np.arange(3) / 40.0)
 
-        want = evaluate_calibration(net, split(at_limit), np.arange(3), 1, "cpu", 3)
-        got = evaluate_calibration(net, split(missing), np.arange(3), 1, "cpu", 3)
+        want = evaluate_calibration(net, split(at_limit), np.arange(3), "cpu", 3)
+        got = evaluate_calibration(net, split(missing), np.arange(3), "cpu", 3)
         assert want["fp_per_frame"] > 0
         assert got == pytest.approx(want)
 
@@ -172,7 +171,7 @@ class TestNetworkCandidates:
         from follow_the_drow.detectors.three_horizon import CalibrationNetwork
         torch.manual_seed(0)
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
-        net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, coarse_lags=(0,))
+        net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1)
         with torch.no_grad():
             net.head.weight.zero_()
             net.head.bias.copy_(torch.tensor([3.0, 0.0, 0.0]))
@@ -181,7 +180,7 @@ class TestNetworkCandidates:
         people = [np.array([[3.0, phi]]), np.array([[net.max_range_m, phi]])]
         xy = [np.array([[-r * np.sin(phi), r * np.cos(phi)]]) for r in (3.0, net.max_range_m)]
         split = FrameSplit(scans, np.zeros((2, 3), np.float32), np.zeros(2, np.int64), np.arange(2), people, xy, np.arange(2) / 40.0)
-        assert evaluate_calibration(net, split, np.arange(2), 1, "cpu", 2)["recall"] == pytest.approx(0.5)     # only the wall's person is found
+        assert evaluate_calibration(net, split, np.arange(2), "cpu", 2)["recall"] == pytest.approx(0.5)     # only the wall's person is found
 
 
 class TestFramesFromDataset:
@@ -277,27 +276,19 @@ class TestBestCheckpoint:
         assert torch.load(tmp_path / "best.pth")["w"] == 1
 
 
-class TestClipLength:
-
-    def test_a_clip_spans_the_largest_coarse_lag_and_the_current_frame(self):
-        assert clip_length((0, 8, 16, 24, 32)) == 33
-        assert clip_length((0,)) == 1
-
-
 class TestCalibrationNetworkFor:
 
-    def test_the_range_limit_and_lags_come_from_the_checkpoint_args(self):
+    def test_the_range_limit_comes_from_the_checkpoint_args(self):
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
-        net = CalibrationNetwork(torch.from_numpy(angles), coarse_lags=(0, 4), max_range_m=15.0)
-        checkpoint = dict(model=net.state_dict(), args={"coarse_lags": "[0, 4]", "max_range_m": "15.0"})
-        rebuilt = calibration_network(checkpoint, angles)
-        assert rebuilt.max_range_m == 15.0 and rebuilt.coarse.lags == [0, 4]
+        net = CalibrationNetwork(torch.from_numpy(angles), max_range_m=15.0)
+        rebuilt = calibration_network(dict(model=net.state_dict(), args={"max_range_m": "15.0"}), angles)
+        assert rebuilt.max_range_m == 15.0
 
     def test_a_checkpoint_from_before_the_flags_uses_the_defaults(self):
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
         net = CalibrationNetwork(torch.from_numpy(angles))
         rebuilt = calibration_network(dict(model=net.state_dict(), args={}), angles)
-        assert rebuilt.max_range_m == MAX_RANGE_M and rebuilt.coarse.lags == [0, 8, 16, 24, 32]
+        assert rebuilt.max_range_m == MAX_RANGE_M
 
 
 class TestCandidateCachePath:
@@ -347,8 +338,8 @@ class TestStage2Recipe:
 
 
 class TestMirror:
-    """`step2 --mirror` (`TODO.md` A59 arm M): a clip reversed beam for beam, with its people's bearings and its poses mirrored to
-    match, is a valid new training sample only if the targets built from it are exactly the mirror of the original targets."""
+    """`step2 --mirror` (`TODO.md` A59 arm M): a scan reversed beam for beam, with its people's bearings mirrored to match, is a
+    valid new training sample only if the targets built from it are exactly the mirror of the original targets."""
 
     ANGLES = np.linspace(-np.pi / 2, np.pi / 2, 720, endpoint=False)      # FROG's grid: not symmetric about 0, by one beam
 
@@ -366,12 +357,10 @@ class TestMirror:
         people = np.array([[4.0, self.ANGLES[100]]])
         assert mirror_people(people, self.ANGLES)[0, 1] == pytest.approx(self.ANGLES[719 - 100])
 
-    def test_only_the_flagged_clips_are_mirrored(self):
-        ranges = torch.arange(2 * 3 * 4, dtype=torch.float32).view(2, 3, 4)
-        poses = torch.tensor([[[1.0, 2.0, 0.3]] * 3, [[1.0, 2.0, 0.3]] * 3])
-        m_ranges, m_poses = mirror_clips(ranges, poses, np.array([False, True]))
-        assert torch.equal(m_ranges[0], ranges[0]) and torch.equal(m_ranges[1], ranges[1].flip(-1))
-        assert torch.equal(m_poses[0], poses[0]) and m_poses[1, 0].tolist() == pytest.approx([1.0, -2.0, -0.3])
+    def test_only_the_flagged_scans_are_mirrored(self):
+        ranges = torch.arange(2 * 4, dtype=torch.float32).view(2, 4)
+        mirrored = mirror_scans(ranges, np.array([False, True]))
+        assert torch.equal(mirrored[0], ranges[0]) and torch.equal(mirrored[1], ranges[1].flip(-1))
 
 class TestObjectMemoryFor:
     """A stage-3 checkpoint carries the rescoring arms it was trained with (`TODO.md` A51 T1, O1), so anything rebuilding it from
@@ -490,16 +479,6 @@ class TestCandidatePoolingWeights:
         assert pooled[1].tolist() == [0.0, 0.0]                      # its only nearby beam has zero probability
 
 
-class TestClipFrames:
-
-    def test_history_is_clamped_at_the_recording_start(self):
-        assert clip_frames(3, 0, 5).tolist() == [0, 0, 1, 2, 3]
-        assert clip_frames(101, 100, 4).tolist() == [100, 100, 100, 101]
-
-    def test_a_clip_away_from_the_start_is_the_frames_before_the_target(self):
-        assert clip_frames(107, 100, 5).tolist() == [103, 104, 105, 106, 107]
-
-
 class TestDecodeVotes:
 
     def test_votes_built_from_a_person_decode_back_onto_the_person(self):
@@ -587,11 +566,10 @@ class TestJointStep:
 
     def test_with_feedback_and_rescoring_still_silent_it_is_stage_2_then_stage_3(self):
         net, memory, scans, poses, dt = self._parts()
-        state, calibration, slots = None, None, memory.initial_state(1)
+        state, slots = None, memory.initial_state(1)
         with torch.no_grad():
             for t in range(6):
                 joint, state = joint_step(net, memory, scans[:, t], poses[:, t], dt, state)
-                _, _, _, calibration = net.step(scans[:, t], poses[:, t], calibration, torch.zeros(1, 2, 6))
                 alone = memory.step(joint.cand_xy, joint.cand_score, joint.cand_valid, poses[:, t], dt, slots, cand_features=joint.cand_features)
                 slots = alone.slots
                 assert torch.allclose(joint.memory.candidate_logit, alone.candidate_logit, atol=1e-5), t
@@ -696,10 +674,11 @@ class TestCalibrationNetworkWithoutPrior:
         net = calibration_network(checkpoint, angles, prior_channels=0, channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1)
         assert net.prior_channels == 0
         assert net.aggregate.weight.shape[1] == 2 * 32
-        ranges = torch.from_numpy((np.random.default_rng(0).random((1, 6, 48)) * 4 + 1).astype(np.float32))
+        ranges = torch.from_numpy((np.random.default_rng(0).random((1, 48)) * 4 + 1).astype(np.float32))
         with torch.no_grad():
-            logit, _, _ = net(ranges, torch.zeros(1, 6, 3))
-        assert logit.shape == (1, 48) and torch.isfinite(logit).all()
+            logit, _, _ = net(ranges, torch.ones(1, 2, 6))
+            plain, _, _ = net(ranges)
+        assert logit.shape == (1, 48) and torch.isfinite(logit).all() and torch.equal(logit, plain)
 
 
 class TestRecordingBounds:

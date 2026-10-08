@@ -1,12 +1,15 @@
-"""Three-horizon streaming person detector: input features, sector alignment and causal temporal convolution.
+"""Three-horizon streaming person detector (TAKHeLiPeD): per-beam input features, the single-frame calibration network, and the
+object memory.
 
-Design and reasoning in `docs/PROPOSAL.md` (§5.3 input, §5.4 calibration horizon); build status in `TODO.md` A43.
+Design and reasoning in `docs/PROPOSAL.md` (§5.3 input, §5.4 calibration network); build status in `TODO.md` A43. Stage 2 read one
+frame and its predecessors through a coarse temporal convolution until 2026-10-08, when A60 measured it end to end and dropped it;
+that code is at commit e76aa94.
 Conventions: beam angle 0 is forward, counterclockwise positive, increasing with beam index;
 poses are world odometry `(x, y, theta)` with x forward at theta = 0, y left, theta counterclockwise.
 """
 from dataclasses import dataclass, fields, replace
 from math import log, radians, sqrt
-from typing import List, Optional, Sequence, Tuple
+from typing import List, Optional, Tuple
 
 from torch import (
     Tensor, arange, argsort, atan2, cat, cos, cumprod, exp, expm1, full, full_like, isfinite, linspace, log1p, minimum, nn,
@@ -20,7 +23,7 @@ MEDIAN_WINDOW_DEG = 11.0
 NEIGHBOUR_OFFSETS = (-2, -1, 1, 2)
 N_BEAM_FEATURES = 2 + 2 * len(NEIGHBOUR_OFFSETS)
 LEGACY_VALIDITY_CHANNEL = 2          # index of the validity input that checkpoints before 2026-09-17 carried
-POSE_CHANNELS = 3
+LAST_TEMPORAL_COMMIT = "e76aa94"     # the last commit with stage 2's coarse temporal convolution (TODO.md A60)
 SLOT_STATISTICS = 8
 CANDIDATE_FEATURES = 5
 PROBABILITY_EPS = 1e-6
@@ -61,68 +64,6 @@ def beam_features(ranges: Tensor, angles: Tensor, max_range_m: float = MAX_RANGE
         dphi = a_pad[reach + offset:reach + offset + n] - angles
         channels += [neighbour * cos(dphi) - r, neighbour * sin(dphi)]
     return stack(channels, dim=-2)
-
-
-def align_sectors(features: Tensor, pose_from: Tensor, pose_to: Tensor, angles: Tensor) -> Tensor:
-    """Shift angular-sector features `[B, C, S]` of `pose_from` to undo the rotation to `pose_to`, and append the past pose
-    expressed in the current frame `(forward, left, heading change)` as 3 constant channels, `-> [B, C + 3, S]`.
-    """
-    b, c, s = features.shape
-    width = (angles[1] - angles[0]) * len(angles) / s
-    xf, yf, tf = pose_from.unbind(-1)
-    xt, yt, tt = pose_to.unbind(-1)
-    turn = _wrap(tf - tt)
-    source = arange(s, device=features.device)[None] - (turn / width).round().long()[:, None]
-    inside = (source >= 0) & (source < s)
-    shifted = features.gather(2, source.clamp(0, s - 1)[:, None, :].expand(-1, c, -1)) * inside[:, None, :]
-    dx, dy = xf - xt, yf - yt
-    pose = stack([dx * cos(tt) + dy * sin(tt), -dx * sin(tt) + dy * cos(tt), turn], dim=-1)
-    return cat([shifted, pose[:, :, None].expand(-1, -1, s)], dim=1)
-
-
-@dataclass
-class TemporalCache:
-    """The frames a causal temporal convolution still reads, oldest first: features and poses."""
-    features: List[Tensor]
-    poses: List[Tensor]
-
-
-class CausalTemporalConv(nn.Module):
-    """A convolution over the current frame and frames `lags` steps back, each re-aligned to the current pose.
-
-    `forward` runs a clip `[B, T, C, S]` of angular-sector features for training; `step` runs one frame with a `TemporalCache`
-    and returns exactly the clip's output for that frame. Frames before the first read the first. Past frames are rotated onto
-    the current sectors and carry their pose in the current frame as 3 extra channels (`align_sectors`).
-    """
-
-    def __init__(self, in_channels: int, out_channels: int, lags: Sequence[int], angles: Tensor, kernel_size: int = 1):
-        super().__init__()
-        self.lags = list(lags)
-        self.register_buffer("angles", angles.clone(), persistent=False)
-        pose_channels = POSE_CHANNELS * sum(1 for lag in self.lags if lag)
-        self.conv = nn.Conv1d(in_channels * len(self.lags) + pose_channels, out_channels, kernel_size, padding=kernel_size // 2)
-
-    def _convolve(self, taps: Sequence[Tuple[int, Tensor, Tensor]], pose_now: Tensor) -> Tensor:
-        parts = [x if lag == 0 else align_sectors(x, pose, pose_now, self.angles) for lag, x, pose in taps]
-        return self.conv(cat(parts, dim=1))
-
-    def forward(self, x: Tensor, poses: Tensor) -> Tensor:
-        b, t = x.shape[:2]
-        now = arange(t, device=x.device)
-        taps = []
-        for lag in self.lags:
-            src = (now - lag).clamp(min=0)
-            taps.append((lag, x[:, src].flatten(0, 1), poses[:, src].flatten(0, 1)))
-        y = self._convolve(taps, poses.flatten(0, 1))
-        return y.view(b, t, *y.shape[1:])
-
-    def step(self, x: Tensor, pose: Tensor, cache: Optional[TemporalCache]) -> Tuple[Tensor, TemporalCache]:
-        keep = max(self.lags) + 1
-        previous = cache or TemporalCache([], [])
-        cache = TemporalCache((previous.features + [x])[-keep:], (previous.poses + [pose])[-keep:])
-        last = len(cache.features) - 1
-        taps = [(lag, cache.features[max(last - lag, 0)], cache.poses[max(last - lag, 0)]) for lag in self.lags]
-        return self._convolve(taps, pose), cache
 
 
 def sensor_to_world(xy: Tensor, pose: Tensor) -> Tensor:
@@ -495,28 +436,20 @@ def _stage(channels: int, blocks: int, kernel_size: int, expansion: int) -> nn.S
     return nn.Sequential(*(ConvNeXtBlock(channels, kernel_size, expansion) for _ in range(blocks)))
 
 
-@dataclass
-class CalibrationState:
-    """Streaming cache of the calibration network: the bottleneck features the coarse convolution reads."""
-    coarse: TemporalCache
-
-
 class CalibrationNetwork(nn.Module):
-    """Stages 1-2, the calibration horizon (`docs/PROPOSAL.md` §5.3-§5.4).
+    """Stages 1-2 (`docs/PROPOSAL.md` §5.3-§5.4): one scan in, no state, no pose.
 
-    Per-beam input features read up to `max_range_m` (`sanitize_ranges`), with no per-beam temporal convolution: that was tested
-    and found unneeded, since the sensors' jitter is far below the match radius (`TODO.md` A50, `memory/noise-structure.md`);
-    a 1D U-Net of ConvNeXt blocks (widths `channels` at
-    N, N/2, N/4 beams, bottleneck at N/8 sectors) with a global max aggregator and a coarse causal space-time convolution at the
-    bottleneck; a DROW-style head giving every beam a person logit and a vote to the person's centre. `forward` scores the last
-    frame of a clip `[B, T, N]` and encodes only the frames the temporal taps read; `step` scores one frame from its caches, the
-    same computation. `dropout` regularises the head's input only, so the decoder features stage 3 pools from stay
-    deterministic; it holds no parameters, so a checkpoint trained at any rate loads into a network built with any other.
+    Per-beam input features read up to `max_range_m` (`sanitize_ranges`); a 1D U-Net of ConvNeXt blocks (widths `channels` at N, N/2
+    and N/4 beams, bottleneck at N/8 sectors) with a global max aggregator and a 3-tap convolution across bottleneck sectors
+    (`context`); a DROW-style head giving every beam a person logit and a vote to the person's centre. The memory's prior, when the
+    network has prior channels, enters at the bottleneck. `dropout` regularises the head's input only, so the decoder features
+    stage 3 pools from stay deterministic; it holds no parameters. Neither the per-beam fine nor the bottleneck coarse temporal
+    convolution survived its ablation (`TODO.md` A50, A60; `memory/rejected-ideas.md`).
     """
 
     def __init__(self, angles: Tensor, channels: Tuple[int, int, int] = (32, 64, 128), blocks: Tuple[int, int, int] = (2, 2, 2),
                  bottleneck_blocks: int = 2, kernel_size: int = 7, expansion: int = 4,
-                 coarse_lags: Sequence[int] = (0, 8, 16, 24, 32), prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M):
+                 prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M):
         super().__init__()
         c0, c1, c2 = channels
         self.prior_channels = prior_channels
@@ -528,7 +461,7 @@ class CalibrationNetwork(nn.Module):
         self.aggregate = nn.Conv1d(2 * c2 + prior_channels, c2, 1)
         with no_grad():
             self.aggregate.weight[:, 2 * c2:].zero_()        # the memory prior starts silent
-        self.coarse = CausalTemporalConv(c2, c2, coarse_lags, angles, kernel_size=3)
+        self.context = nn.Conv1d(c2, c2, 3, padding=1)
         self.bottleneck = _stage(c2, bottleneck_blocks, kernel_size, expansion)
         self.merge = nn.ModuleList([nn.Conv1d(2 * c2, c2, 1), nn.Conv1d(c2 + c1, c1, 1), nn.Conv1d(c1 + c0, c0, 1)])
         self.decoder = nn.ModuleList([_stage(c, 1, kernel_size, expansion) for c in (c2, c1, c0)])
@@ -551,57 +484,50 @@ class CalibrationNetwork(nn.Module):
         out = self.head(self.dropout(x))
         return out[:, 0], out[:, 1:].transpose(1, 2), x
 
-    def forward(self, ranges: Tensor, poses: Tensor, prior: Optional[Tensor] = None) -> Tuple[Tensor, Tensor, Tensor]:
-        """Person logits `[B, N]`, votes `[B, N, 2]` and decoder features `[B, C, N]` for the last frame of `ranges` `[B, T, N]` at
-        `poses` `[B, T, 3]`, with the memory prior `[B, T, prior_channels, N/8]` of every frame when the network has prior channels."""
-        b = ranges.shape[0]
-        last = ranges.shape[1] - 1
-        tapped = [max(last - lag, 0) for lag in self.coarse.lags]
-        stems = cat([self.stem(beam_features(ranges[:, g], self.angles, self.max_range_m)) for g in tapped], dim=0)
-        skips, bottom = self._encode(stems, cat([prior[:, g] for g in tapped], dim=0) if self.prior_channels else None)
-        bottom = bottom.view(len(tapped), b, *bottom.shape[1:])
-        coarse = self.coarse._convolve([(lag, bottom[j], poses[:, g]) for j, (lag, g) in enumerate(zip(self.coarse.lags, tapped))], poses[:, last])
-        now = self.coarse.lags.index(0)
-        return self._decode(coarse, [s[now * b:(now + 1) * b] for s in skips])
-
-    def step(self, ranges: Tensor, pose: Tensor, state: Optional[CalibrationState], prior: Optional[Tensor] = None) -> Tuple[Tensor, Tensor, Tensor, CalibrationState]:
-        """One frame `[B, N]` at `pose` `[B, 3]`, with its memory prior `[B, prior_channels, N/8]`: person logits, votes, decoder features
-        and the updated caches."""
+    def forward(self, ranges: Tensor, prior: Optional[Tensor] = None) -> Tuple[Tensor, Tensor, Tensor]:
+        """Person logits `[B, N]`, votes `[B, N, 2]` and decoder features `[B, C, N]` for scans `[B, N]`, with the memory prior
+        `[B, prior_channels, N/8]` when the network has prior channels."""
         skips, bottom = self._encode(self.stem(beam_features(ranges, self.angles, self.max_range_m)), prior)
-        coarse, coarse_cache = self.coarse.step(bottom, pose, None if state is None else state.coarse)
-        logit, votes, features = self._decode(coarse, skips)
-        return logit, votes, features, CalibrationState(coarse_cache)
+        return self._decode(self.context(bottom), skips)
 
 
 def fold_legacy_calibration(state: dict) -> dict:
-    """A calibration checkpoint from before 2026-09-17 in the current architecture; a current one is returned as it is.
+    """A calibration checkpoint from an earlier architecture in the current one; a current one is returned as it is.
 
-    Those checkpoints carry an 11-channel stem, whose input `LEGACY_VALIDITY_CHANNEL` flagged valid returns, and a fine temporal
-    convolution after it. With one fine tap (`--fine-lags 0`, the no-fine and static arms) the fine convolution is a 1x1
-    convolution straight after the 1x1 stem, so the two compose into one exactly. The validity input was 1 on every reading
+    Checkpoints from before 2026-09-17 carry an 11-channel stem, whose input `LEGACY_VALIDITY_CHANNEL` flagged valid returns, and a
+    fine temporal convolution after it. With one fine tap (`--fine-lags 0`, the no-fine and static arms) the fine convolution is a
+    1x1 convolution straight after the 1x1 stem, so the two compose into one exactly. The validity input was 1 on every reading
     those networks saw, because the FROG loader had already clamped every missing return, so its weights fold into the bias.
-    A multi-tap fine convolution read past frames and has no equivalent any more.
+    Checkpoints from before 2026-10-08 carry the bottleneck's convolution as `coarse.conv`; with one lag (`--coarse-lags 0`, every
+    no-temporal stage 2 that stage 3 was trained on) it is exactly today's `context`. A fine or coarse convolution that read past
+    frames has no equivalent any more, and runs at commit `LAST_TEMPORAL_COMMIT`.
     """
-    if "fine.conv.weight" not in state:
-        return state
-    stem_w, stem_b = state["stem.weight"][:, :, 0], state["stem.bias"]
-    fine_w, fine_b = state["fine.conv.weight"][:, :, 0], state["fine.conv.bias"]
-    if fine_w.shape[1] != stem_w.shape[0]:
-        raise ValueError(f"this checkpoint's fine convolution reads {fine_w.shape[1] // stem_w.shape[0]} frames; the fine convolution was removed "
-                         "2026-09-17 (TODO.md A50) and only one-tap checkpoints (--fine-lags 0) fold into the current network")
-    weight, bias = fine_w @ stem_w, fine_w @ stem_b + fine_b
-    if weight.shape[1] == N_BEAM_FEATURES + 1:
-        bias = bias + weight[:, LEGACY_VALIDITY_CHANNEL]
-        weight = cat([weight[:, :LEGACY_VALIDITY_CHANNEL], weight[:, LEGACY_VALIDITY_CHANNEL + 1:]], dim=1)
-    folded = {k: v for k, v in state.items() if not k.startswith("fine.")}
-    folded["stem.weight"], folded["stem.bias"] = weight[:, :, None], bias
+    folded = state
+    if "fine.conv.weight" in state:
+        stem_w, stem_b = state["stem.weight"][:, :, 0], state["stem.bias"]
+        fine_w, fine_b = state["fine.conv.weight"][:, :, 0], state["fine.conv.bias"]
+        if fine_w.shape[1] != stem_w.shape[0]:
+            raise ValueError(f"this checkpoint's fine convolution reads {fine_w.shape[1] // stem_w.shape[0]} frames; the fine convolution was removed "
+                             f"2026-09-17 (TODO.md A50) and only one-tap checkpoints (--fine-lags 0) fold into the current network")
+        weight, bias = fine_w @ stem_w, fine_w @ stem_b + fine_b
+        if weight.shape[1] == N_BEAM_FEATURES + 1:
+            bias = bias + weight[:, LEGACY_VALIDITY_CHANNEL]
+            weight = cat([weight[:, :LEGACY_VALIDITY_CHANNEL], weight[:, LEGACY_VALIDITY_CHANNEL + 1:]], dim=1)
+        folded = {k: v for k, v in folded.items() if not k.startswith("fine.")}
+        folded["stem.weight"], folded["stem.bias"] = weight[:, :, None], bias
+    if "coarse.conv.weight" in folded:
+        weight = folded["coarse.conv.weight"]
+        if weight.shape[1] != weight.shape[0]:
+            raise ValueError(f"this checkpoint's coarse convolution reads past frames ({weight.shape[1]} inputs for {weight.shape[0]} outputs); "
+                             f"it was removed 2026-10-08 (TODO.md A60) and runs at commit {LAST_TEMPORAL_COMMIT}")
+        folded = {("context." + k[len("coarse.conv."):] if k.startswith("coarse.conv.") else k): v for k, v in folded.items()}
     return folded
 
 
 def load_calibration_weights(net: CalibrationNetwork, state: dict) -> None:
     """Load a calibration network's weights into `net`, which may have prior channels the checkpoint has not: their weights start at
-    zero, so `net` computes exactly what the checkpoint did until they are trained. Checkpoints from before the fine convolution's
-    removal are folded first (`fold_legacy_calibration`)."""
+    zero, so `net` computes exactly what the checkpoint did until they are trained. Checkpoints from earlier architectures are folded
+    first (`fold_legacy_calibration`)."""
     state = fold_legacy_calibration(state)
     own = net.state_dict()["aggregate.weight"]
     if state["aggregate.weight"].shape != own.shape:

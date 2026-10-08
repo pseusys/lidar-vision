@@ -37,7 +37,7 @@ python train.py --detector spacetime_cnn --dataset frog --init-weights ../checkp
 **TAKHeLiPeD**, the three-horizon detector (`TODO.md` A43, A51), trains with its own script, because it streams recordings rather than sampling frames:
 
 ```bash
-python train_three_horizon.py step2        # stages 1-2, phase A; clips of max(coarse_lags) + 1 = 33 frames; --max-range-m sets the model range (default 10 m); 24 h cap
+python train_three_horizon.py step2 --checkpoint-every 0.25   # stages 1-2 on single frames, A59's recipe by default (nms-mean, mirror, nearest labels, dropout 0.1); then average_checkpoints.py; --max-range-m sets the model range (default 10 m); 24 h cap
 python train_three_horizon.py step3a --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth     # stage 3 on stage 2's candidates (builds their cache first)
 python train_three_horizon.py step3b --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth   # whole detector with feedback
 python train_three_horizon.py step4 --stage2 ... --memory ... --joint ../checkpoints_three_horizon/step3b_joint.best.pth   # SORT and slot-count ablations, no training
@@ -68,8 +68,8 @@ python three_horizon_oracle.py             # the interpolation bound on OUR cand
 python duration_curve.py --dir ../checkpoints_three_horizon/step2_control ../checkpoints_three_horizon/step2_dropout01   # test AP against training duration, from `step2 --checkpoint-every`'s checkpoints (A50 phase 1); pass --out, or it overwrites duration_curve.json; ~3.5 min per checkpoint
 python stage2_probe.py --stage2 <step2 ckpts> --stride 5                        # A59: the same stage-2 outputs through 7 decoders (vote grid, DR-SPAAM's NMS, LFE's peaks...), and recall by range and crowding against LFE at matched FP (~5 min per checkpoint)
 python stage2_probe.py --stage2 <step2 ckpts> --split val --stride 25 --out ../results/stage2_probe_val.json   # A59: the decoders' AP on val, where a decoder is chosen
-python train_three_horizon.py step2 --coarse-lags 0 --label-assign last --no-mirror --dropout 0   # A59 ablation: the recipe before 2026-10-06; the defaults are nearest-person labels, mirroring and dropout 0.1, decoded by nms-mean
-python coarse_e2e.py                                                            # A60's verdict: the six E13 detectors' AP, AP@0.3, recall at a shared FP budget and first-second recall, and drop/keep for the coarse convolution (needs every run trained; tests first)
+python train_three_horizon.py step2 --label-assign last --no-mirror --dropout 0   # A59 ablation: the recipe before 2026-10-06; the defaults are nearest-person labels, mirroring and dropout 0.1, decoded by nms-mean
+python coarse_e2e.py                                                            # A60's verdict: the six E13 detectors' AP, AP@0.3, recall at a shared FP budget and first-second recall, and drop/keep for the coarse convolution; re-scores from its saved frames, since the coarse checkpoints no longer load (code at e76aa94)
 python average_checkpoints.py ../checkpoints_three_horizon/<run> [...]         # stage 2's weight averaging (recipe since 2026-10-06): val-chosen window of a `--checkpoint-every 0.25` run -> <run>/step2_calibration.averaged.pth (~2 min per run)
 python train_three_horizon.py step1        # stage 3 on cached LFE-Peaks candidates, the memory in isolation (dropped from the plan 2026-09-15)
 ```

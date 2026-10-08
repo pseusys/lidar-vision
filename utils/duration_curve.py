@@ -49,7 +49,7 @@ sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
 from follow_the_drow.datasets.frog_dataset import frog_laser_angles  # noqa: E402
-from train_three_horizon import SPLITS, calibration_network, clip_length, detect_device, evaluate_calibration, load_frames  # noqa: E402
+from train_three_horizon import SPLITS, calibration_network, detect_device, evaluate_calibration, load_frames  # noqa: E402
 
 EPOCH_IN_NAME = re.compile(r"\.epoch([0-9.]+)\.pth$")
 EVAL_BATCH = 64             # its --eval-batch
@@ -93,7 +93,7 @@ def main() -> None:
         results[directory.name] = {}
         for label, path in selected:
             net = calibration_network(torch.load(path, map_location="cpu", weights_only=False), angles).to(device)
-            r = evaluate_calibration(net, split, positions, clip_length(net.coarse.lags), device, EVAL_BATCH)
+            r = evaluate_calibration(net, split, positions, device, EVAL_BATCH)
             results[directory.name][label] = r
             print(f"  {label:>5}  {args.split} AP {r['ap']:.2%}  P {r['precision']:.1%}  R {r['recall']:.1%}  "
                   f"FP {r['fp_per_frame']:.3f}  FN {r['fn_per_frame']:.3f}", flush=True)

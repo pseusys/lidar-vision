@@ -36,10 +36,10 @@ It breaks the lifecycle above in two places: there is no `T`-scan window (one sc
 | Stage | What it is | Parameters | Cost |
 | --- | --- | --- | --- |
 | 1, features | 10 pose-invariant per-beam features from one raw scan; `sanitize_ranges` maps non-finite, non-positive and beyond-`max_range_m` readings to `max_range_m`, so no dataset-specific preprocessing is needed | — | — |
-| 2, calibration network | 1D ConvNeXt U-Net over the whole scan, causal temporal convolutions per sector at the bottleneck with their caches odometry-re-aligned; a DROW vote head decodes 64 candidates, sub-threshold ones included | 1.18 M | ~10.4 ms/frame with decoding |
+| 2, calibration network | 1D ConvNeXt U-Net over **one scan**, a 3-tap convolution across bottleneck sectors and a global max; a DROW vote head, decoded by `nms-mean` into 64 candidates, sub-threshold ones included. No state, no pose: its coarse temporal convolution was removed 2026-10-08 (A60) | 0.98 M | 8.75 ms + 2.77 ms decoding, CPU, 4 threads |
 | 3, object memory | 256 slots in **room** coordinates; cross-attention association, slot self-attention, and a Δt-aware selective diagonal recurrence (Mamba-style, decay 1-60 s). Rescores candidates and coasts briefly-missed people | 0.31 M | ~4.4 ms/frame |
 
-`step()` carries `(CalibrationState, Slots)` between frames, ~1.8 MB, and the per-frame cost does not grow with how far back the memory reaches.
+Only stage 3 carries state between frames: its slots, ~138 KB per stream (the coarse convolution's ~1.8 MB cache went with it), and the per-frame cost does not grow with how far back the memory reaches. The whole detector streams at 20.8 ms per frame (p99 24.1) on this machine's CPU at 4 threads, inside FROG's 25 ms scan period (`performance-log.md`).
 **`manage_slots` runs under `no_grad`** — association, value accumulation, spawn, replacement and retirement are fixed rules; only what reads the slots learns.
 
 **What A51 settled about stage 3 (2026-09-29/30), and what the write-up should propose.**
@@ -57,10 +57,10 @@ Design rationale: [`../docs/PROPOSAL.md`](../docs/PROPOSAL.md). Evidence for eac
 - **Its decoder understates it.** The official DR-SPAAM decoder (`nms_predicted_center`, 0.5 m) on the same outputs scores +2.33 to +3.03 pp higher on all six stage-2 checkpoints.
   The vote grid stays the default until a decoder is chosen on val and stage 3 is retrained on the new candidates.
 - **Its gain over LFE is far and isolated people.** Through the vote grid it also loses close pairs (60% recall against LFE's 83%) and 1-4 m, but both are the vote grid merging neighbours: through `nms-mean` (chosen on val on all six) it reaches 82% of close pairs and beats LFE at every range, at **80.07%** AP.
-- **The coarse convolution: dropped by A60's rule (2026-10-08)** -- end to end, on the new recipe, three seeds each, the default architecture scores 85.01% against the no-temporal 85.87%, and +0.59 pp on people in their first second against a +2 pp bar (`../TODO.md` A60). Its removal awaits the owner. Before that measurement it already earned nothing measured: a tie at stage 2 under either decoder, the same recall in every range and crowding bin, at +20.6% parameters, ~3.3x the training time, a 1.8 MB streaming cache and odometry inside stage 2.
+- **The coarse convolution: dropped by A60's rule and removed (2026-10-08)** -- end to end, on the new recipe, three seeds each, the default architecture scores 85.01% against the no-temporal 85.87%, and +0.59 pp on people in their first second against a +2 pp bar (`../TODO.md` A60). Its code is at commit e76aa94 (`rejected-ideas.md`). Before that measurement it already earned nothing measured: a tie at stage 2 under either decoder, the same recall in every range and crowding bin, at +20.6% parameters, ~3.3x the training time, a 1.8 MB streaming cache and odometry inside stage 2.
   The end-to-end test, with the rule that drops it, is `../TODO.md` A60; until it runs, the no-temporal stage 2 -- one frame per call -- is the one every stage-3 result uses.
 
-**Two architecture names appear in the logs.** With `--fine-lags` removed on 2026-09-17, the runs formerly called "no-fine" are the **default** architecture (coarse convolution only) and "static" is **no-temporal** (`--coarse-lags 0`); directory names keep the old words. The B0 chain and the A51 slot ablations sit on the no-temporal stage 2, by the owner's call.
+**Older architecture names in the logs.** Between 2026-09-17 and 2026-10-08 the runs called "no-fine" or "default" kept the coarse convolution and "static" or "no-temporal" did not (`--coarse-lags 0`); directory names keep the old words. Only the no-temporal kind still loads (its one-lag `coarse.conv` folds into `context`), and it is what stage 2 now is; the others are refused with a pointer to e76aa94.
 
 ## The three earlier full-scan architectures — superseded
 
@@ -93,7 +93,7 @@ A detector class not in this dict cannot be trained or evaluated through `train.
 
 ## Components
 
-- **`three_horizon.py`** — TAKHeLiPeD: `beam_features`/`sanitize_ranges`, `CalibrationNetwork` + `CalibrationState`, `ObjectMemory` + `Slots`/`SlotRules`/`manage_slots`, and `calibration_network()`/`object_memory()`, which rebuild either stage the way its checkpoint was trained. Not in `DETECTOR_REGISTRY` — it is stateful and has its own trainer.
+- **`three_horizon.py`** — TAKHeLiPeD: `beam_features`/`sanitize_ranges`, `CalibrationNetwork` (single-frame; `fold_legacy_calibration` carries older checkpoints over), `ObjectMemory` + `Slots`/`SlotRules`/`manage_slots`, and `calibration_network()`/`object_memory()`, which rebuild either stage the way its checkpoint was trained. Not in `DETECTOR_REGISTRY` — it is stateful and has its own trainer.
 - **`architectures.py`** — `DrSpaamDetector` (cutout + auto-regressive spatial attention).
 - **`drow_detector.py`** — `DrowDetector` (cutout + fixed temporal sum); the only detector the ROS deployment currently runs (`deployment.md`).
 - **`full_scan.py`** — `SpaceTimeCNNDetector`, `FullScanTCNDetector`, `TemporalUNetDetector`; this project's own novel designs.

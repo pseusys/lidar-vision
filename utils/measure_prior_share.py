@@ -37,7 +37,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--runs", nargs="+", required=True, help="step3b run directories under checkpoints_three_horizon/")
     parser.add_argument("--frames", type=int, default=64)
-    parser.add_argument("--coarse-lags", default="(0,)", help="the stage 2 these were trained on; A51 used the no-temporal one")
     args = parser.parse_args()
 
     split = load_frames("test")
@@ -47,7 +46,7 @@ def main() -> None:
 
     for name in args.runs:
         state = torch.load(CHECKPOINTS / name / "step3b_joint.best.pth", map_location="cpu")
-        net = calibration_network(dict(model=state["net"], args=dict(coarse_lags=args.coarse_lags)), angles, prior_channels=2).eval()
+        net = calibration_network(dict(model=state["net"], args={}), angles, prior_channels=2).eval()
         body_w, prior_w = net.aggregate.weight[:, :-2].detach(), net.aggregate.weight[:, -2:].detach()
 
         body_terms, prior_terms, occupied = [], [], []

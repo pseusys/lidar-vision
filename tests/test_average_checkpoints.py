@@ -20,10 +20,10 @@ def _run(directory, epochs, args=None):
     angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
     keeper = PeriodicCheckpoint(directory, "step2_calibration", 0.25)
     for epoch in epochs:
-        net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, coarse_lags=(0,))
+        net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1)
         state = {k: torch.full_like(v, epoch) if v.is_floating_point() else v for k, v in net.state_dict().items()}
         keeper.due = epoch
-        keeper.offer(epoch, {"model": state, "epoch": epoch, "args": args or {"coarse_lags": "[0]"}})
+        keeper.offer(epoch, {"model": state, "epoch": epoch, "args": args or {}})
     return angles
 
 
@@ -47,7 +47,7 @@ class TestAverageWindow:
         assert checkpoint["averaged_epochs"] == [0.5, 0.75, 1.0]
 
     def test_it_loads_as_the_network_it_was_trained_as(self, tmp_path):
-        angles = _run(tmp_path, [0.5, 1.0], args={"coarse_lags": "[0]", "max_range_m": "15.0"})
+        angles = _run(tmp_path, [0.5, 1.0], args={"max_range_m": "15.0"})
         checkpoint = average_window(tmp_path, (0.5, 1.0))
         net = calibration_network(checkpoint, angles, channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1)
-        assert net.max_range_m == 15.0 and net.coarse.lags == [0]
+        assert net.max_range_m == 15.0

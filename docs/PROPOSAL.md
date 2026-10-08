@@ -4,6 +4,7 @@
 Everything written before that date, this document included, calls it *the three-horizon detector*, and the code still spells it `three_horizon`.
 
 **Status:** design settled for review, 2026-09-14, and since built, trained and measured — see [`../memory/performance-log.md`](../memory/performance-log.md) for what it scores and [`../CHANGELOG.md`](../CHANGELOG.md) for where the design moved after this document was written. The sections below are the design as proposed, not a description of the current code.
+**Since built, 2026-10-08:** both of stage 2's temporal convolutions failed their ablations and are gone -- the fine one on 2026-09-17 (`../TODO.md` A50), the coarse one on 2026-10-08 (A60: end to end it lost 0.87 pp AP and bought +0.59 pp on people in their first second). Stage 2 now reads one frame with no state and no pose, so the calibration horizon below survives as an argument, not as a module; the temporal horizons left are the object memory's two, and the state carried between frames is the slots alone (~138 KB, not ~1.8 MB). The coarse code is at commit e76aa94.
 **Readers:** the project owner, collaborating researchers, and anyone new to 2D LiDAR person detection.
 **Companion documents:** [`PAPER.md`](PAPER.md) holds the measurements this design rests on; [`../TODO.md`](../TODO.md) item A43 holds the work plan.
 
@@ -117,7 +118,7 @@ The architecture follows from one observation: **the evidence that separates a p
 
 | horizon | span | what it supplies | evidence | memory in the network | addressed by |
 | --- | --- | --- | --- | --- | --- |
-| **calibration** | under 1 s | a clean, steady local shape: repeated scans of one surface average out noise | a short window adds +1.9 points of AP (*published*); shuffling the order of a 5-frame window costs only 0.5 points, so this horizon averages rather than sees motion; an information probe peaks at a 1.0-1.8 s span | stage 2 — a fine temporal convolution (~0.08 s) and a coarse one (~1.3 s) | beam, then angular sector |
+| **calibration** | under 1 s | a clean, steady local shape: repeated scans of one surface average out noise | a short window adds +1.9 points of AP (*published*); shuffling the order of a 5-frame window costs only 0.5 points, so this horizon averages rather than sees motion; an information probe peaks at a 1.0-1.8 s span | stage 2 — a fine temporal convolution (~0.08 s) and a coarse one (~1.3 s); **both removed** (2026-09-17, 2026-10-08) | beam, then angular sector |
 | **short** | 1 to a few seconds | continuity: a person stays the same person through missed scans, occlusion and walking | +9.6 points of recall recoverable, 90% of it within 10 s; the median person stays in view 4.9 s | stage 3 — fast-decaying channels of the object slots | object |
 | **long** | tens of seconds | permanence: people eventually move, furniture never does | movement over a trail's life is the only feature that beat a tracker (§2.4); false-detection trails last up to 44 s | stage 3 — slow-decaying channels of the same slots | object |
 
@@ -155,7 +156,7 @@ model.reset()                                  # between recordings
 | part of the state | contents | size |
 | --- | --- | --- |
 | fine cache | the last 2 frames of full-resolution features, with each beam's endpoint in room coordinates | 2 x 720 x 32 |
-| coarse cache | the last 32 frames of low-resolution features, with the robot's pose for each | 32 x 90 x 128 |
+| ~~coarse cache~~ (**removed 2026-10-08** with the coarse convolution, `TODO.md` A60) | the last 32 frames of low-resolution features, with the robot's pose for each | 32 x 90 x 128 |
 | slots | 256 x [in use, value, position, velocity, learned state, statistics] | 256 x ~140 |
 
 In total, about 1.8 MB is carried from one frame to the next.
@@ -229,7 +230,7 @@ flowchart TB
 | memory | where | span | addressed by | horizon (§3) |
 | --- | --- | --- | --- | --- |
 | ~~fine temporal convolution~~ (**removed 2026-09-17**: tested, not needed; `TODO.md` A50) | stage 2, full resolution | ~0.08 s | beam | calibration |
-| coarse space-time convolution | stage 2, bottleneck | ~1.3 s | angular sector | calibration, reaching into short |
+| ~~coarse space-time convolution~~ (**removed 2026-10-08**: end to end it lost 0.87 pp; `TODO.md` A60) | stage 2, bottleneck | ~1.3 s | angular sector | calibration, reaching into short |
 | slot state, fast channels | stage 3 | ~1-10 s | object | short |
 | slot state, slow channels | stage 3 | ~10-60 s | object | long |
 
@@ -273,7 +274,7 @@ The last group is also what makes caching work: numbers measured relative to eac
 | layer | resolution | frames read | past offsets | why at this resolution |
 | --- | --- | --- | --- | --- |
 | fine | full, each beam separately | 3, consecutive | 0, 0.04, 0.08 s | pure calibration |
-| coarse | 90 angular sectors, with neighbouring sectors | 5, eight frames apart | 0, 0.31, 0.61, 0.92, 1.22 s | a walking person crosses many beams in a second but only a few sectors |
+| ~~coarse~~ (**removed 2026-10-08**, A60; a 3-tap convolution across sectors of the current frame stays) | 90 angular sectors, with neighbouring sectors | 5, eight frames apart | 0, 0.31, 0.61, 0.92, 1.22 s | a walking person crosses many beams in a second but only a few sectors |
 
 Each call computes one new frame per layer and reads the rest from its cache, so every frame is used at no extra cost.
 
@@ -284,7 +285,7 @@ Each call computes one new frame per layer and reads the rest from its cache, so
 | cache | correction on every frame |
 | --- | --- |
 | fine | move each cached beam's endpoint into the current sensor frame and write its features to the beam it now falls on, nearest distance winning — an index operation |
-| coarse | shift sectors to undo rotation, and give the network the relative pose of each past frame as extra input, as TimePillars does |
+| ~~coarse~~ (moot since 2026-10-08: no stage-2 cache remains) | shift sectors to undo rotation, and give the network the relative pose of each past frame as extra input, as TimePillars does |
 
 During training the same layers run on short clips without caches; streaming reproduces the clip exactly, up to the alignment correction.
 
@@ -354,7 +355,7 @@ Replayed on every frame of the FROG test recording, with candidates down to a sc
 | --- | --- | --- | --- | --- |
 | ~~`fine_lags_s`~~ | removed with the fine temporal convolution (2026-09-17) | - | - | - |
 | `max_range_m` | the model's range: missing, non-positive and farther readings all read as this value | `10.0` | FROG is annotated to 10 m; one rule for every dataset's no-return encoding (`memory/noise-structure.md`) | yes |
-| `coarse_lags_s` | past offsets read by the coarse convolution | `[0, 0.31, 0.61, 0.92, 1.22]` | ~1.3 s; an information probe peaks at 1.0-1.8 s | no |
+| ~~`coarse_lags_s`~~ | removed with the coarse temporal convolution (2026-10-08, A60) | - | - | - |
 | `channels` | encoder widths | `[32, 64, 128]` | first sizing, comparable to LFE | yes |
 | `blocks_per_level` | ConvNeXt blocks per encoder level (decoder: 1) | `[2, 2, 2]`, bottleneck 2 | first sizing | yes |
 | `kernel_size` | depthwise convolution kernel | 7 | ConvNeXt's default | yes |
@@ -383,7 +384,7 @@ Replayed on every frame of the FROG test recording, with candidates down to a sc
 
 | setting | meaning | default | reasoning |
 | --- | --- | --- | --- |
-| `clip_frames` | clip length for training stage 2 | 35 | the coarse convolution's reach, ~1.34 s |
+| ~~`clip_frames`~~ | removed with the coarse convolution: stage 2 trains on single frames (2026-10-08) | - | - |
 | `chunk_s` | chunk lengths when training memory, in increasing order | `[1, 10, 30]` | the short horizon first, then the long |
 | `state_reset_prob` | chance that a chunk starts from empty memory within a recording | 0.2 | a deployed robot's memory is always warm; training must see both |
 | `match_radius_m` | distance for matching detections to annotations in the loss | 0.5 | the benchmark's matching distance |
@@ -398,7 +399,7 @@ With N beams, C channels, k kernel size, L layers, K slots, P candidates, D slot
 | part | cost |
 | --- | --- |
 | input description | O(N) |
-| cache correction | O(N) fine, O(N/8 · 32) coarse |
+| cache correction | none since 2026-10-08: stage 2 keeps no cache |
 | stage 2 network | O(N · C² · L) + O(N · C · k · L) — independent of how far back memory reaches |
 | candidate selection | O(N log P) |
 | stage 3 | O(K · P · D) matching + O(K² · D) slot exchange + O(K · D · S) update |
@@ -455,7 +456,7 @@ Multiply-adds are a hardware-independent count of the arithmetic a network perfo
 | change | what it tests |
 | --- | --- |
 | remove the fine temporal convolution | the calibration horizon (**done**: a tie at three seeds, removed 2026-09-17) |
-| remove the coarse temporal convolution | the ~1.3 s motion scale |
+| remove the coarse temporal convolution | the ~1.3 s motion scale (**done**: dropped by A60's end-to-end rule, 2026-10-08) |
 | remove stage 3 | the short and long horizons together |
 | replace stage 3 with SORT on the same candidates | learned matching and state against a classical tracker |
 | remove the feedback prior | whether memory must change what the detector sees |
@@ -479,7 +480,7 @@ Step 1 gives stage 3 the weakest input it will ever see, so a gain there is a fl
 
 - **The long horizon cannot judge a person who has not moved yet.** The best movement-based filter needed to see the future; in real time, a person who has stood still for twenty seconds and a chair look alike. Feedback sharpens this: a slot convinced it holds a chair could teach the detector to stop seeing a standing person. Mitigations: memory is gated evidence starting at zero, simulated priors include wrong tracks, and people standing still are always reported separately.
 - **Hardware.** Recurrent training has crashed on this project's DirectML setup before; whether CUDA is available decides chunk lengths.
-- **Cache alignment errors** grow with the coarse span and with odometry noise; step 0's static-scene test and the input ablation expose them.
+- ~~**Cache alignment errors** grow with the coarse span and with odometry noise; step 0's static-scene test and the input ablation expose them.~~ Moot since 2026-10-08: stage 2 keeps no cache.
 - **Odometry drift over 30-60 s** limits how long slot positions stay trustworthy.
 
 ## 12. Alternatives deferred to experiments
@@ -489,7 +490,7 @@ Step 1 gives stage 3 the weakest input it will ever see, so a gain there is a fl
 | distance information | distance and distance-minus-median channels | a first layer that gathers neighbours within a fixed metric width (DROW's adaptive window) | ablation; worth ~1 point in §2.6 |
 | what is cached | features, corrected for motion | raw scans recomputed each frame; scans for the first layer and features deeper | step 0's static-scene test; input ablation |
 | fine temporal mixing | none (the 3-frame causal convolution was removed 2026-09-17) | shifting part of each layer's channels in time (TSM — Lin, Gan & Han, *ICCV* 2019) | only if a dataset shows jitter near the match radius |
-| coarse span | 8 frames between taps (~1.3 s) | 9 frames (~1.5 s); other spans | sweep over `coarse_lags_s` |
+| ~~coarse span~~ | moot: the coarse convolution is removed (2026-10-08) | - | - |
 | stage-2 temporal mechanism | dilated causal convolution | DR-SPAAM's running template with local attention | if cache alignment proves costly |
 | backbone blocks | ConvNeXt-style, widening 4 | plain residual U-Net; widening 2 | ablation and parameter budget |
 | baseline | same model, memory reset every frame | LFE ported to PyTorch, as a published baseline | whether reviewers require a published baseline |
@@ -560,7 +561,7 @@ This design deliberately departs from two constraints of this project's earlier 
 
 - **Is CUDA available?** It decides training chunk lengths.
 - **What are FROG's and DROW's exact angular resolutions and frame rates?** They fix `angular_resolution_deg`.
-- **Coarse span:** 8 or 9 frames between taps.
+- ~~**Coarse span:** 8 or 9 frames between taps.~~ Moot: the coarse convolution is removed (2026-10-08).
 - **An unexplained spike in slot use:** for annotated people, the 99.9th percentile jumps from 9 to 28 slots at a 1 s fade time — probably a matching artefact.
 - **DR-SPAAM as a reference:** this repository's version recomputes a window every frame and costs 2.6x the official streaming code, so its reference numbers should be re-measured in the official form.
 - **Odometry drift over 30-60 s.**

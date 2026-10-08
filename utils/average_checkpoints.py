@@ -28,7 +28,7 @@ sys.path.insert(0, str(_HERE))
 
 from duration_curve import checkpoints  # noqa: E402
 from follow_the_drow.datasets.frog_dataset import frog_laser_angles  # noqa: E402
-from train_three_horizon import calibration_network, clip_length, detect_device, evaluate_calibration, load_frames  # noqa: E402
+from train_three_horizon import calibration_network, detect_device, evaluate_calibration, load_frames  # noqa: E402
 
 WINDOWS: Tuple[Tuple[float, float], ...] = ((0.5, 1.0), (0.75, 1.25), (0.5, 1.5), (1.0, 2.0), (0.5, 2.0), (0.25, 2.25))
 VAL_FRAMES = 2000
@@ -66,7 +66,7 @@ def main() -> None:
         for window in WINDOWS:
             if len(window_members(epochs, window)) > 1:
                 net = calibration_network(average_window(run, window), angles).to(device)
-                scores[f"{window[0]:.2f}-{window[1]:.2f}"] = evaluate_calibration(net, val, positions, clip_length(net.coarse.lags), device, EVAL_BATCH)["ap"]
+                scores[f"{window[0]:.2f}-{window[1]:.2f}"] = evaluate_calibration(net, val, positions, device, EVAL_BATCH)["ap"]
         chosen = max(scores, key=scores.get)
         torch.save(average_window(run, tuple(float(x) for x in chosen.split("-"))), run / AVERAGED_NAME)
         (run / "averaging.json").write_text(json.dumps(dict(val_ap=scores, chosen=chosen), indent=1), encoding="utf-8")
