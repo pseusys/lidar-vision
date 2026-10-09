@@ -55,7 +55,66 @@ That's a structural gap, not a pending deploy — see §E below.
 >
 > Previous items A20, A24, A25 (dataset framing) and A22, A26, A27 (architecture) are folded into the phases below rather than left as separate threads.
 
+### The actionable list, set 2026-10-09
+
+**Owner's call:** everything that touches FROG -- the experiments still open, the runs that may have gone stale, and the numbers
+the write-up has to defend -- becomes actionable now; the other datasets wait as **A62** and **A63**, the last two items.
+
+**Read this list, not the running order below it.** The running order is the 2026-09-10 reorganisation and is kept for history;
+every row here points at the item where its plan, its pre-registered rule and its blast radius already live.
+
+**Tier 1 -- numbers the write-up has to defend.** No training; hours, not days. These come first because the paper cannot be
+written around numbers whose convention or provenance is unsettled.
+
+| # | action | plan lives in | cost |
+| --- | --- | --- | --- |
+| 1 | **Finish the person-free table**: fill `memory/performance-log.md`'s three `gap` rows from the three `empty_scene_s*.json`, with the beyond-fade column beside them | A50 phase 1 item 7 | running |
+| 2 | **Settle the frame-rate convention and restate every per-second FROG figure.** `evaluate._frame_period_s` takes the *stamped median* (26.2 Hz) while the sensor delivers a scan every 25 ms (40 Hz, A49): every `FP/s` in `performance-log.md` is 1.53x low on the real clock. Pick one convention, say which, and fix the constants that hardcode the other -- `informational_capacity.DT_NATIVE_S`, `motion_analysis.FRAME_HZ`, `persistence_map.SPANS`/`--hz`, `slot_budget`'s `dt` fallback | A49's FROG residual | ~2 h, then re-run the affected analysis rows |
+| 3 | **Explain the displacement oracle's 4.20 -> 2.58.** The same command gave a different answer after the heading-wrap fix, by far more than the ~0.14% of frames it touched, and `docs/PAPER.md` would quote it | A48, last bullet | ~1 h |
+| 4 | **A48 item 6**: the DR-SPAAM windowed evaluations at `T > 1` on DROW and FROG, the last unre-run row downstream of the heading fixes. Do it with action 12 | A48 | ~1 h |
+| 5 | **LFE-Peaks and LFE-PPN on `balanced` test** -- the headline metric A31 defined, never measured, ~2 min each since the PPN fix | A32 | ~15 min |
+| 6 | **One end-to-end cost table on the adopted recipe**: stage 1-2 plus memory ms/frame at batch 1, CPU and GPU, against the 25 ms budget. The pieces exist separately (stage 2 ~8.8 ms, memory 5.17-5.22 ms); the paper needs the sum, measured, not added | A59's latency note, A51 E4 | ~1 h |
+| 7 | **Close A33-A36 against A35's own acceptance criteria.** They were written as a funnel for an architecture search that TAKHeLiPeD replaced; its criteria are "single-frame at least 66.5%" (stage 2 alone is **82.2%**) and "strictly benefits from ordered time" (the memory adds **+3.7 pp** over its own candidates, 95% of it within 10 s). Record that they are met and by what, rather than leaving a stalled funnel in §A | A33, A34, A35, A36 | ~30 min |
+| 8 | **Decide A51's ablation table**: re-screen the six single-seed arms on the adopted recipe (~2 GPU-days) or report them labelled with the superseded backbone they ran on. **Owner's call, and it gates nothing else** | A51's re-based block | 0 or ~2 days |
+| 9 | **Refresh the stale pages**: `docs/SHOWCASE.md` still calls the joint-training regression "under investigation" and presents step 3b as a test of feedback, which E12 closed; `docs/PAPER.md` and `memory/performance-log.md` still lead with the pre-A59 recipe | A50's documentation note | ~half a day |
+
+**Tier 2 -- FROG experiments still worth running, one training run each (~1 h stage 2, ~5 h stage 3).** Ordered by how well
+each is motivated by a measurement already taken, not by how interesting it sounds.
+
+| # | action | why this one | plan lives in |
+| --- | --- | --- | --- |
+| 10 | **Range anchors for far people**, as LFE-PPN | **two independent measurements point here**: A59 found width's entire gain is on far people, A61 found the memory's lead largest beyond 8 m | A50 phase 3 |
+| 11 | **A39's locally range-centred input channel**, and the metric-width first layer it generalises | the one Tier-0 candidate never run; §2.6 prices the adaptive window at ~1 point, and A42 found local-Cartesian input does not replace it | A39, A50 phase 3 |
+| 12 | **D4: `step3a --learn-value`** -- implemented 2026-09-20, never run | it is one flag and it answers A50 phase 1b item 4: are the value rule's two hand-set constants the right ones? Expected small, and D5 is gated on it | A51 phase 3b |
+| 13 | **Slot creation and confirmation**: a higher creation threshold, or confirmation over several frames, against creating a slot from any candidate above 0.01 | the memory's phantoms on person-free frames are its *most* persistent detections (91.3% recur against the candidates' 85.0%), which is a creation-rule question | A50 phase 3 |
+| 14 | **The recurrence family**: minGRU, GRU or LRU against the selective diagonal decay | E10 says the learned state is the mechanism and D3 says the learned *decay* is worth little, so the family is the open half | A50 phase 3 |
+| 15 | **Every beam as a candidate**, against the 64 best after merging | the candidate pool is an unexamined ceiling on recall, and `TOP_P` was never swept | A50 phase 3 |
+| 16 | **Sensor-frame vote targets** instead of beam-relative offsets | A59 puts about half the lead over LFE-Peaks in the output head, which is where this acts | A50 phase 2 |
+| 17 | **A plain residual U-Net, and widening 2** against ConvNeXt blocks at widening 4 | A59's W arm priced *shrinking* to LFE's widths (-1.4 pp, no faster); the block and the widening themselves are untested | A50 phase 3 |
+| 18 | **D5: a learned association width** | gated on 12 | A51 phase 3b |
+| 19 | **An identity loss from pseudo-identities**, and **training everything together from the start** | both are chains rather than runs, and both should wait until the headline numbers are frozen | A50 phase 3 |
+| 20 | **A learned grid over the room** | research-scale, and hand-built grids already failed (§2.4) | A50 phase 3 |
+
+**Tier 3 -- baseline fidelity.** Both are about what a reviewer will ask of the comparison, not about our own model.
+
+| # | action | plan lives in | cost |
+| --- | --- | --- | --- |
+| 21 | **A59 phase 3b: LFE retrained with its authors' recipe**, as a PyTorch port proven against the published ONNX weights, then three arms (as published / shuffle fixed / selected on AP). The converse of ladder arm R, and the last piece of "why does a single-frame network beat LFE?" | A59 phase 3 (b) | ~1.5-2 h port, ~3-6 h unattended |
+| 22 | **A47: DR-SPAAM in its official streaming form.** Every DR-SPAAM number here is the windowed form; the official detector keeps its template across calls | A47 | ~2 h with its test |
+
+**Tier 4 -- housekeeping that unblocks the write-up.**
+
+| # | action | plan lives in | cost |
+| --- | --- | --- | --- |
+| 23 | **A52 steps 1-4: the code rename to `takheliped`.** Mechanical, tests green between each step, and step 4 needs a moment with no run in flight | A52 | ~2 h |
+| 24 | **A53: rewrite `docs/RESEARCH.md` around TAKHeLiPeD** | A53 | ~a day, no compute |
+| 25 | **The small gaps**: `duration_curve.py --help` exits 1 through its `BaseException` wrapper; a project-level `ruff` config for `library/` and `utils/`; the `Makefile`'s `python3`/`make venv` (A6) | §D, A6 | ~2 h together |
+
+**Not on this list, deliberately:** anything needing another dataset (**A62**, **A63**); the `balanced` second-partition check
+(§D, for just before publication); and the ROS deployment gap (§E), which is a separate project rather than a queued task.
+
 ### Running order
+
 
 | phase | item | gate | cost |
 | --- | --- | --- | --- |
@@ -175,6 +234,49 @@ Built (`BackgroundMap`), measured, and below every lever already priced: best **
 **How.** Add a streaming evaluation path that carries the template between consecutive frames of a sequence and resets it at sequence boundaries; compare against the windowed form on the DROW test set with the published weights. Write the test first: a streamed run over frames `0..T-1` must equal the windowed forward on the same `T` frames.
 
 **Why.** Fidelity of a replicated baseline (`AGENTS.md` rule 3), and it is the in-domain precedent for A43's `step` interface. With `alpha = 0.5` old evidence halves every frame, so the gap is expected to be small -- which is a prediction to check, not a reason to skip it.
+
+### A62. Make the detector dataset-agnostic -- **the first of the two postponed dataset items (owner, 2026-10-09)**
+
+**What.** Everything that has to change before a second dataset can be trained at all, and nothing that depends on having one.
+The list is A49's "what the current code ties to FROG", unchanged in substance:
+
+1. `utils/train_three_horizon.py` hardcodes `FROG_Dataset` and `frog_laser_angles(720)`: take the dataset and its angles as
+   arguments, with FROG as the default so no FROG result moves.
+2. **Settings in physical units, not frames or beams.** `docs/PROPOSAL.md` principle 9: a lag, a chunk, a window and a decay are
+   seconds; a gate and a radius are metres. Stage 3 already works this way, stage 2 does not.
+3. **One angular spacing.** `docs/PROPOSAL.md` §5.3's resampling is not built, so a kernel spans 0.25 deg per beam on FROG and
+   0.5 deg on DROW -- the same convolution sees twice the arc.
+4. **The per-dataset parameter table** the owner asked for, printed by the trainer and stored in the checkpoint: beams, field of
+   view, spacing, rate, annotated share, people per frame, classes, range limit.
+5. The range limit is already `--max-range-m`; state it per dataset (10 m drops 7.3% of DROW's labels).
+
+**How.** Tests first, FROG as the regression: a FROG run on the ported code must reproduce a current FROG run's candidates
+bit for bit where the settings are equivalent, which is the only check that keeps the headline numbers intact. No retraining is
+needed for the port itself.
+
+**Why.** It is the whole reason a second dataset is cheap once it is done, and it is the item that makes "adaptive" a property of
+the code rather than a claim in the paper.
+
+**Cost.** ~a day of code, no GPU. **Gated on nothing** -- it can start whenever the FROG list is not using the machine.
+
+### A63. Train and report on DROW, then JRDB -- **the second of the two postponed dataset items (owner, 2026-10-09)**
+
+**What.** The results half of A49, plus the two A56 rows that were waiting on it.
+
+| step | what | notes |
+| --- | --- | --- |
+| 1 | **DROW**: train stage 2 and stage 3 with the settings in physical units, three seeds, and report against DROW's own published baselines | 12.7 Hz, every 5th scan annotated (20x less stage-3 supervision than FROG), three classes |
+| 2 | **FROG -> DROW zero-shot**, beside it | the owner's 2026-09-15 question: one model per dataset, one transferred, or both -- each result says which |
+| 3 | **JRDB**: measure the loader's geometry, rate and annotation density first (the table's "to measure" row), then repeat | the official DR-SPAAM repo merges two lasers into 1091 points / 360 deg; our loader assumes 541 / 270 deg |
+| 4 | **A56's E17**: the slots scored as a tracker -- HOTA, MOTA, IDF1, OSPA(2) -- on JRDB's 3D tracks projected to the ground plane | needs step 3; FROG has no identities, which is why these metrics were never computed |
+| 5 | **A56's E18**: self-supervised memory, or DROW label densification from slot tracks | needs step 1; densifying DROW's every-5th annotation is itself a research item |
+
+**Rules that already apply.** **AP does not compare across datasets** (person density differs 3.8x), so each dataset's result is
+set against that dataset's published baselines only; and every number states its range limit, since 10 m is not a neutral choice
+on DROW.
+
+**Cost.** DROW ~2 days of GPU at three seeds plus the zero-shot pass; JRDB unknown until step 3's measurements.
+**Gated on A62.**
 
 ### A48. Re-run everything downstream of the two heading-wrap fixes
 
@@ -1172,7 +1274,12 @@ The static arm scores **identically ordered and shuffled** (77.22% / 2.776 FP / 
 
 Every quoted number states how many seeds it rests on, and single-seed numbers are labelled provisional — dropout's +0.70 pp included. Because confirmation re-runs the control anyway, the spread estimate tightens as a by-product, so the threshold sharpens as it is used and is never paid for separately.
 
-### A49. The three-horizon detector on all three datasets, parameters stated for each
+### A49. The three-horizon detector on all three datasets, parameters stated for each -- **split 2026-10-09 into A62 and A63**
+
+> **This item is now the record, not the queue.** The owner's call of 2026-10-09 postponed every other-dataset task and asked
+> for it as two clear items: **A62** makes the code dataset-agnostic, **A63** trains and reports on DROW and then JRDB. The
+> findings below -- the anomaly checker's results, FROG at 40 Hz, DROW at 12.7 Hz, the missing-return rule, and the per-dataset
+> table -- stay here because other documents cite them, and both new items inherit them.
 
 **Owner's goal (2026-09-15): an adaptive model.** Train it and report numbers on FROG, DROW and JRDB, each with an explicit table of the parameters used. Order: FROG first (A43 steps 3a -> 3b -> 4, running), then DROW, then JRDB (§C).
 
