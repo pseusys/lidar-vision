@@ -39,7 +39,7 @@ sys.path.insert(0, str(_HERE))
 
 from follow_the_drow.datasets.frog_dataset import FROG_Dataset  # noqa: E402
 from train_three_horizon import (  # noqa: E402
-    OPERATING_THRESHOLD, Split, detect_device, evaluate, evaluation_segments, load_split, object_memory,
+    OPERATING_THRESHOLD, Split, detect_device, evaluate, evaluation_segments, load_split, mean_frame_period, object_memory,
 )
 
 PERSON_FREE_MODE = "transferred"
@@ -91,9 +91,10 @@ def time_since_person(split: Split, populated: np.ndarray) -> np.ndarray:
 
 
 def frame_period(split: Split) -> float:
-    """The recordings' median frame period. Detections per second is `frames * this`, never the span between scored frames: the
-    person-free frames are interleaved with populated ones the split drops, so a span bills time nobody was asked about."""
-    return float(np.median(np.concatenate([np.diff(split.data.time[int(o):int(o) + int(n)]) for o, n in zip(split.offsets, split.lengths)])))
+    """The recordings' seconds per frame, through the shared `frame_period_s`. Detections per second is `frames * this`, never the
+    span between scored frames: the person-free frames are interleaved with populated ones the split drops, so a span would bill
+    time nobody was asked about."""
+    return mean_frame_period(split.data.time, split.offsets, split.lengths)
 
 
 def populated_frames(split: Split, limit: int) -> np.ndarray:

@@ -31,7 +31,7 @@ sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
 from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-from follow_the_drow.utils.drow_utils import project_cartesian_from_polar
+from follow_the_drow.utils.drow_utils import frame_period_s, project_cartesian_from_polar
 
 from motion_analysis import build_tracks, to_world
 from temporal_oracle import _detector, _detect_xy
@@ -51,7 +51,7 @@ def collect_recall(args):
         t = np.asarray(ds.scan_time[seq], dtype=float)
         if len(t) < 2 or (t[-1] - t[0]) < args.min_seq_seconds:
             continue
-        hz = 1.0 / float(np.median(np.diff(t)))
+        hz = 1.0 / frame_period_s([t])
         hz_out = hz if hz_out is None else hz_out
         idx, world, found = [], [], {}
         for det_idx in range(len(ds.det_id[seq])):
@@ -124,7 +124,7 @@ def collect_discrimination(args):
                       verbose=False)
     det = _detector(args.detector)
     angles = frog_laser_angles(720)
-    hz = 1.0 / float(np.median(np.diff(np.asarray(ds.scan_time[0], dtype=float))))
+    hz = 1.0 / frame_period_s(ds.scan_time)
 
     tracks, n_tp, n_fp, n_gt, n_frames = [], 0, 0, 0, 0
     for seq in range(len(ds.det_id)):
@@ -222,7 +222,7 @@ def collect_precision(args):
                       verbose=False)
     det = _detector(args.detector)
     angles = frog_laser_angles(720)
-    hz = 1.0 / float(np.median(np.diff(np.asarray(ds.scan_time[0], dtype=float))))
+    hz = 1.0 / frame_period_s(ds.scan_time)
 
     tracks, n_frames, run_lens = [], 0, []
     for seq in range(len(ds.det_id)):

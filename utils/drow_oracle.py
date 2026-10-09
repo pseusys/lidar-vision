@@ -24,7 +24,7 @@ from follow_the_drow.datasets import DROW_Dataset
 from follow_the_drow.detectors import DrowDetector
 from follow_the_drow.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
-    project_cartesian_from_polar,
+    frame_period_s, project_cartesian_from_polar,
 )
 from train import evaluate_auc
 from motion_analysis import build_tracks, to_world
@@ -53,7 +53,7 @@ for s_, x_, y_, f_ in zip(d["scores"][keep], d["x"][keep], d["y"][keep],
     by_frame.setdefault(int(f_), []).append((float(x_), float(y_)))
 
 pairs = d["pairs"]
-hz = 1.0 / float(np.median(np.diff(np.asarray(ds.scan_time[0], dtype=float))))
+hz = 1.0 / frame_period_s(ds.scan_time)
 
 # --------------------------------------------------------------- recall side
 tracks_all = []

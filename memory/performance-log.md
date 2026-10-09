@@ -160,16 +160,18 @@ It points at the anchor-decode geometry calibrated on 2026-09-10, whose angular 
 ## Empty-scene false positives — FROG `transferred`, person-free frames only
 
 **A genuine gap: nobody has published this, because the FROG benchmark contains no person-free frames at all.**
-All 72,533 of them, from the three raw recordings, 46.1 minutes of real time at 26.2 Hz.
+All 72,533 of them, from the three raw recordings, **30.2 minutes of real time at 40.1 Hz**.
+**Every `FP/s` in this file rose by 1.53x on 2026-10-10**, when the frame rate stopped being read as the median stamped interval: FROG's recorder stamps scans in bunches, so the median says 26.2 Hz where the sensor delivers one scan every 25 ms (`interpreting-evaluation.md`).
+The `FP/frame` columns are unaffected, and they are the ones to compare between detectors; the per-second columns are the ones to quote at a robot.
 wp-AUC is *undefined* here, not merely low — no true positives means precision 0 at every threshold and recall with no denominator (`interpreting-evaluation.md`).
 Every detection is a false positive by construction, so the metric is a count.
 
 | Model | FP/frame @0.3 | FP/s @0.3 | frames with ≥1 FP @0.3 | with SORT, best "free" setting |
 | --- | --- | --- | --- | --- |
-| LFE-Peaks | **1.39** | **36.4** | **51.0%** | **1.33** (−4%, −0.1pp AP) |
-| LFE-PPN | **3.17** | **83.1** | **64.0%** | stale (1.87 was measured at `nms_radius = 0.8`) |
-| **TAKHeLiPeD, stage 2 alone** | **2.62** (sd 0.20) | **68.7** | **67.2%** | — |
-| **TAKHeLiPeD, whole detector** | **0.74** (sd 0.14) | **19.4** | **34.1%** | — (the memory is the filter) |
+| LFE-Peaks | **1.39** | **55.7** | **51.0%** | **1.33** (−4%, −0.1pp AP) |
+| LFE-PPN | **3.17** | **127.2** | **64.0%** | stale (1.87 was measured at `nms_radius = 0.8`) |
+| **TAKHeLiPeD, stage 2 alone** | **2.62** (sd 0.20) | **105.1** | **67.2%** | — |
+| **TAKHeLiPeD, whole detector** | **0.74** (sd 0.14) | **29.7** | **34.1%** | — (the memory is the filter) |
 | SpaceTimeCNN | gap | gap | gap | gap |
 | FullScanTCN | gap | gap | gap | gap |
 | TemporalUNet | gap | gap | gap | gap |
@@ -203,7 +205,7 @@ Restricted to the 41,797 frames beyond that horizon the reduction is **larger**,
 **What the memory keeps is the furniture.** Its surviving phantoms recur next frame **92.2%** of the time against the candidates' 84.9% and real people's 99.8%: it removes the unstable ones and keeps the ones that look like a person in every frame, which is the failure mode A41 and A44 could not remove classically.
 That is a creation-rule question rather than a scoring one (`TODO.md` §A, Tier 2 item 13).
 
-**Read the FP/s column with care.** It uses the same stamped-median frame period as `evaluate.py` (38.14 ms, 26.2 Hz), so these rows are comparable to the published ones above — and both are **1.53x low against the sensor's real 40 Hz** (A49). Settling that convention is `TODO.md` §A Tier 1 item 2.
+**The FP/s column is on the real clock** since 2026-10-10: 24.96 ms per frame, 40.06 Hz, from the one shared `frame_period_s`. The whole detector's 29.7 FP/s against LFE-Peaks' 55.7 is the figure a deployment feels; the per-frame column is the one to compare between detectors.
 **LFE-Peaks' figure moved from 1.28 to 1.39 on 2026-09-10** when its `merge_radius` was corrected from 0.40 m to 0.30 m — a tighter merge keeps double-reports the looser one was collapsing. The correction is what made its AP reproduce the paper (`CHANGELOG.md`).
 
 **Both published static detectors hallucinate a person in half to two-thirds of frames containing nobody**, and still in a third to a half of them at 0.9 confidence.

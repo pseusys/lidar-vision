@@ -12,7 +12,7 @@ from scipy.ndimage import maximum_filter
 from scipy.spatial.distance import cdist
 from scipy.optimize import linear_sum_assignment
 
-from numpy import zeros, arctan, arctan2, square, add, sin, cos, logical_not, concatenate, linspace, sum, mean, argmin, argsort, array, where, full_like, arange, clip, unique, radians, float32, int64, uint32, nan, c_, r_
+from numpy import zeros, arctan, arctan2, square, add, sin, cos, logical_not, concatenate, linspace, sum, mean, argmin, argsort, array, asarray, diff, where, full_like, arange, clip, unique, radians, float32, float64, int64, uint32, nan, c_, r_
 from numpy.typing import NDArray
 
 from cv2 import GaussianBlur
@@ -178,6 +178,28 @@ def _prec_rec_2d(det_scores, det_coords, det_frames, gt_coords, gt_frames, gt_ra
 FP_THRESHOLDS = (0.3, 0.5, 0.7, 0.9)
 
 
+MAX_LINKED_INTERVAL_S = 0.5     # a longer gap is a recording pause, not a frame interval (FROG's own SESSION_GAP_S)
+
+
+def frame_period_s(times):
+    """Seconds per frame of a dataset: elapsed time over frames, inside each recording, pooled over them.
+
+    **Not the median interval.** FROG's recorder stamps scans in bunches -- 38 ms, 38 ms, then under 0.1 ms -- so a median reads
+    26.2 Hz where the sensor delivers a scan every 25 ms, which made every figure quoted per second 1.53x low and the real-time
+    budget 38.2 ms where it is really 25 ms (`TODO.md` A49, memory/interpreting-evaluation.md).
+
+    `times` is one array of scan timestamps per recording. Intervals that are negative, or longer than `MAX_LINKED_INTERVAL_S`,
+    are dropped rather than averaged in: a recording pause is not a frame interval. Returns `None` when nothing is left, rather
+    than inventing a rate.
+    """
+    usable = [diff(asarray(t, dtype=float64)) for t in times if len(t) > 1]
+    if not usable:
+        return None
+    intervals = concatenate(usable)
+    linked = intervals[(intervals > 0) & (intervals <= MAX_LINKED_INTERVAL_S)]
+    return float(mean(linked)) if len(linked) else None
+
+
 def false_positive_rate(det_scores, det_frames, n_frames,
                         frame_period_s=None, thresholds=FP_THRESHOLDS):
     """False positives per frame, per second, and the share of frames carrying
@@ -197,9 +219,10 @@ def false_positive_rate(det_scores, det_frames, n_frames,
     - `n_frames` the number of frames evaluated, including the ones that
       produced no detection at all -- passing only the frames that fired is the
       easy way to turn a good result into a terrible one.
-    - `frame_period_s` seconds per frame, for the per-second figure. FROG's
-      median is ~1/26.2 s. `None` leaves `fp_per_s` as nan rather than
-      inventing a rate.
+    - `frame_period_s` seconds per frame, for the per-second figure. Take it
+      from this module's `frame_period_s`, which averages the linked intervals
+      -- FROG's *median* interval is 1/26.2 s where its real rate is 40 Hz.
+      `None` leaves `fp_per_s` as nan rather than inventing a rate.
     - `thresholds` operating points to report. A single number here would be a
       choice presented as a measurement; a sweep lets the reader pick.
 

@@ -58,6 +58,7 @@ sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
 from follow_the_drow.detectors.three_horizon import ObjectMemory, SlotRules  # noqa: E402
+from follow_the_drow.utils.drow_utils import frame_period_s  # noqa: E402
 from motion_analysis import build_tracks, to_world  # noqa: E402
 from train_three_horizon import (  # noqa: E402
     MATCH_RADIUS_M, MIN_REPORTED_SCORE, OPERATING_THRESHOLD, Split, candidate_targets, detect_device, evaluation_segments, gather, load_split, object_memory,
@@ -121,7 +122,7 @@ def trajectories(split: Split, cand_cov: Coverage, mem_cov: Coverage, gate: floa
     out, collisions = [], 0
     for s, (offset, n) in enumerate(zip(split.offsets, split.lengths)):
         time = split.data.time[offset:offset + n]
-        hz = 1.0 / float(np.median(np.diff(time))) if n > 1 else float("nan")
+        hz = 1.0 / frame_period_s([time]) if n > 1 else float("nan")
         index, world, look = [], [], {}
         for f in range(int(n)):
             g = int(offset) + f

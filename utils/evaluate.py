@@ -60,7 +60,7 @@ from follow_the_drow.detectors import (
 from follow_the_drow.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
     project_cartesian_from_polar, standard_cartesian_to_project_cartesian, cutout, raw_scan,
-    _prec_rec_2d, false_positive_rate, FP_THRESHOLDS,
+    _prec_rec_2d, false_positive_rate, frame_period_s, FP_THRESHOLDS,
 )
 from follow_the_drow.utils.tracking import (
     SimpleTracker, odom_xya_delta_to_tracker_frame,
@@ -625,20 +625,14 @@ def eval_lfe_model(
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _frame_period_s(dataset) -> Optional[float]:
-    """Median seconds between consecutive raw scans, across every sequence.
+    """Seconds per frame of this dataset, through the one shared definition.
 
-    The median, not the mean: FROG recordings carry 60 pauses of up to 74.3 s,
-    and a mean would let those set the frame rate. FROG's median comes out at
-    ~1/26.2 s despite the sensor's 40 Hz nameplate, which is the rate a
-    deployment would actually see.
+    Was a median until 2026-10-10, which read FROG at 26.2 Hz where the sensor
+    delivers a scan every 25 ms, because the recorder stamps scans in bunches:
+    every figure quoted per second was 1.53x low. `frame_period_s` averages the
+    linked intervals and drops recording pauses instead.
     """
-    diffs = [np.diff(np.asarray(t, dtype=np.float64))
-             for t in dataset.scan_time if len(t) > 1]
-    if not diffs:
-        return None
-    all_diffs = np.concatenate(diffs)
-    all_diffs = all_diffs[all_diffs > 0]
-    return float(np.median(all_diffs)) if len(all_diffs) else None
+    return frame_period_s(dataset.scan_time)
 
 
 def _split_has_ground_truth(dataset) -> bool:

@@ -157,7 +157,20 @@ With no true positives, precision is 0 at every threshold and recall has no deno
 `evaluate.py` therefore switches metric with the data rather than with a flag: a split carrying no annotated people is scored by `false_positive_rate()` — FP/frame, FP/second, and the share of frames carrying at least one, at a sweep of operating points — because there every detection *is* a false positive by construction.
 The sweep is deliberate: a single operating point would be a choice presented as a measurement.
 
-`duration_s` is `n_frames * median_frame_period`, never the span from the first timestamp to the last: `transferred`'s person-free frames are interleaved with populated ones the split drops, so a span would bill the detector for time it was never asked about and understate its rate.
+`duration_s` is `n_frames * frame_period_s`, never the span from the first timestamp to the last: `transferred`'s person-free frames are interleaved with populated ones the split drops, so a span would bill the detector for time it was never asked about and understate its rate.
+
+## A frame rate is the elapsed time over the frames, never the median interval
+
+**Settled 2026-10-10, and it moved every per-second figure in the repo by 1.53x.**
+FROG's recorder stamps scans in bunches — roughly 38 ms, 38 ms, then under 0.1 ms, with **20.2% of intervals under 1 ms** — so the median interval reads **26.2 Hz** where the sensor delivers a scan every 25 ms.
+`evaluate.py` took that median, and so every `FP/s` in this repository was 1.53x low, the "38.2 ms real-time budget" the cost claims were set against was really **25 ms**, and every duration converted from frames was 1.53x too long.
+
+One definition now serves every script: `follow_the_drow.utils.drow_utils.frame_period_s(times)`, the mean of the intervals inside each recording, dropping any longer than 0.5 s as a recording pause.
+Measured on the real files: FROG **40.01 Hz** (`official` test) and **40.06 Hz** (`transferred`), against the sensor's 25 ms nameplate; DROW **12.70 Hz**, against the paper's 12.5 Hz and the median's 10.00 Hz.
+
+**What this changes when reading an older number.** Any figure per *second*, any duration in seconds converted from a frame count, and any "real-time budget" comparison written before 2026-10-10 is on the 26.2 Hz clock.
+Anything per *frame* — AP, FP/frame, recall, ms/frame — is unaffected, because no frame count changed.
+`DT_NATIVE_S`, `persistence_map`'s spans, `motion_analysis`'s horizons and `slot_budget`'s first-frame step all read the real rate now; the analyses whose seconds-axes they set are re-run from it.
 
 **A detector that carries memory needs one more column there, and TAKHeLiPeD is the first one measured on this split.**
 The three raw recordings interleave populated and person-free frames, and `utils/empty_scene.py` replays the memory over all of them, as a robot would see them — so a detection on a person-free frame can be a *stale memory of a real person who has just left the field of view*, which LFE-Peaks and LFE-PPN cannot produce and are not charged for.

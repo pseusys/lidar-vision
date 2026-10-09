@@ -23,7 +23,7 @@ motion-based discriminator, a chair.
 point of having it: FROG is a museum, where people stand and look at things,
 and a ceiling measured there may say more about museums than about 2D LiDAR.
 The two datasets are not directly comparable frame-for-frame -- FROG annotates
-every scan at 26.2 Hz and holds 3.06 people per frame, DROW annotates every 5th
+every scan at 40 Hz and holds 3.06 people per frame, DROW annotates every 5th
 scan at 10 Hz (so 0.5 s between annotations) and holds 0.81 -- so horizons are
 specified in *seconds* and matched to the nearest available annotation within a
 tolerance, rather than in frames.
@@ -52,11 +52,10 @@ sys.path.insert(0, str(_HERE))
 
 from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector
-from follow_the_drow.utils.drow_utils import project_cartesian_from_polar
+from follow_the_drow.utils.drow_utils import frame_period_s, project_cartesian_from_polar
 from scipy.optimize import linear_sum_assignment
 
 HORIZONS_S = (1.0, 2.0, 5.0, 10.0, 30.0)
-FRAME_HZ = 26.2
 
 
 def to_world(xy, pose):
@@ -77,7 +76,7 @@ def build_tracks(per_frame_world, scan_index=None, gate=0.6, max_gap=0):
     """Greedy nearest-neighbour association into trajectories.
 
     Sufficient here rather than a full tracker where annotations are dense: at
-    FROG's 26.2 Hz a person walking at 1.4 m/s moves 5.3 cm between frames, an
+    FROG's 40 Hz a person walking at 1.4 m/s moves 3.5 cm between frames, an
     order of magnitude inside the gate, so association is unambiguous except in
     dense contact -- and a mis-association there swaps two people who are by
     definition close together, which barely perturbs a displacement statistic.
@@ -175,7 +174,7 @@ def _load(args):
     if args.dataset == "drow":
         from follow_the_drow.datasets import DROW_Dataset
         ds = DROW_Dataset(verbose=False)
-        hz = 1.0 / float(np.median(np.diff(np.asarray(ds.scan_time[0], float))))
+        hz = 1.0 / frame_period_s(ds.scan_time)
         # DROW labels every 5th scan, so consecutive annotations are ~0.5 s
         # apart and a walker covers ~0.7 m between them. Gate on a generous
         # 2.5 m/s so trajectories survive; a FROG-sized gate would shatter them.
@@ -183,7 +182,7 @@ def _load(args):
         return ds, hz, gate, "DROW (care facility, 450 beams)"
     ds = FROG_Dataset(split=args.split, mode="balanced",
                       auto_download=False, verbose=False)
-    hz = 1.0 / float(np.median(np.diff(np.asarray(ds.scan_time[0], float))))
+    hz = 1.0 / frame_period_s(ds.scan_time)
     gate = max(args.gate_speed / hz, args.gate_floor)
     return ds, hz, gate, "FROG (museum, 720 beams)"
 
@@ -240,7 +239,7 @@ def phantoms(args):
     """
     ds = FROG_Dataset(split="test", mode="transferred",
                       auto_download=False, verbose=False)
-    hz = 1.0 / float(np.median(np.diff(np.asarray(ds.scan_time[0], float))))
+    hz = 1.0 / frame_period_s(ds.scan_time)
     angles = frog_laser_angles(720)
     for name, make in (("LFE-Peaks", lambda: LFEPeaksDetector()),
                        ("LFE-PPN", lambda: LFEPPNDetector(score_thresh=0.01))):

@@ -41,7 +41,7 @@ sys.path.insert(0, str(_HERE))
 
 from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector
-from follow_the_drow.utils.drow_utils import project_cartesian_from_polar
+from follow_the_drow.utils.drow_utils import frame_period_s, project_cartesian_from_polar
 
 from scipy.optimize import linear_sum_assignment
 
@@ -227,7 +227,13 @@ def evaluate(seqs, cell, decay, tau, assoc=0.5):
                 tp=tp, dup=dup, phantom=phantom, close=close)
 
 
-SPANS = (26, 262, 786, 2620)        # 1 s, 10 s, 30 s, 100 s at 26.2 Hz
+SPANS_S = (1.0, 10.0, 30.0, 100.0)  # in frames below, at the dataset's own rate: 26 / 262 / 786 / 2620 until 2026-10-10, when
+                                    # the rate stopped being read as the stamped median's 26.2 Hz (TODO.md A49)
+
+
+def spans_frames(hz):
+    """`SPANS_S` in frames at this dataset's rate, so a span is the same number of seconds whichever dataset it is read on."""
+    return tuple(int(round(span * hz)) for span in SPANS_S)
 
 
 def background_pass(name, mode, thresh, cell, radius, seqs):
@@ -241,6 +247,7 @@ def background_pass(name, mode, thresh, cell, radius, seqs):
     ds = FROG_Dataset(split="test", mode=mode, auto_download=False, verbose=False)
     angles = frog_laser_angles(720).astype(np.float64)
     sin_a, cos_a = -np.sin(angles), np.cos(angles)
+    spans = spans_frames(1.0 / frame_period_s(ds.scan_time))
 
     rows, n_gt, n_frames = [], 0, 0
     for seq, frames in enumerate(seqs):
@@ -259,14 +266,14 @@ def background_pass(name, mode, thresh, cell, radius, seqs):
                    for dx in range(-n, n + 1) for dy in range(-n, n + 1)]
             for j in range(len(d_world)):
                 x, y = d_world[j]
-                best = [0.0] * len(SPANS)
+                best = [0.0] * len(spans)
                 for dx, dy in off:
                     e = m._v.get(m._key(x + dx, y + dy))
                     if e is None:
                         continue
                     sp = e[2] - e[1] + 1
                     rt = e[0] / max(sp, 1)
-                    for si, s_min in enumerate(SPANS):
+                    for si, s_min in enumerate(spans):
                         if sp >= s_min and rt > best[si]:
                             best[si] = rt
                 rows.append([float(is_tp[j])] + best)
@@ -279,10 +286,10 @@ def background_pass(name, mode, thresh, cell, radius, seqs):
 
             n_gt += len(gt)
             n_frames += 1
-    return np.asarray(rows, dtype=np.float64), n_gt, n_frames
+    return np.asarray(rows, dtype=np.float64), n_gt, n_frames, spans
 
 
-def report_background(rows, n_gt, n_frames, cell, radius, rates):
+def report_background(rows, n_gt, n_frames, cell, radius, rates, spans):
     tp_all = float(rows[:, 0].sum())
     fp_all = float(len(rows) - tp_all)
     print("\n  BACKGROUND MODEL from raw scan returns -- cell {:.2f} m, "
@@ -291,7 +298,7 @@ def report_background(rows, n_gt, n_frames, cell, radius, rates):
         tp_all / max(n_gt, 1), fp_all / n_frames))
     print("\n  {:>9} {:>9} {:>12} {:>10} {:>8} {:>10} {:>11}".format(
         "min_span", "min_rate", "FP removed", "TP lost", "recall", "FP/frame", "FP per FN"))
-    for si, s_min in enumerate(SPANS):
+    for si, s_min in enumerate(spans):
         for mr in rates:
             drop = rows[:, 1 + si] >= mr
             fp_rm = float((drop & (rows[:, 0] == 0)).sum())
@@ -322,7 +329,7 @@ def main():
                          "observed every frame saturates at horizon*hz, so "
                          "786 at 30 s -- and a person standing still for 5 s "
                          "reaches ~130, which is what the grid must bracket"),
-    ap.add_argument("--hz", type=float, default=26.2)
+    ap.add_argument("--hz", type=float, default=0.0, help="frames per second for the decay conversion; 0 measures it from the dataset")
     ap.add_argument("--background", action="store_true",
                     help="A44: build the map from raw scan RETURNS instead "
                          "of from detections, and key it on hit rate rather "
@@ -349,12 +356,12 @@ def main():
 
             if args.background:
                 for cell in args.cell:
-                    rows, n_gt, n_frames = background_pass(
+                    rows, n_gt, n_frames, spans = background_pass(
                         name, mode, args.thresh, cell, args.radius, seqs)
                     print("\n{}\n=== {} / FROG {} ({}) ===\n{}".format(
                         "=" * 96, name, mode, label, "=" * 96))
                     report_background(rows, n_gt, n_frames, cell, args.radius,
-                                      args.min_rate)
+                                      args.min_rate, spans)
                 continue
 
             base = evaluate(seqs, 0.25, 0.0, np.inf)
@@ -371,9 +378,11 @@ def main():
 
             print("\n  {:>6} {:>9} {:>7} {:>9} {:>9} {:>9} {:>9}".format(
                 "cell", "horizon", "tau", "kept", "removed", "recall", "FP/fr"))
+            hz = args.hz or 1.0 / frame_period_s(FROG_Dataset(split="test", mode=mode, auto_download=False, verbose=False).scan_time)
+            print("  the decay horizons below are converted at {:.1f} Hz".format(hz))
             for cell in args.cell:
                 for h in args.horizon:
-                    decay = horizon_to_decay(h, args.hz)
+                    decay = horizon_to_decay(h, hz)
                     for tau in args.tau:
                         r = evaluate(seqs, cell, decay, tau)
                         removed = 1.0 - r["kept"] / max(base["det"], 1)

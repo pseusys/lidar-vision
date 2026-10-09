@@ -47,7 +47,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.utils.drow_utils import project_cartesian_from_polar
+from follow_the_drow.utils.drow_utils import frame_period_s, project_cartesian_from_polar
 
 from motion_analysis import to_world
 
@@ -226,7 +226,7 @@ def frog_sequences(cache_dir):
 
     ds = FROG_Dataset(split="test", mode="official", auto_download=False,
                       verbose=False)
-    hz = 1.0 / float(np.median(np.diff(np.asarray(ds.scan_time[0], dtype=float))))
+    hz = 1.0 / frame_period_s(ds.scan_time)
     n_scans = [len(ds.scans[s]) for s in range(len(ds.scans))]
     out, people = [], None
     for name, label in (("lfe-peaks", "LFE-Peaks detections"),
@@ -247,7 +247,7 @@ def drow_sequences():
     from follow_the_drow.datasets import DROW_Dataset
 
     ds = DROW_Dataset(verbose=False)
-    hz = 1.0 / float(np.median(np.diff(np.asarray(ds.scan_time[0], dtype=float))))
+    hz = 1.0 / frame_period_s(ds.scan_time)
     people = []
     for s in range(len(ds.det_id)):
         frames = []
@@ -309,11 +309,12 @@ def replay(seqs, capacity, floor, margin, retire_s, oracle, thresh=0.3, assoc=0.
     acc = dict(frames=0, people=0, missed=0, covered=0, covered_missed=0,
                spawned=0, evicted=0, evicted_person=0)
     occ = []
+    period = frame_period_s([np.asarray([t for t, *_ in frames], dtype=np.float64) for frames in seqs])
     for frames in seqs:
         mem = PriorityMemory(capacity, floor, margin, retire_s, oracle=oracle)
         prev = None
         for t, scores, xy, gt in frames:
-            dt = 1.0 / 26.2 if prev is None else max(t - prev, 1e-3)
+            dt = period if prev is None else max(t - prev, 1e-3)
             prev = t
             is_person, _ = _assigned(xy, gt, assoc)
             strong = scores >= thresh

@@ -93,7 +93,7 @@ PERSON_HALFWIDTH_BEAMS = 4     # +/- beams around a person's angular position
 FRAME_STRIDE = 15              # sample every 15th annotated frame for AUC
 MI_SUBSAMPLE = 20_000          # random (feature, label) pairs for the MI estimate
 RNG_SEED = 0
-DT_NATIVE_S = 0.03815          # FROG's measured native rate, ~26.2 Hz
+DT_NATIVE_S = 0.025            # FROG's real rate, 25 ms per scan; 0.03815 until 2026-10-10, which was the stamped median (TODO.md A49)
 
 T_VALUES = (2, 3, 5, 10, 15, 20, 25)
 # Target total window spans (seconds), sampled densely on both sides of the

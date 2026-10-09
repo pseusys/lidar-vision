@@ -51,7 +51,7 @@ from follow_the_drow.detectors.three_horizon import (
     world_to_sensor,
 )
 from follow_the_drow.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
-from follow_the_drow.utils.drow_utils import _prec_rec_2d, _win2global, project_cartesian_from_polar, votes_to_detections
+from follow_the_drow.utils.drow_utils import _prec_rec_2d, _win2global, frame_period_s, project_cartesian_from_polar, votes_to_detections
 from train import _safe_auc, compute_loss, detect_device, make_targets
 
 VOTE_DECODING = dict(blur_sigma=2.0, blur_win=11, bin_size=0.1, vote_collect_radius=0.5, min_thresh=1e-3)
@@ -193,10 +193,9 @@ def frame_periods(time: np.ndarray, offsets: np.ndarray, lengths: np.ndarray, fr
 
 
 def mean_frame_period(time: np.ndarray, offsets: np.ndarray, lengths: np.ndarray) -> float:
-    """Elapsed time over frames, pooled across recordings packed end to end: robust to bunched stamps, unlike any single interval or their
-    median. Turns durations in seconds into frame counts."""
-    spans = [(time[o + n - 1] - time[o], n - 1) for o, n in zip(offsets, lengths) if n > 1]
-    return float(sum(e for e, _ in spans) / sum(f for _, f in spans))
+    """Seconds per frame of recordings packed end to end: the shared `frame_period_s`, which is robust to bunched stamps, unlike
+    any single interval or their median. Turns durations in seconds into frame counts."""
+    return frame_period_s([time[int(o):int(o) + int(n)] for o, n in zip(offsets, lengths)])
 
 
 def pack(seqs: Sequence[SequenceCandidates]) -> Split:

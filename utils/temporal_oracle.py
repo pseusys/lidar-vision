@@ -61,7 +61,7 @@ sys.path.insert(0, str(_HERE))
 
 from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector
-from follow_the_drow.utils.drow_utils import project_cartesian_from_polar
+from follow_the_drow.utils.drow_utils import frame_period_s, project_cartesian_from_polar
 from motion_analysis import build_tracks, to_world
 
 
@@ -85,7 +85,7 @@ def recall_oracle(args):
         t = np.asarray(ds.scan_time[seq], dtype=float)
         if len(t) < 2 or (t[-1] - t[0]) < args.min_seq_seconds:
             continue
-        hz = 1.0 / float(np.median(np.diff(t)))
+        hz = 1.0 / frame_period_s([t])
         idx, world, found = [], [], {}
         for det_idx in range(len(ds.det_id[seq])):
             iscan = int(ds.idet2iscan[seq][det_idx])
@@ -173,7 +173,7 @@ def precision_oracle(args):
                       auto_download=False, verbose=False)
     det = _detector(args.detector)
     angles = frog_laser_angles(720)
-    hz = 1.0 / float(np.median(np.diff(np.asarray(ds.scan_time[0], dtype=float))))
+    hz = 1.0 / frame_period_s(ds.scan_time)
 
     all_tracks, n_frames = [], 0
     for seq in range(len(ds.det_id)):
