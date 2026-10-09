@@ -38,6 +38,46 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A50 phase 1 item 7: the memory is a phantom filter, and it beats LFE-Peaks where nobody is (2026-10-09)
+
+*keywords: A50, person-free, transferred, empty_scene.py, phantoms, furniture, 72533, LFE-Peaks 1.39, LFE-PPN 3.17, stale row, lidar_person_free, queue_a50_person_free*
+
+`utils/queue_a50_person_free.py` ran the three seeds of the adopted recipe over all 72,533 person-free frames of FROG
+`transferred` (the runner's first queue module; 2.2 h, three jobs, no retries). Every detection there is a false positive by
+construction, so the measurement is a count.
+
+| at threshold 0.3 | stage 2 alone | whole detector | published |
+| --- | --- | --- | --- |
+| FP/frame | 2.622 (2.834 / 2.587 / 2.446) | **0.740** (0.853 / 0.788 / 0.580) | LFE-Peaks 1.39, LFE-PPN 3.17 |
+| frames with at least one | 67.2% | **34.1%** | 51.0%, 64.0% |
+| recur within 0.3 m next frame | 84.9% | 92.2% | 88.3%, 77.6% (real people 99.8%) |
+| FP/frame beyond the 10 s fade (41,797 frames) | 2.460 | **0.590** | -- |
+| FP/frame at threshold 0.9 | 0.872 | **0.010** | "a third to a half of frames" |
+
+**Stage 2 alone is worse than both published detectors here and the memory cuts it by 72%, to below LFE-Peaks.** No published
+detector on this split reaches that. At 0.9 confidence the contrast is categorical: 0.9% of person-free frames hold a detection
+against the published third to a half.
+
+**It is not the stale-memory explanation.** 42.4% of person-free frames sit within 10 s of someone in view, inside the slots'
+fade time, so a detection there can be a true memory rather than a phantom -- which is why `empty_scene.py` reports the
+restricted count too. Beyond that horizon the reduction is **larger** (-76%), so the filtering is real.
+
+**What survives is furniture**: the memory's remaining phantoms recur next frame 92.2% of the time against the candidates' 84.9%
+-- it removes the unstable ones and keeps whatever looks like a person in every frame, the failure A41 and A44 could not remove
+classically. That makes it a slot-creation question, now Tier 2 item 13.
+
+**Found en route: a half-stale row is worse than a stale one.** `memory/performance-log.md` carried LFE-PPN at **1.94**
+FP/frame, the pre-recalibration figure, while the *frames-with-a-phantom* cell beside it had been updated to the post-
+recalibration 64.0%. The 2026-09-11 entry had recorded the correction to **3.174** and this table never took it. Fixed, and the
+"with SORT" cell marked stale rather than reconstructed, since no corrected FP/frame was ever recorded for it.
+
+**The three `gap` rows stay gaps.** They are `SpaceTimeCNN`, `FullScanTCN` and `TemporalUNet` -- the pre-TAKHeLiPeD line of work
+-- so filling them with this detector's numbers would have mislabelled three models.
+
+**The runner behaved as designed on the ROCm hang.** All three jobs wrote their results and then hung in teardown past
+`os._exit`; each was waited out for its 600 s grace, killed, and recorded **DONE on its outputs rather than on its exit code**,
+which is exactly the case `tests/test_run_queue.py` pins.
+
 ## A50 phase 1 closes, and the adopted recipe retires one of the four screening bars (2026-10-09)
 
 *keywords:* A50, phase 1, A51, E13, a60_e13_static, screening bars, coasting precision, coast_per_frame, evaluation_segments, val windows, max_hours, EarlyStopping, slot_experiments --out, empty_scene.py, machine_is_free.py, triage

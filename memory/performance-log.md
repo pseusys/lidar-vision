@@ -167,12 +167,43 @@ Every detection is a false positive by construction, so the metric is a count.
 | Model | FP/frame @0.3 | FP/s @0.3 | frames with ≥1 FP @0.3 | with SORT, best "free" setting |
 | --- | --- | --- | --- | --- |
 | LFE-Peaks | **1.39** | **36.4** | **51.0%** | **1.33** (−4%, −0.1pp AP) |
-| LFE-PPN | **1.94** | **50.9** | **64.0%** | **1.87** (−4%, −0.5pp AP) |
+| LFE-PPN | **3.17** | **83.1** | **64.0%** | stale (1.87 was measured at `nms_radius = 0.8`) |
+| **TAKHeLiPeD, stage 2 alone** | **2.62** (sd 0.20) | **68.7** | **67.2%** | — |
+| **TAKHeLiPeD, whole detector** | **0.74** (sd 0.14) | **19.4** | **34.1%** | — (the memory is the filter) |
 | SpaceTimeCNN | gap | gap | gap | gap |
 | FullScanTCN | gap | gap | gap | gap |
 | TemporalUNet | gap | gap | gap | gap |
 
 0.3 is LFE-PPN's own published operating point.
+The three `gap` rows are the pre-TAKHeLiPeD architectures and stay gaps: they belong to the superseded line of work (`TODO.md` A33-A36), and nothing in it is queued.
+
+**LFE-PPN's row was stale here until 2026-10-09**, at the pre-recalibration **1.94 / 50.9**; the 2026-09-11 recalibration of `nms_radius` from 0.8 m to 0.30 m took it to **3.174 /frame** and `CHANGELOG.md` recorded that, but this table kept the old figure while its *frames-with-a-phantom* cell was updated to the new 64.0%.
+The "with SORT" cell is stale for the same reason and is not reconstructed here: `tracker_sweep.py` was re-run (A37), and at `min_hits = 3` it leaves 34.7% of person-free frames with a phantom against the old 47.1%, but no corrected FP/frame was recorded.
+**A row that is half-updated is worse than one that is wholly stale**, because nothing about it looks wrong.
+
+### TAKHeLiPeD, measured 2026-10-09 (A50 phase 1 item 7)
+
+Three seeds of the adopted recipe — C1's averaged stage 2 and the E13 memory trained on its candidates — over all 72,533 person-free frames, `utils/empty_scene.py`, `results/empty_scene_s{0,1,2}.json`:
+
+| at threshold 0.3 | stage 2 alone | whole detector | change |
+| --- | --- | --- | --- |
+| FP/frame | 2.622 (2.834 / 2.587 / 2.446) | **0.740** (0.853 / 0.788 / 0.580) | **−72%** |
+| frames with ≥1 | 67.2% | **34.1%** | −33 pp |
+| recur within 0.3 m next frame | 84.9% | 92.2% | +7.3 pp |
+| FP/frame, the 41,797 frames where nobody has been in view for 10 s | 2.460 | **0.590** | **−76%** |
+| FP/frame at threshold 0.9 | 0.872 | **0.010** | −99% |
+| frames with ≥1 at threshold 0.9 | 40.5% | **0.9%** | −39.6 pp |
+
+**The memory is a phantom filter, and this is the clearest measurement of it in the project.** Stage 2 alone is *worse* than both published detectors here (2.62 against 1.39 and 3.17 — it is tuned for recall on populated frames); the memory cuts that by 72%, to **below LFE-Peaks**, which no published detector on this split reaches.
+At 0.9 confidence the contrast is categorical: the published detectors still hallucinate in a third to a half of person-free frames, and the whole detector does so in **0.9%**.
+
+**It is not just remembering people who have left.** 42.4% of person-free frames sit within 10 s of someone in view, which is inside the slots' fade time, so a detection there can be a true memory of a real person rather than a phantom.
+Restricted to the 41,797 frames beyond that horizon the reduction is **larger**, not smaller (−76%), so the filtering is not an artefact of the stale-memory explanation.
+
+**What the memory keeps is the furniture.** Its surviving phantoms recur next frame **92.2%** of the time against the candidates' 84.9% and real people's 99.8%: it removes the unstable ones and keeps the ones that look like a person in every frame, which is the failure mode A41 and A44 could not remove classically.
+That is a creation-rule question rather than a scoring one (`TODO.md` §A, Tier 2 item 13).
+
+**Read the FP/s column with care.** It uses the same stamped-median frame period as `evaluate.py` (38.14 ms, 26.2 Hz), so these rows are comparable to the published ones above — and both are **1.53x low against the sensor's real 40 Hz** (A49). Settling that convention is `TODO.md` §A Tier 1 item 2.
 **LFE-Peaks' figure moved from 1.28 to 1.39 on 2026-09-10** when its `merge_radius` was corrected from 0.40 m to 0.30 m — a tighter merge keeps double-reports the looser one was collapsing. The correction is what made its AP reproduce the paper (`CHANGELOG.md`).
 
 **Both published static detectors hallucinate a person in half to two-thirds of frames containing nobody**, and still in a third to a half of them at 0.9 confidence.
