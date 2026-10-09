@@ -39,6 +39,17 @@ from temporal_oracle import _detector, _detect_xy
 
 # ---------------------------------------------------------------- collection
 
+def dataset_rate(mode: str) -> float:
+    """Frames per second of this FROG partition, read from the dataset every time.
+
+    **Never cached.** These pickles hold a detector pass, which is expensive, and used to hold the frame rate, which is not: a
+    warm cache then replayed the stamped median's 26.2 Hz into every seconds axis after the definition was corrected to 40 Hz
+    (`TODO.md` A49). Paying one dataset load on a cache hit is the price of quoting the right rate.
+    """
+    ds = FROG_Dataset(split="test", mode=mode, auto_download=False, verbose=False)
+    return 1.0 / frame_period_s(ds.scan_time)
+
+
 def collect_recall(args):
     """One detector pass over annotated frames -> per-trajectory (frame, hit)."""
     ds = FROG_Dataset(split="test", mode="balanced", auto_download=False,
@@ -389,33 +400,32 @@ def main():
     if args.recall:
         f = args.cache / f"recall_{tag}.pkl"
         if f.exists():
-            tracks, hz = pickle.loads(f.read_bytes())
+            tracks = pickle.loads(f.read_bytes())[0]
             print(f"[cached] {f.name}")
         else:
-            tracks, hz = collect_recall(args)
-            f.write_bytes(pickle.dumps((tracks, hz)))
-        report_recall(tracks, hz, args)
+            tracks = collect_recall(args)[0]
+            f.write_bytes(pickle.dumps((tracks,)))
+        report_recall(tracks, dataset_rate("balanced"), args)
 
     if args.discrimination:
-        tag = f"{args.detector}_{args.thresh}_{args.assoc}_{args.gate}"
         f = args.cache / f"disc_{tag}_{args.max_gap}_{args.mode}.pkl"
         if f.exists():
-            payload = pickle.loads(f.read_bytes())
+            payload = pickle.loads(f.read_bytes())[:5]
             print(f"[cached] {f.name}")
         else:
-            payload = collect_discrimination(args)
+            payload = collect_discrimination(args)[:5]
             f.write_bytes(pickle.dumps(payload))
-        report_discrimination(*payload, args)
+        report_discrimination(*payload, dataset_rate(args.mode), args)
 
     if args.precision:
         f = args.cache / f"prec_{tag}_{args.run_frames}.pkl"
         if f.exists():
-            tracks, n_frames, hz, run_lens = pickle.loads(f.read_bytes())
+            tracks, n_frames, run_lens = pickle.loads(f.read_bytes())
             print(f"[cached] {f.name}")
         else:
-            tracks, n_frames, hz, run_lens = collect_precision(args)
-            f.write_bytes(pickle.dumps((tracks, n_frames, hz, run_lens)))
-        report_precision(tracks, n_frames, hz, run_lens, args)
+            tracks, n_frames, _, run_lens = collect_precision(args)
+            f.write_bytes(pickle.dumps((tracks, n_frames, run_lens)))
+        report_precision(tracks, n_frames, dataset_rate("transferred"), run_lens, args)
 
 
 if __name__ == "__main__":

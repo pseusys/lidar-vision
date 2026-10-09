@@ -38,6 +38,46 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Items 1, 2 and 5: FROG is 40 Hz, the whole detector fits the real budget on the GPU but not on the CPU tail (2026-10-10)
+
+*keywords: frame_period_s, 40 Hz, 26.2 Hz, FP/s, cost table, latency_cpu_t4.json, latency_gpu.json, 25 ms budget, horizon_sweep cache, A33-A36, A35 criteria, motion_analysis, displacement oracle*
+
+**The rate.** One definition now serves every script: `frame_period_s`, the mean of the intervals inside each recording. FROG
+reads **40.01 Hz** (`official` test) and **40.06 Hz** (`transferred`), matching the sensor's 25 ms per scan; DROW reads **12.70
+Hz**, matching its paper's 12.5. The medians they replaced were 26.23 and 10.00 Hz, because FROG's recorder stamps scans in
+bunches -- 20.2% of its intervals are under 1 ms. Eleven call sites and three hardcoded constants moved;
+`motion_analysis.FRAME_HZ` was unused and went.
+
+**A cache was hiding the rate, and it took the first restatement with it.** `horizon_sweep` stored `hz` inside its pickles
+beside the detector pass, so the first re-run replayed 26.2 Hz into every seconds axis and *looked* restated: 30 s converted to
+787 frames. The rate is now read from the dataset on every run, never cached, at the price of one dataset load on a cache hit.
+**A derived quantity in a cache is a stale number waiting for a definition to change.** The two other caches
+(`persistence_map`, `slot_budget`) hold detections only, so their restatements were real.
+
+**What moved, on real data.** FROG's people-move-less-than-their-own-width figures are **52.4 / 41.4 / 32.7 / 24.0 / 13.3%** at
+1 / 2 / 5 / 10 / 30 s, against the recorded 67.4 / 47.0 / 36.5 / 30.3 / 15.3%: "two thirds of people move less than their own
+width in a second" becomes **just over half**, because a "1 s horizon" was really 0.65 s. The trail-length role-C bound moved
+with it -- at a 10 s filter, 90.8% of phantoms removed for 67.1% of true positives, against 82.7% / 47.6% on the old clock. The
+**displacement** oracle did not move at all (2.58 at its best point), since displacement has no seconds axis, which confirms
+item 3's open question is independent of the rate: why the heading-wrap fix took it from 4.20 to 2.58 is still unexplained.
+Every `FP/s` in `memory/performance-log.md` rose 1.53x; the 72,533 person-free frames are **30.2 minutes** of real time, not 46.1.
+
+**The cost table (item 2), on the adopted recipe, one scan at a time, 2,000 frames** (`checkpoints_three_horizon/a61/latency_*.json`):
+
+| | stage 2 | decoding | memory | **total** | p99 | against the **25 ms** budget |
+| --- | --- | --- | --- | --- | --- | --- |
+| GPU (RX 9060 XT) | 5.41 | 3.23 | 4.58 | **13.32 ms** | 15.32 | **53%** median, 61% at p99 |
+| CPU, 4 threads | 8.71 | 2.83 | 9.27 | **20.98 ms** | 25.32 | **84%** median, **101% at p99** |
+
+**Item 1 changed item 2's conclusion**, which is the reason it was done first: against the old 38.2 ms assumption the CPU looked
+comfortable at 55% of budget, and against the real 25 ms its **99th percentile misses real time**. The GPU has headroom either
+way. The memory is the larger half of the CPU cost (9.27 ms against stage 2's 8.71) and the smaller half on the GPU (4.58
+against 5.41).
+
+**A33-A36 closed** against A35's own pre-registered criteria, both met: single-frame **82.20%** against the 66.5% bar, and
+**4.47 pp** lost when the memory is emptied every 0.5 s against `SpaceTimeCNN`'s 0.5 pp shuffle penalty, about nine times. The
+caveat kept: the 4.47 is on B0's backbone, and E1's reset sweep on the adopted recipe is queued.
+
 ## The FROG work becomes a pre-print list; `balanced` becomes another dataset; SHOWCASE.md is dropped (2026-10-10)
 
 *keywords: pre-print, FROG only, balanced, A62, A63, A32, SHOWCASE.md, docs, actionable list, frame rate convention, A33-A36*

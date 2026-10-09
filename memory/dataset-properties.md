@@ -79,19 +79,24 @@ or more.
 How far an annotated person has actually moved, in the **world** frame (odometry-compensated, so the robot's own motion is not counted as theirs), after a given elapsed time.
 **A person who has moved less than ~0.5 m — less than their own width — is indistinguishable from furniture to any motion-based method**, whatever its architecture.
 
-| elapsed | FROG: moved < 0.5 m | DROW: moved < 0.5 m |
-| --- | --- | --- |
-| 1 s | 67.3% | 62.8% |
-| 2 s | 46.6% | 37.1% |
-| 5 s | 36.0% | 28.8% |
-| 10 s | 29.5% | 19.5% |
-| 30 s | 16.3% | *(unreliable, see below)* |
+| elapsed | FROG: moved < 0.5 m | FROG, on the 26.2 Hz clock | DROW: moved < 0.5 m |
+| --- | --- | --- | --- |
+| 1 s | **52.4%** | 67.3% | 62.8% |
+| 2 s | **41.4%** | 46.6% | 37.1% |
+| 5 s | **32.7%** | 36.0% | 28.8% |
+| 10 s | **24.0%** | 29.5% | 19.5% |
+| 30 s | **13.3%** | 16.3% | *(unreliable, see below)* |
+
+**The FROG column was restated on 2026-10-10** and the middle column is what this file carried before.
+Every row was measured over too few frames: the horizon is specified in seconds and converted with the frame rate, and the rate was the median stamped interval, 26.2 Hz, where FROG's sensor delivers a scan every 25 ms — so a "1 s horizon" spanned 0.65 s of real motion (`interpreting-evaluation.md`).
+The restated figures are *lower* at every horizon, because people are now given the time the row claims.
+**DROW's column is not restated here**: its rate moved too, from the median's 10.0 Hz to 12.70, so its figures span 1.27x too *long* and will move upward; it is re-measured with the rest of the DROW work (`TODO.md` A63), because nothing on FROG depends on it.
 
 **Three things this settles.**
 
-1. **Most of the available motion appears in the first ~5 seconds**, in both venues. The curve falls steeply to 5 s and then flattens. Horizon past that keeps paying on FROG but with sharply diminishing returns.
-2. **There is a hard ceiling on every motion-based method**, and it is not small: at a 10-second horizon, 20-30% of people have not moved a body width. No architecture crosses this — it is a property of people, not of models.
-3. **It is not a museum artifact.** This was the main risk to the whole premise (FROG is a science museum, where people stand and look at things). DROW is a care facility, and people there are only ~8-10pp more mobile at every horizon. The problem survives the change of venue.
+1. **Most of the available motion appears in the first ~5 seconds**, in both venues. The curve falls steeply to 5 s and then flattens. Horizon past that keeps paying on FROG but with sharply diminishing returns. The restatement sharpened this rather than changing it: the fall from 1 s to 5 s is now 52.4 -> 32.7% where it read 67.3 -> 36.0%.
+2. **There is a hard ceiling on every motion-based method**, and it is not small: at a 10-second horizon, **about a quarter** of people on FROG have not moved a body width (24.0%, against 19.5% on DROW's un-restated clock). No architecture crosses this — it is a property of people, not of models.
+3. **It is not a museum artifact.** This was the main risk to the whole premise (FROG is a science museum, where people stand and look at things). DROW is a care facility, and people there were ~8-10 pp more mobile at every horizon on the clocks both columns used at the time. **That margin is now unquantified**, since FROG's column fell by 4-15 pp and DROW's will rise; the qualitative claim — the problem survives the change of venue — rests on both venues showing the same steep-then-flat shape, which neither restatement changes.
 
 **What a temporal window of a given size buys**, at each dataset's own rate:
 
@@ -106,7 +111,7 @@ How far an annotated person has actually moved, in the **world** frame (odometry
 
 **Caveats, because they are load-bearing:**
 
-- **Gate sensitivity is checked and the conclusion holds.** Trajectory association needs a gate wide enough to absorb annotation jitter; too tight and tracks shatter, which biases the statistic *toward* stationarity. Across gates of 0.4 / 0.6 / 1.0 m the 10 s figure moves 30.2 / 29.5 / 28.5% — stable, and a looser gate moves it conservatively. Only the 30 s row is materially gate-sensitive (18.7 / 16.3 / 14.5%), so quote it as "roughly a sixth" and not more precisely.
+- **Gate sensitivity is checked and the conclusion holds.** Trajectory association needs a gate wide enough to absorb annotation jitter; too tight and tracks shatter, which biases the statistic *toward* stationarity. Across gates of 0.4 / 0.6 / 1.0 m the 10 s figure moved 30.2 / 29.5 / 28.5% — stable, and a looser gate moves it conservatively. Only the 30 s row is materially gate-sensitive (18.7 / 16.3 / 14.5%), so quote it as "roughly an eighth" and not more precisely. *(The gate sweep was run on the 26.2 Hz clock; the restatement shifts each row down without changing the spread between gates, since the gate is in metres.)*
 - **DROW cannot support a long-horizon claim.** 123 trajectories and 1,976 annotations, against FROG's 1,267 and 250,751. Its 30 s row came out *non-monotone* (median 0.94 m at 30 s against 2.44 m at 10 s) on 214 pairs — a small-sample artifact, almost certainly a couple of stationary staff. It is omitted above rather than reported. DROW supports the 1-10 s comparison and nothing longer.
 - **Both are one venue each.** The agreement between them is evidence the effect is not venue-specific; it is not evidence that it is universal.
 

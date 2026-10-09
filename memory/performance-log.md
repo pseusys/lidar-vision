@@ -157,6 +157,22 @@ That signature is **mislocalisation**: the detections land near enough to pass a
 It points at the anchor-decode geometry calibrated on 2026-09-10, whose angular convention was explicitly recorded as weakly identified *because AP@0.5 could not distinguish it*. AP@0.3 can, and does.
 **Use `--eval-r 0.3` as the discriminator when calibrating anything positional.**
 
+## TAKHeLiPeD's cost, end to end, one scan at a time
+
+**Measured 2026-10-10 on the adopted recipe** (`tracking_baselines.py latency`, E22; 2,000 consecutive test scans, batch 1, one stream, as on the robot; `checkpoints_three_horizon/a61/latency_*.json`).
+The budget is **25 ms**, FROG's real frame period — not the 38.2 ms that every earlier cost claim was set against (`interpreting-evaluation.md`).
+
+| | stage 1-2 | candidate decoding | object memory | **total** | p99 | share of the 25 ms budget |
+| --- | --- | --- | --- | --- | --- | --- |
+| **GPU** (RX 9060 XT) | 5.41 | 3.23 | 4.58 | **13.32 ms** | 15.32 | **53%**, 61% at p99 |
+| **CPU, 4 threads** | 8.71 | 2.83 | 9.27 | **20.98 ms** | 25.32 | **84%**, **101% at p99** |
+
+**The GPU has headroom; the CPU's tail does not.** At the 99th percentile four CPU threads take 25.32 ms against a 25 ms budget, so a CPU-only deployment would drop frames occasionally — which the old 38.2 ms figure concealed, since the same measurement read as 55% of budget.
+**The memory is the larger half of the CPU cost** (9.27 ms against stage 2's 8.71) and the smaller half of the GPU's (4.58 against 5.41): it is latency-bound on a CPU and bandwidth-cheap on a GPU.
+Decoding is 2.8-3.2 ms either way and is pure Python plus numpy, so it is the obvious target if a deployment needs margin.
+
+**Slot count barely matters**: 4.86 / 4.81 / 4.74 / 4.92 / 5.21 ms per memory step at 64 / 128 / 256 / 512 / 720 slots (A51 E4), so the O(K²) exchange is not what the cost is made of — and E6 removed that exchange altogether for nothing.
+
 ## Empty-scene false positives — FROG `transferred`, person-free frames only
 
 **A genuine gap: nobody has published this, because the FROG benchmark contains no person-free frames at all.**
