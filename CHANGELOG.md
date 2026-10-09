@@ -38,6 +38,42 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 3: the heading-wrap fix did not move the displacement oracle, so 4.20 is superseded, not contradicted (2026-10-10)
+
+*keywords: A45, A48, displacement oracle, role C, 4.20, 2.58, heading wrap, _load_odom, np.unwrap, heading_ab.py, exchange rate, association gate, merge radius*
+
+A48 recorded that A45's role-C displacement bound "fell from 4.20 to 2.58 with the same command" after the heading-wrap fix,
+and flagged it as far larger than the ~0.14% of affected frames should cause. `utils/heading_ab.py` answers it by re-projecting
+the **same cached detections** through both pose series -- the loader's wrapped interpolation and today's unwrapped one -- with
+the association gate, the one-to-one assignment, the bounding-box rule and every threshold held constant.
+
+| arm | best exchange rate | at D = 0.30 m, where the 4.20 was read |
+| --- | --- | --- |
+| today's unwrapped heading | **2.58** | 2.44 |
+| the old wrapped heading | **2.53** | 2.40 |
+| unwrapped, association gate 1.0 m | 2.56 | 2.39 |
+| unwrapped, association gate 1.2 m | 2.56 | 2.43 |
+| *recorded before 2026-09-14* | *4.20* | *4.20* |
+
+**The heading bug is worth 0.05 of the 1.62, and the association gate 0.02.** The bug's footprint is reproduced -- 49 frames
+where the two headings disagree by more than 2 degrees, 0.10% of the annotated ones, against A48's count of 54 -- and its effect
+on the oracle is proportional to that, which is what the original suspicion implied but the attribution denied.
+
+**The reimplementation is faithful, which is what makes the exclusion mean anything.** Its unwrapped column reproduces
+`horizon_sweep.py --discrimination` to the digit at every displacement (2.58 / 2.50 / 2.44 / 2.36 / 1.94 / 1.51 / 1.26 / 1.13 /
+0.95) and reproduces A48's own post-fix cross-check: at 0.30 m, 36.0% of phantoms removed for **10.7%** of true positives,
+exactly the figures recorded there.
+
+**So 4.20 is a superseded measurement rather than a contradiction**, and what it rests on is detections we no longer use: the
+remaining untested difference in that window is LFE-Peaks' `merge_radius`, recalibrated 0.40 -> 0.30 m on 2026-09-10, which took
+its phantom rate from 1.28 to 1.39 per frame and therefore changed every trail. Testing that needs a detector pass at the old
+radius and is **not scheduled**: the decision it would inform -- which number the paper quotes -- is already settled, since
+4.20 was measured on a mis-calibrated detector and 2.58 is reproducible from the current one.
+
+**`docs/PAPER.md` must therefore quote 2.58** (and 2.44 at 0.30 m) with its inputs stated, and must not present the move as a
+consequence of the heading fix. The trail-length row of the same table moved for a different and now-understood reason -- the
+frame rate -- to 2.37 at its best point.
+
 ## Items 1, 2 and 5: FROG is 40 Hz, the whole detector fits the real budget on the GPU but not on the CPU tail (2026-10-10)
 
 *keywords: frame_period_s, 40 Hz, 26.2 Hz, FP/s, cost table, latency_cpu_t4.json, latency_gpu.json, 25 ms budget, horizon_sweep cache, A33-A36, A35 criteria, motion_analysis, displacement oracle*
