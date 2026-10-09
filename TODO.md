@@ -76,7 +76,7 @@ rather than blocking it.
 | 2 | **One end-to-end cost table on the adopted recipe**: stages 1-2 plus the memory, ms/frame at batch 1, CPU and GPU, against the real-time budget item 1 settles. The pieces exist apart (stage 2 ~8.8 ms, memory 5.17-5.22 ms); measure the sum rather than adding them | **yes** -- `AGENTS.md` rule 2b: an accuracy number without its speed counterpart is incomplete, and the deployment claim rests on it | ~1 h | A59's latency note, A51 E4 |
 | 3 | **Explain the displacement oracle's 4.20 -> 2.58.** The same command gave a different answer after the heading-wrap fix, by far more than the ~0.14% of frames it touched, and `docs/PAPER.md` quotes it | **yes** -- an unexplained 1.6x move in a quoted number is a reviewer's first question | ~1 h | A48, last bullet |
 | 4 | **Refresh the pages the pre-print is built from**: `docs/PAPER.md` and `memory/performance-log.md` still lead with the pre-A59 recipe, so the headline tables, the cost table and the finding bullets all describe a superseded model | **yes** -- these are the pre-print's source tables | ~half a day | A50's documentation note |
-| 5 | **Close A33-A36 against A35's own acceptance criteria.** They are the funnel for an architecture search that TAKHeLiPeD replaced, and its two pre-registered criteria are now met: single-frame at least LFE-PPN's 66.5% (stage 2 alone is **82.2%**) and a strict benefit from ordered time (the memory adds **+3.7 pp** over its own candidates, 95% of it within 10 s). Record that, with the numbers | **yes** -- it is the pre-print's "why a rebuild rather than tuning" argument, and it currently reads as an open funnel | ~30 min | A33, A34, A35, A36 |
+| ~~5~~ | ~~**Close A33-A36 against A35's own acceptance criteria.**~~ **DONE 2026-10-10**: both criteria met and recorded with their numbers -- single-frame **82.20%** against the 66.5% bar, and **4.47 pp** lost when the memory is emptied every 0.5 s against `SpaceTimeCNN`'s 0.5 pp shuffle penalty. One caveat kept: the 4.47 is on B0's backbone, and E1's reset sweep is queued on the adopted recipe. Original: They are the funnel for an architecture search that TAKHeLiPeD replaced, and its two pre-registered criteria are now met: single-frame at least LFE-PPN's 66.5% (stage 2 alone is **82.2%**) and a strict benefit from ordered time (the memory adds **+3.7 pp** over its own candidates, 95% of it within 10 s). Record that, with the numbers | **yes** -- it is the pre-print's "why a rebuild rather than tuning" argument, and it currently reads as an open funnel | ~30 min | A33, A34, A35, A36 |
 | 6 | **A47: DR-SPAAM in its official streaming form**, and **A48 item 6**'s FROG half (the windowed evaluations at `T > 1`) -- one piece of work, since both touch the same path. Every DR-SPAAM number here is the windowed form, which is not the detector the authors published | **yes** -- it is a published baseline we quote | ~3 h with its test | A47, A48 |
 | 7 | **A59 phase 3b: LFE retrained with its authors' recipe**, as a PyTorch port proven against the published ONNX weights, then three arms (as published / shuffling fixed / selected on AP) | **yes, for the central comparative claim** -- the paper says a single-frame network beats LFE and can currently say only where and what it is not | ~2 h port, ~3-6 h unattended | A59 phase 3 (b) |
 | 8 | **D4: `step3a --learn-value`** -- implemented 2026-09-20, never run. One flag; answers whether the value rule's two hand-set constants are the right ones | **yes, weakly** -- A51 phase 3b is "the design decisions the write-up has to defend", and this is the one left unmeasured | ~5 h unattended | A51 phase 3b |
@@ -1505,7 +1505,38 @@ Settle it in **A32c** instead, by reading the target encoding out of the graph d
 
 **Standing rule this leaves**: calibrate anything positional at `--eval-r 0.3`. A 0.5 m gate is wider than most errors worth finding.
 
-### A33. A defensible ranking test — and it must be validated before it is trusted
+### ~~A33-A36. The architecture funnel~~ -- **CLOSED 2026-10-10: TAKHeLiPeD is the rebuild, and it passes A35's own criteria**
+
+These four items are one thread: a cheap ranking test (A33), a candidate survey (A34), build-rank-train the survivors (A35), and a
+re-triage afterwards (A36). They were written on 2026-09-10, when the measurement that reorganised the project showed
+`SpaceTimeCNN` was a five-frame *averager* whose spatial half scored 63.0%, below LFE-Peaks' published 64.9%. **A35 then fixed two
+acceptance criteria in advance, and both are now met** -- by a detector built directly rather than by a funnel:
+
+| A35's pre-registered criterion | `SpaceTimeCNN`, which failed it | TAKHeLiPeD |
+| --- | --- | --- |
+| **1. Does not lose on spatial**: single-frame score at least LFE-PPN's **66.5%** | **63.0%** -- below LFE-Peaks' 64.9% too | **82.20%**: stage 2 alone, one frame per call, no temporal input of any kind (A59's adopted recipe, three seeds, `nms-mean`). **+15.7 pp over the bar** |
+| **2. Strictly benefits from ordered time**: the score with its history destroyed must be meaningfully below the score with it | **0.5 pp** -- destroying the order cost almost nothing | **4.47 pp**: emptying the memory every 0.5 s scores 79.41 against 83.88 when it is never emptied, of the 6.22 pp the memory adds over its own candidates (E1, reset sweep 0.5 / 1 / 2 / 5 / 10 / 30 s / never = 79.41 / 80.46 / 81.51 / 82.65 / 83.53 / 83.73 / 83.88). **About 9x `SpaceTimeCNN`'s penalty** |
+
+**Why each item closes rather than completes.**
+
+- **A33's ranking proxy is not needed**, because the project stopped screening many architectures and built one. Its own rule --
+  "a proxy that cannot rank three known architectures correctly cannot rank unknown ones" -- was never satisfied by any proxy
+  tried, and the informational-capacity grid's predictive power remains explicitly unvalidated (`interpreting-evaluation.md`).
+  **Nothing that was built was ever ranked by a proxy**, which is the outcome A33 was written to protect.
+- **A34's survey informed the design rather than feeding a funnel.** Of the families it listed, the one built is **ConvNeXt
+  blocks in a U-Net** with a whole-scan aggregator -- A34's own "cheapest *is the design simply dated?* test" and "strong on small
+  data" rows -- and A59 then priced the alternatives from the measured model instead of from a proxy: LFE's input features are
+  worth nothing once weights are averaged, LFE's widths cost 1.4 pp, DR-SPAAM's training protocol costs 1.8 pp.
+- **A35's rebuild happened as A43/A50/A59/A60**, and its two criteria are the table above.
+- **A36's re-triage happened on 2026-10-09/10**: A50's remainder was triaged item by item, and §A is now ordered around a
+  pre-print.
+
+**One caveat the write-up must keep.** Criterion 2's 4.47 pp is measured on the **no-temporal B0 backbone** that A51 used, where
+the memory was worth +6.22 pp over its candidates; on the adopted recipe the memory is worth **+3.68 pp** (85.87 against 82.19),
+because stage 2 improved under it, and **the reset sweep has not been re-run there**. It is evaluation only
+(`slot_experiments.py horizon`), so it is queued rather than assumed.
+
+### A33. A defensible ranking test — and it must be validated before it is trusted (the plan, kept for its rule)
 
 **What.** Phase 3 wants to consider many architectures and train few.
 That needs a cheap ranking test, and this project has already been burned twice by proxies used before they were checked: a cheap `--subsample 0.2` screening run ranked `dtime=15` below `dtime=1` purely because they converge at different *rates*, and the informational-capacity grid's predictive power is *still* explicitly open (`interpreting-evaluation.md`).
