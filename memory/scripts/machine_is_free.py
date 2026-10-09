@@ -13,16 +13,29 @@ Reports what it found either way, because a silent pass is indistinguishable fro
 
 import subprocess
 import sys
+from pathlib import Path
 
 FREE_MB_REQUIRED = 2048
-WATCHED = ("train_three_horizon.py", "slot_experiments.py", "score_memory.py", "memory_diagnosis.py", "evaluate.py", "train.py")
+UTILS = Path(__file__).resolve().parent.parent.parent / "utils"
+TEST_SUITE = "-m pytest"       # the suite imports torch too, so it is a job for this purpose
+QUOTES = "\"'"                 # Windows command lines quote a path with spaces
+
+
+def is_project_job(command_line: str) -> bool:
+    """Would this python process lose, or cause the loss of, a run? Any script of `utils/`, or the test suite.
+
+    Derived from the directory rather than from a list: the list went stale and reported a free machine during a live job."""
+    if TEST_SUITE in command_line:
+        return True
+    tokens = [token.strip(QUOTES) for token in command_line.split()]
+    return any((UTILS / Path(token).name).exists() for token in tokens if token.endswith(".py"))
 
 
 def running_jobs() -> list:
-    """Command lines of the python processes running one of the project's long scripts."""
+    """Command lines of the python processes running one of the project's long scripts, or its test suite."""
     query = "Get-CimInstance Win32_Process -Filter \"Name like 'python%'\" | ForEach-Object { $_.CommandLine }"
     out = subprocess.run(["powershell", "-NoProfile", "-Command", query], capture_output=True, text=True).stdout
-    return [line.strip() for line in out.splitlines() if any(name in line for name in WATCHED)]
+    return [line.strip() for line in out.splitlines() if is_project_job(line)]
 
 
 def free_megabytes() -> int:

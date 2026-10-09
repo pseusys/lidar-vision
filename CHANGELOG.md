@@ -38,6 +38,78 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A50 phase 1 closes, and the adopted recipe retires one of the four screening bars (2026-10-09)
+
+*keywords:* A50, phase 1, A51, E13, a60_e13_static, screening bars, coasting precision, coast_per_frame, evaluation_segments, val windows, max_hours, EarlyStopping, slot_experiments --out, empty_scene.py, machine_is_free.py, triage
+
+The owner asked for what was left of A50 and A51. Most of it was already answered elsewhere or made moot by the architecture
+changing under it, which is now written into both items; three things were open and are closed here, and one measurement is left.
+
+**The time budget is gone** (A50 phase 1 item 6, the owner's call of 2026-09-16, never executed). `--max-hours` is removed from
+`step2`, `step3a` and `step3b`, and `EarlyStopping` no longer takes or checks hours. It only ever truncated a healthy run: A51's
+first full-curriculum step 3a died inside its first chunk-length stage at the 6 h default, after which every A51 launcher passed
+`--max-hours 24` by hand. A run is bounded by `--max-epochs` and `--patience`.
+
+**Validation windows are placed where the annotations are** (the half of item 3 that was about validation, not feedback).
+`evaluation_segments` now keeps only the window starts whose *scored* span holds an annotated frame, and spaces the budget over
+those. Measured on the 2026-10-09 val cache (`a59_c1_recipe_dropout01_s0`, 64 windows of 30 s warm-up plus 60 s): **6 of 64
+windows scored nothing**; afterwards 63 windows, **none empty**, and 10,091 scored frames against 9,924 -- more validation signal
+from slightly less replay. It changes checkpoint selection for future runs and invalidates nothing already trained.
+
+**`slot_experiments.py` takes `--out`** (A51's cheap open item): the hardcoded path destroyed E2's and E4's JSON on 2026-10-02.
+The modes are now reached through an `EXPERIMENTS` table that the CLI's own choices come from.
+
+**The adopted recipe has its own bars, and coasting has gone inert.** Read from A61's three E13 runs
+(`a60_e13_static_s{0,1,2}/step3a_results.json`), the control every future stage-3 arm is judged against:
+
+| metric | seed 0 / 1 / 2 | mean | three-sigma bar | B0's old bar |
+| --- | --- | --- | --- | --- |
+| AP | 86.35 / 85.77 / 85.49 | 85.87 | **1.32** | 1.45 |
+| AP at 0.3 m | 85.24 / 84.65 / 84.16 | 84.68 | **1.62** | 1.29 |
+| recall at matched false positives | 96.00 / 95.86 / 94.56 | 95.47 | **2.37** | 0.86 |
+| coasting precision | 33.3 / none emitted / 10.0 | -- | **gone** | 8.19 |
+
+The memory emits **0.0012 / 0.0000 / 0.0020 coasting reports per scored frame** against B0's 0.176 -- about a hundredth, with
+seed 1 emitting none, which is why its precision is undefined. Nothing is broken: stage 2's recall at its own operating point is
+95.47%, so there is almost nobody left for a slot to report alone. **Screening is now three bars, not four**, the tightest being
+AP's 1.32; **O2 and S2, the arms that aimed at coasting, have nothing left to aim at**; and any sentence about the coasting head
+must name the backbone it was measured on. The rescoring shift is -3.61 / -3.88 / -4.17 logits on candidates covering a person
+against -0.54 / -0.38 / -1.43 on the rest (A50 phase 1b item 2), the same whole-distribution shift as before.
+
+**What is left of A50 is one measurement**, item 7's person-free frames, and `utils/empty_scene.py` is the script for it: FROG
+`transferred`'s 72,533 frames where nobody is present, counted for candidates and memory at five thresholds -- per frame, per
+second, the share of frames holding any, and the share recurring within 0.3 m in the next frame, against LFE-Peaks' 1.39 and
+LFE-PPN's 1.94. `load_split` takes a FROG mode (the `official` cache names are byte-identical, so no 1 GB cache is rebuilt).
+**It also splits by time since anyone was in view**, because the three raw recordings interleave populated and person-free
+frames and a 10 s memory can report someone who has just left -- an explanation a static detector cannot have.
+
+**The free-machine guard was lying.** `machine_is_free.py` carried a hand-written list of six script names and reported a free
+machine while `empty_scene.py` was replaying on the GPU. A stale list is indistinguishable from a free machine, which is the one
+failure that script must not have, so the rule is derived from `utils/` instead: any python process running a `.py` that exists
+there, plus `-m pytest`. Verified against the live job it had just missed.
+
+## A57 done: one typed queue runner in place of eight copied PowerShell launchers (2026-10-09)
+
+*keywords:* A57, run_queue.py, Job, Outcome, BLOCKED, queue module, progress.txt, QUEUE, training guard, test gate, spawn seam, run_queue_ladder_a61.ps1
+
+`utils/run_queue.py` replaces the ~60-line launcher that had been hand-copied eight times, and every incident in `TODO.md` A57's
+table traced to a copy rather than to the research. A queue is now a committed Python module that builds `Job`s and calls `main`,
+so the exact queue behind a result outlives its session -- the gap that once left T1's and T2's settings unverifiable.
+
+- **`Job`**: `name`, `cli`, `outputs`, `needs`, `cwd`. **`Outcome`**: `DONE` / `SKIP` / `FAILED` / `BLOCKED`.
+- **Dependencies are explicit**, so a failed job's dependents are recorded `BLOCKED` and never start. The copies waited for an
+  *idle machine* instead, and a chain that stops on failure makes the machine idle -- which is how S3 once trained ahead of a
+  failed test gate.
+- A job whose `outputs` all exist is skipped without spawning; a job with no outputs is judged by its exit code, which is how the
+  test gate works; three attempts with `--resume`, but a **training guard in the log stops it after one**; every attempt keeps its
+  own log, so a relaunch no longer overwrites the earlier stage's epoch history.
+- The progress lines are byte-identical to the PowerShell format, so the watchers work unchanged; `QUEUE <job> BLOCKED, <dep> did
+  not finish` is the one new line.
+- **40 tests**, the process spawn behind a seam, so none needs a GPU -- including `spawn_process` itself against real processes.
+  Three mutations (never block, retry past a guard, ignore the skip rule) were each caught by the suite.
+- One behaviour deliberately improved rather than ported: the PowerShell loop slept a fixed 30 s between checks, so a job that
+  finished in a second still cost 30; the runner waits on the process with a 30 s timeout.
+
 ## A61 done: the learned memory still beats a tuned tracker on the adopted recipe, by +2.36 pp (2026-10-09)
 
 *keywords:* A61, A56, E13, E14, E15, ByteTrack, CBMOT, SORT, rule scorer, tracking_baselines summary, a61/summary.json, recall at matched FP, GOSPA, lidar_queue

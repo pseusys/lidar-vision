@@ -14,7 +14,7 @@ If two rows match, read both; if none do, read nothing extra and proceed.
 | --- | --- |
 | new idea, proposal, why don't we, have we tried, suggestion, improvement, dtime, wide window, consensus filter, merge the memory's output, NMS on slots | [`rejected-ideas.md`](rejected-ideas.md) |
 | encoding, unicode, cp1252, path, shell, venv, python3, DirectML, ABI, import error, works on my machine, crash on startup, JRDB missing | [`gotchas.md`](gotchas.md) |
-| long run, overnight, what's the progress, status report, monitor, watchdog, heartbeat, stale, hung, lingering process, relaunch, resume, background task | [`long-running-tasks.md`](long-running-tasks.md) |
+| long run, overnight, what's the progress, status report, monitor, watchdog, heartbeat, stale, hung, lingering process, relaunch, resume, background task, queue, launcher, run_queue | [`long-running-tasks.md`](long-running-tasks.md) |
 | how do I run, command, invocation, flags, rebuild, entrypoint, train, evaluate, render video, pytest | [`commands.md`](commands.md) |
 | how does a detector work, architecture, cutout, full-scan, TAKHeLiPeD, three-horizon, calibration network, object memory, SpaceTimeCNN, FullScanTCN, TemporalUNet, DrowDetector, DrSpaamDetector, LFE, tracker, SimpleTracker, DETECTOR_REGISTRY, BEAM_BATCH, input shape | [`detector-architectures.md`](detector-architectures.md) |
 | is this number real, accuracy, AUC, AP, benchmark, how good is it, can we trust, zero-shot, DROW-native, fine-tuned, false positive, false negative, batch size changed the answer, eval-dtime, retracted, duplicate labels, double report | [`interpreting-evaluation.md`](interpreting-evaluation.md) |

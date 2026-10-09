@@ -23,6 +23,22 @@ history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/
   **A three-sample standard deviation is itself uncertain** -- its 95% interval spans roughly half to six times the estimate --
   so read these as order-of-magnitude bars, not decision rules. Coasting precision is the noisiest metric by far, which is why
   the coasting gains reported for T1 and T2 do not survive it.
+
+- **The bars moved when the backbone did, and one of them disappeared** (2026-10-09, from A61's three E13 runs on A59's adopted
+  recipe, `a60_e13_static_s{0,1,2}`). Judge anything trained on the current stage 2 against these, not against B0's:
+
+  | metric | seeds | mean | sd | 3 sd | B0's bar |
+  | --- | --- | --- | --- | --- | --- |
+  | test AP | 86.35 / 85.77 / 85.49 | 85.87 | 0.44 | **1.32 pp** | 1.45 |
+  | AP at 0.3 m | 85.24 / 84.65 / 84.16 | 84.68 | 0.54 | 1.62 pp | 1.29 |
+  | recall at matched FP | 96.00 / 95.86 / 94.56 | 95.47 | 0.79 | **2.37 pp** | 0.86 |
+  | coasting precision | 33.3 / none emitted / 10.0 | -- | -- | **no bar** | 8.19 |
+
+  **Coasting has gone inert on this recipe**: 0.0012 / 0.0000 / 0.0020 reports per scored frame against B0's 0.176, with seed 1
+  emitting none at all. Nothing is broken -- recall at the memory's own operating point is 95.47% and its threshold has fallen to
+  0.071-0.097, so there is almost nobody left for a slot to report alone. **Screening is three bars now**, the tightest AP's 1.32,
+  and the arms that aimed at coasting (O2's weighting, S2's free-space evidence) improve a quantity worth ~0.001 reports per
+  frame. **Every coasting number in this file was measured on the no-temporal backbone** and must be quoted with that said.
 - One seed unless a row says otherwise. An ablation "supports" a decision when it *loses*.
 
 ## What the memory is worth at all

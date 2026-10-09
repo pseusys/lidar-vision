@@ -229,24 +229,30 @@ class TestStreamSampler:
 class TestEarlyStopping:
 
     def test_stops_after_patience_evaluations_without_improvement(self):
-        stop = EarlyStopping(patience_evals=2, min_epochs=0, max_epochs=100, max_hours=100)
+        stop = EarlyStopping(patience_evals=2, min_epochs=0, max_epochs=100)
         assert [stop.update(m) for m in [0.5, 0.6, 0.55, 0.58]] == [True, True, False, False]
-        assert stop.should_stop(epoch=4, hours=0)
+        assert stop.should_stop(epoch=4)
         assert stop.best == pytest.approx(0.6)
 
     def test_never_stops_before_the_minimum_epochs(self):
-        stop = EarlyStopping(patience_evals=1, min_epochs=5, max_epochs=100, max_hours=100)
+        stop = EarlyStopping(patience_evals=1, min_epochs=5, max_epochs=100)
         for m in [0.5, 0.4, 0.3]:
             stop.update(m)
-        assert not stop.should_stop(epoch=3, hours=0)
-        assert stop.should_stop(epoch=5, hours=0)
+        assert not stop.should_stop(epoch=3)
+        assert stop.should_stop(epoch=5)
 
-    def test_stops_at_the_epoch_and_time_caps(self):
-        stop = EarlyStopping(patience_evals=10, min_epochs=0, max_epochs=3, max_hours=1.0)
+    def test_stops_at_the_epoch_cap(self):
+        stop = EarlyStopping(patience_evals=10, min_epochs=0, max_epochs=3)
         stop.update(0.5)
-        assert not stop.should_stop(epoch=2, hours=0.5)
-        assert stop.should_stop(epoch=3, hours=0.5)
-        assert stop.should_stop(epoch=1, hours=1.0)
+        assert not stop.should_stop(epoch=2)
+        assert stop.should_stop(epoch=3)
+
+    def test_no_amount_of_elapsed_time_stops_a_run_that_is_still_improving(self):
+        """A51's first full-curriculum run was ended by a 6 h cap inside its first stage; budgets are epochs and patience now."""
+        stop = EarlyStopping(patience_evals=10, min_epochs=0, max_epochs=100)
+        for epoch, metric in enumerate([0.5, 0.6, 0.7], start=1):
+            stop.update(metric)
+            assert not stop.should_stop(epoch=epoch)
 
 
 class TestBestCheckpoint:
@@ -401,6 +407,13 @@ class TestCandidateCachePath:
             p.write_bytes(b"")
             os.utime(p, (1_000_000_000, 1_000_000_000))
         assert candidate_cache_path("test", 0, a) != candidate_cache_path("test", 0, b)
+
+    def test_the_official_cache_name_is_unchanged_so_a_1_gb_cache_is_not_rebuilt(self):
+        assert candidate_cache_path("val", 0, None).name.startswith("lfe-peaks_official_val_")
+
+    def test_another_frog_mode_gets_its_own_cache(self):
+        """`transferred`'s test split is the person-free complement of `official`'s, and shares its name (`TODO.md` A50)."""
+        assert candidate_cache_path("test", 0, None) != candidate_cache_path("test", 0, None, mode="transferred")
 
     def test_lfe_candidates_need_no_checkpoint(self):
         assert "lfe-peaks" in candidate_cache_path("val", 0, None).name
@@ -560,18 +573,54 @@ class TestExchangeRate:
 
 
 class TestEvaluationSegments:
+    """Validation windows. A window whose scored span holds no annotated frame costs its warm-up and returns nothing: 6 of 64
+    did on the val cache of 2026-10-09, which is why placement reads the annotations (`TODO.md` A50 phase 1 item 3)."""
+
+    def _split(self, lengths, annotated=None):
+        lengths = np.asarray(lengths)
+        offsets = np.concatenate([[0], np.cumsum(lengths)])
+        flags = np.ones(int(lengths.sum()), dtype=bool) if annotated is None else np.asarray(annotated, dtype=bool)
+        return SimpleNamespace(lengths=lengths, offsets=offsets, data=SimpleNamespace(annotated=flags))
 
     def test_whole_recordings_when_no_windows_are_asked_for(self):
-        split = SimpleNamespace(lengths=np.array([100, 40]))
+        split = self._split([100, 40])
         assert evaluation_segments(split, windows=0, window_frames=10, warmup_frames=5) == [(0, 0, 100, 0), (1, 0, 40, 0)]
 
     def test_windows_with_their_warm_up_fit_inside_long_enough_recordings(self):
-        split = SimpleNamespace(lengths=np.array([1000, 30, 500]))
+        split = self._split([1000, 30, 500])
         segments = evaluation_segments(split, windows=6, window_frames=50, warmup_frames=20)
         assert 5 <= len(segments) <= 7
         for recording, first, frames, warmup in segments:
             assert recording != 1 and frames == 70 and warmup == 20
             assert 0 <= first and first + frames <= split.lengths[recording]
+
+    def test_the_spacing_is_unchanged_where_every_frame_is_annotated(self):
+        segments = evaluation_segments(self._split([1000]), windows=3, window_frames=50, warmup_frames=20)
+        assert [first for _, first, _, _ in segments] == [0, 465, 930]
+
+    def test_every_window_scores_at_least_one_annotated_frame(self):
+        annotated = np.zeros(1000, dtype=bool)
+        annotated[100:260] = True                                                # one annotated stretch, early in the recording
+        segments = evaluation_segments(self._split([1000], annotated), windows=6, window_frames=50, warmup_frames=20)
+        assert segments
+        for _, first, frames, warmup in segments:
+            assert annotated[first + warmup:first + frames].any()
+
+    def test_the_window_count_is_kept_when_the_annotations_allow_it(self):
+        annotated = np.zeros(1000, dtype=bool)
+        annotated[:600] = True
+        segments = evaluation_segments(self._split([1000], annotated), windows=6, window_frames=50, warmup_frames=20)
+        assert len(segments) == 6
+
+    def test_a_recording_with_no_annotations_contributes_no_windows(self):
+        annotated = np.concatenate([np.ones(1000, dtype=bool), np.zeros(1000, dtype=bool)])
+        segments = evaluation_segments(self._split([1000, 1000], annotated), windows=6, window_frames=50, warmup_frames=20)
+        assert {recording for recording, _, _, _ in segments} == {0}
+
+    def test_windows_are_placed_by_annotation_even_when_nothing_is_annotated_anywhere(self):
+        """A split with no annotations at all still yields windows, so a smoke run does not silently score zero frames."""
+        segments = evaluation_segments(self._split([1000], np.zeros(1000, dtype=bool)), windows=3, window_frames=50, warmup_frames=20)
+        assert len(segments) == 3
 
 
 class TestCandidatePoolingWeights:
@@ -1079,15 +1128,15 @@ class TestResume:
         assert load_resume(path, resume=True) is None
 
     def test_the_stopper_keeps_its_patience_across_a_resume(self):
-        stopper = EarlyStopping(patience_evals=2, min_epochs=0, max_epochs=99, max_hours=99)
+        stopper = EarlyStopping(patience_evals=2, min_epochs=0, max_epochs=99)
         for metric in (0.5, 0.4):
             stopper.update(metric)
-        restored = EarlyStopping(patience_evals=2, min_epochs=0, max_epochs=99, max_hours=99)
+        restored = EarlyStopping(patience_evals=2, min_epochs=0, max_epochs=99)
         restored.__dict__.update(stopper.state())
         assert restored.state() == stopper.state()
-        assert not restored.should_stop(epoch=1, hours=0)
+        assert not restored.should_stop(epoch=1)
         restored.update(0.3)
-        assert restored.should_stop(epoch=1, hours=0)                            # the second bad evaluation, not a fresh count
+        assert restored.should_stop(epoch=1)                            # the second bad evaluation, not a fresh count
 
     def test_the_best_checkpoint_keeps_its_bar_across_a_resume(self, tmp_path):
         best = BestCheckpoint(tmp_path / "best.pth")

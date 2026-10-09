@@ -43,9 +43,14 @@ reached the end of its 1 s stage and stopped at 18:11, the minute the session tu
 
 ```powershell
 $past = (Get-Date).AddMinutes(-5).ToString("HH:mm")     # a start time already gone, so the trigger never fires by itself
-schtasks /create /tn "lidar_<item>" /tr "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$chain`"" /sc once /st $past /it /f
+schtasks /create /tn "lidar_<item>" /tr "`"$python`" `"$queue`"" /sc once /st $past /it /f
 schtasks /run   /tn "lidar_<item>"
 ```
+
+**The chain itself is `utils/run_queue.py`** since 2026-10-09 (A57), not a copied PowerShell script: `$queue` is a committed
+Python module that builds `Job`s and calls `main`, and the runner owns retries, the skip-if-done rule, the guard classification
+and the progress lines. It takes `--list`, `--steps` and `--progress`. Every launcher incident in `TODO.md` A57's table came
+from the eight hand-copied copies, so write a queue module and do not copy a launcher again.
 
 **Never give the one-off trigger a future time.** An earlier version of this template used `/st 23:59`, and on 2026-10-02 the
 A56 tasks then fired a second time at 23:59, re-running two finished chains over their own outputs (their pickles survived, two
@@ -58,9 +63,8 @@ without it can land in session 0 and find no device. Verified 2026-10-02: the tr
 
 With `--resume` on every step, a relaunch then costs the current stage rather than the whole run.
 
-**One wrinkle to know:** `Run-Step` names its log `<step>.attempt1.log` and a relaunch overwrites it, so the earlier stage's
-epoch history is lost from the log. The resume file and the final results JSON keep the full history, but read the log before
-relaunching if the trajectory matters. **Watchers are the
+**Each attempt keeps its own log**, `<job>.<stamp>.attempt<n>.log` under `checkpoints_three_horizon/queue_logs/`, so a relaunch
+no longer overwrites the earlier stage's epoch history the way the PowerShell `Run-Step` did. **Watchers are the
 exception** and stay session-bound: their whole purpose is to notify the agent, so a watcher that outlives the session has
 nobody to tell. Re-arm them at the start of each session instead, and read `progress.txt` first -- it is the one record that
 survives everything.

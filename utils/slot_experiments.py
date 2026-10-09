@@ -153,13 +153,23 @@ def cost(args, device) -> Dict:
     return dict(rows=rows, timed_frames=TIMED_FRAMES)
 
 
+def output_path(args) -> Path:
+    """Where this run's results go: `--out` as given, or one file per experiment under `--out-dir`."""
+    return args.out if args.out is not None else args.out_dir / f"a51_{args.experiment}.json"
+
+
+EXPERIMENTS = dict(horizon=horizon, odometry=odometry, crowding=crowding, cost=cost)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("experiment", choices=("horizon", "odometry", "crowding", "cost"))
+    ap.add_argument("experiment", choices=tuple(EXPERIMENTS))
     ap.add_argument("--memory", type=Path, required=True)
     ap.add_argument("--stage2", type=Path, required=True)
     ap.add_argument("--sensor-memory", type=Path, default=None, help="odometry only: a sensor-frame (D1) checkpoint to compare against")
     ap.add_argument("--out-dir", type=Path, default=_HERE.parent / "checkpoints_three_horizon")
+    ap.add_argument("--out", type=Path, default=None, help="the results file; the default is one file per experiment under --out-dir, "
+                    "which a second run on another checkpoint overwrites")
     ap.add_argument("--stride", type=int, default=5, help="score every Nth annotated frame")
     ap.add_argument("--streams", type=int, default=8)
     ap.add_argument("--limit-recordings", type=int, default=0)
@@ -167,8 +177,9 @@ def main() -> None:
 
     device, _ = detect_device()
     print(f"{args.experiment}: {args.memory.parent.name}", flush=True)
-    result = dict(horizon=horizon, odometry=odometry, crowding=crowding, cost=cost)[args.experiment](args, device)
-    out = args.out_dir / f"a51_{args.experiment}.json"
+    result = EXPERIMENTS[args.experiment](args, device)
+    out = output_path(args)
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(dict(memory=str(args.memory), **result), indent=1), encoding="utf-8")
     print(f"wrote {out}", flush=True)
 

@@ -37,7 +37,7 @@ python train.py --detector spacetime_cnn --dataset frog --init-weights ../checkp
 **TAKHeLiPeD**, the three-horizon detector (`TODO.md` A43, A51), trains with its own script, because it streams recordings rather than sampling frames:
 
 ```bash
-python train_three_horizon.py step2 --checkpoint-every 0.25   # stages 1-2 on single frames, A59's recipe by default (nms-mean, mirror, nearest labels, dropout 0.1); then average_checkpoints.py; --max-range-m sets the model range (default 10 m); 24 h cap
+python train_three_horizon.py step2 --checkpoint-every 0.25   # stages 1-2 on single frames, A59's recipe by default (nms-mean, mirror, nearest labels, dropout 0.1); then average_checkpoints.py; --max-range-m sets the model range (default 10 m)
 python train_three_horizon.py step3a --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth     # stage 3 on stage 2's candidates (builds their cache first)
 python train_three_horizon.py step3b --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth   # whole detector with feedback
 python train_three_horizon.py step4 --stage2 ... --memory ... --joint ../checkpoints_three_horizon/step3b_joint.best.pth   # SORT and slot-count ablations, no training
@@ -46,6 +46,8 @@ python slot_experiments.py horizon --memory <step3a ckpt> --stage2 <step2 ckpt> 
 python slot_experiments.py odometry --memory ... --stage2 ... --sensor-memory <D1 ckpt>  # AP against odometry drift, room frame vs sensor frame (A51 E2)
 python slot_experiments.py crowding --memory ... --stage2 ...                    # AP by people per frame, candidates vs memory (A51 E3)
 python slot_experiments.py cost --memory ... --stage2 ...                        # ms per frame against slot count, 64-720 (A51 E4)
+python slot_experiments.py odometry --memory ... --stage2 ... --out ../results/<name>.json   # --out names the results file; without it every run of a mode overwrites the same a51_<mode>.json, which destroyed E2's and E4's numbers once
+python empty_scene.py --stage2 <step2 ckpt> --memory <step3a ckpt>               # detections per frame on FROG transferred's 72,533 person-free frames, where every one is a false positive (A50 phase 1 item 7)
 python score_memory.py --memory ... --stage2 ... --out <json>                    # score an interrupted run's best checkpoint (A51)
 python judge_arms.py                                                            # every A51 arm's deltas and verdicts against a control's three-sigma bars; stdlib only, safe beside a running job
 python train_three_horizon.py step3a --stage2 ... --visibility                   # give the coasting head the free space the laser saw past each slot (A51 S2); rebuilds the candidate cache once
@@ -80,9 +82,18 @@ python train_three_horizon.py step1        # stage 3 on cached LFE-Peaks candida
 
 Every step takes `--resume`, **verified end to end on 2026-09-24** by killing a run at epoch 3 and relaunching it: it continued at epoch 4 with its validation curve and gate unbroken, then finished and wrote its results. It continues from `<step>_resume.pth` in `--out-dir` -- written after each evaluation, so a crash costs the time since it rather than the whole run. Relaunch the identical command with `--resume` added; it is off by default, so a fresh run never picks up an old state by accident.
 
-**Chain launchers retry with `--resume`.** The one in use (session scratchpad `run_queue3.ps1`) gives each step up to three attempts, passing `--resume` every time, and logs each attempt separately. A step that died without reaching a training guard is retried from its saved state; one whose log carries a guard message (`not finite at chunk`, `candidates' val AP moved`, `the training loss is`) stops the chain, because retrying cannot fix a run that is wrong rather than interrupted.
+**Long queues run through `utils/run_queue.py`** (A57), which replaced the eight hand-copied PowerShell launchers. A queue is a committed Python module that builds `Job`s and calls `main`:
 
-Each writes `../checkpoints_three_horizon/<step>_*.best.pth` (the run's best, whatever epoch or stage produced it) and `<step>_results.json`; every budget flag is in `--help`, defaults as in `TODO.md` A43. `--limit-recordings N` makes a smoke run. Launch long runs as a detached process, not as a child of an agent session, which ends with the session.
+```bash
+python ../checkpoints_three_horizon/<queue>.py --list          # the queue in dependency order, and which jobs are already done
+python <queue>.py --steps ladder_probe a61_summary             # only these jobs; the others count as satisfied
+python <queue>.py                                              # everything whose dependencies are met and whose outputs are missing
+```
+
+Each job names the files that prove it finished, so a finished job is skipped and an interrupted one is retried from its own `--resume` state, up to three attempts. A job whose log carries a training guard (`not finite at chunk`, `candidates' val AP moved`, `the training loss is`) stops after one attempt, because retrying cannot fix a run that is wrong rather than interrupted, and **a job whose dependency failed is recorded `BLOCKED` and never starts** -- the mistake the copied launchers made, since they waited for an idle machine and a stopped chain makes the machine idle. Progress goes to `checkpoints_three_horizon/progress.txt` in the `QUEUE <job> ...` format the watchers poll. Launch it detached through the Task Scheduler (`long-running-tasks.md`).
+
+Each writes `../checkpoints_three_horizon/<step>_*.best.pth` (the run's best, whatever epoch or stage produced it) and `<step>_results.json`; every budget flag is in `--help`, defaults as in `TODO.md` A43.
+**There is no `--max-hours`** (removed 2026-10-09, A50 phase 1 item 6): a run is bounded by `--max-epochs` and `--patience`, and the wall-clock cap only ever truncated a healthy run -- it ended A51's first full-curriculum step 3a inside its first chunk-length stage. `--limit-recordings N` makes a smoke run. Launch long runs as a detached process, not as a child of an agent session, which ends with the session.
 
 `--frog-mode {official,transferred,balanced}` selects the FROG partition (default `official`, the published benchmark).
 It is **stored in the checkpoint**, so `evaluate.py` defaults to the partition the weights were trained under and refuses to score two differently-partitioned checkpoints in one pass.

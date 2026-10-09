@@ -79,6 +79,7 @@ GRAD_CLIP = 1.0
 EPOCH_TOLERANCE = 0.01
 TEST_STRIDES = (1, 5)
 CACHE_DIR = _HERE / ".three_horizon_cache"
+DEFAULT_MODE = "official"       # FROG's published partition; `transferred` is its person-free complement (TODO.md A50)
 SPLITS = ("train", "val", "test")
 PRIOR_CHANNELS = 2
 ES_CONTINUOUS = 0x80000000
@@ -246,11 +247,13 @@ class StreamSampler:
 
 
 class EarlyStopping:
-    """Stop once `patience_evals` evaluations pass without a new best, never before `min_epochs`, always at `max_epochs` or
-    `max_hours`."""
+    """Stop once `patience_evals` evaluations pass without a new best, never before `min_epochs`, always at `max_epochs`.
 
-    def __init__(self, patience_evals: int, min_epochs: float, max_epochs: float, max_hours: float):
-        self.patience_evals, self.min_epochs, self.max_epochs, self.max_hours = patience_evals, min_epochs, max_epochs, max_hours
+    There is no time budget: epochs and patience bound a run, and a wall-clock cap only ever truncated a healthy one (A50 phase 1
+    item 6; A51's first full-curriculum run died inside its first chunk-length stage at 6 h)."""
+
+    def __init__(self, patience_evals: int, min_epochs: float, max_epochs: float):
+        self.patience_evals, self.min_epochs, self.max_epochs = patience_evals, min_epochs, max_epochs
         self.best = -math.inf
         self.since_best = 0
 
@@ -266,8 +269,8 @@ class EarlyStopping:
         self.since_best += 1
         return False
 
-    def should_stop(self, epoch: float, hours: float) -> bool:
-        return epoch >= self.max_epochs or hours >= self.max_hours or (epoch >= self.min_epochs and self.since_best >= self.patience_evals)
+    def should_stop(self, epoch: float) -> bool:
+        return epoch >= self.max_epochs or (epoch >= self.min_epochs and self.since_best >= self.patience_evals)
 
 
 class BestCheckpoint:
@@ -744,16 +747,31 @@ def memory_ms_per_frame(model: ObjectMemory, split: Split, device, frames: int =
     return 1000.0 * elapsed / max(n - 1, 1)
 
 
+def annotated_starts(annotated: np.ndarray, room: int, warmup_frames: int, span: int) -> np.ndarray:
+    """The window starts `0..room` whose scored span holds at least one annotated frame, so the window returns something."""
+    counted = np.concatenate([[0], np.cumsum(annotated.astype(np.int64))])
+    starts = np.arange(room + 1)
+    return starts[counted[starts + span] - counted[starts + warmup_frames] > 0]
+
+
 def evaluation_segments(split, windows: int, window_frames: int, warmup_frames: int) -> List[Tuple[int, int, int, int]]:
     """(recording, first frame, frames, warm-up frames before scoring): whole recordings when `windows` is 0, otherwise about
     `windows` evenly spaced windows of warm-up plus `window_frames`, shared among the recordings long enough to hold one in
-    proportion to their length."""
+    proportion to how much of each is placeable.
+
+    A window is placeable where its scored span holds an annotated frame; evenly spaced over the whole recording, 6 of 64 held
+    none on the 2026-10-09 val cache and cost their warm-up for no signal (`TODO.md` A50 phase 1 item 3). Where nothing is
+    annotated at all the whole range is used, so a smoke run still gets its windows."""
     span = warmup_frames + window_frames
     room = {s: int(n) - span for s, n in enumerate(split.lengths) if n >= span}
     if not windows or not room:
         return [(s, 0, int(n), 0) for s, n in enumerate(split.lengths)]
-    total = sum(r + 1 for r in room.values())
-    return [(s, int(first), span, warmup_frames) for s, r in room.items() for first in np.linspace(0, r, max(1, round(windows * (r + 1) / total))).astype(int)]
+    placeable = {s: annotated_starts(split.data.annotated[split.offsets[s]:split.offsets[s] + int(split.lengths[s])], r, warmup_frames, span)
+                 for s, r in room.items()}
+    placeable = {s: starts for s, starts in placeable.items() if len(starts)} or {s: np.arange(r + 1) for s, r in room.items()}
+    total = sum(len(starts) for starts in placeable.values())
+    return [(s, int(starts[i]), span, warmup_frames) for s, starts in placeable.items()
+            for i in np.unique(np.linspace(0, len(starts) - 1, max(1, round(windows * len(starts) / total))).astype(int))]
 
 
 @torch.no_grad()
@@ -842,24 +860,26 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
 
 # ---------------------------------------------------------------- training
 
-def candidate_cache_path(name: str, limit: int, stage2: Optional[Path]) -> Path:
+def candidate_cache_path(name: str, limit: int, stage2: Optional[Path], mode: str = DEFAULT_MODE) -> Path:
     """Where split `name`'s candidates are cached: LFE-Peaks' when `stage2` is None, otherwise those of the checkpoint at `stage2`,
-    keyed by its run directory, file name and write time, and by the decoder, so a new checkpoint or decoder never reads stale ones."""
+    keyed by its run directory, file name and write time, and by the decoder, so a new checkpoint or decoder never reads stale ones.
+
+    `transferred`'s test split is `official`'s person-free complement under the same split name, so the mode is part of the key."""
     source = "lfe-peaks" if stage2 is None else f"network-{stage2.parent.name}-{stage2.stem}-{int(stage2.stat().st_mtime)}-nms-mean"
-    return CACHE_DIR / f"{source}_official_{name}_f{CANDIDATE_FLOOR}_p{TOP_P}_s{SECTORS}{f'_first{limit}' if limit else ''}.pkl"
+    return CACHE_DIR / f"{source}_{mode}_{name}_f{CANDIDATE_FLOOR}_p{TOP_P}_s{SECTORS}{f'_first{limit}' if limit else ''}.pkl"
 
 
-def load_split(name: str, limit: int, stage2: Optional[Path], device) -> Split:
-    """Cached candidates of every recording of FROG `official` `name`: LFE-Peaks' when `stage2` is None, otherwise the trained
+def load_split(name: str, limit: int, stage2: Optional[Path], device, mode: str = DEFAULT_MODE) -> Split:
+    """Cached candidates of every recording of FROG `mode` `name`: LFE-Peaks' when `stage2` is None, otherwise the trained
     calibration network's at `stage2`, with its decoder features."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = candidate_cache_path(name, limit, stage2)
+    path = candidate_cache_path(name, limit, stage2, mode)
     if path.exists():
         seqs = [SequenceCandidates(**fields_of) for fields_of in pickle.loads(path.read_bytes())]
     else:
         t0 = time.time()
         # LFE-Peaks keeps the loader's legacy clamp it was always run with; the network reads raw scans and sanitises them itself
-        ds = FROG_Dataset(split=name, mode="official", auto_download=False, verbose=False, missing_return_m=LFE_MISSING_RETURN_M if stage2 is None else None)
+        ds = FROG_Dataset(split=name, mode=mode, auto_download=False, verbose=False, missing_return_m=LFE_MISSING_RETURN_M if stage2 is None else None)
         angles = frog_laser_angles(720)
         if stage2 is None:
             detector = LFEPeaksDetector(peak_height=CANDIDATE_FLOOR)
@@ -924,7 +944,7 @@ def train_memory(args) -> None:
         iterations = math.ceil(frames_per_epoch / (streams * length))
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         schedule, step_every_iteration = memory_schedule(optimizer, args.schedule, args.max_epochs, iterations, args.lr_factor, args.lr_patience, args.min_lr)
-        stopper = EarlyStopping(args.patience, args.min_epochs, args.max_epochs, args.max_hours)
+        stopper = EarlyStopping(args.patience, args.min_epochs, args.max_epochs)
         sampler = StreamSampler(splits["train"].lengths, streams, rng)
         slots = model.initial_state(streams, device)
         drift_carry = np.zeros(streams)
@@ -1011,13 +1031,10 @@ def train_memory(args) -> None:
             print(f"  epoch {epoch:>3}  loss {row['loss']:.4f}  val AP {row['val_ap']:.2%} (candidates {row['val_ap_candidates']:.2%})  "
                   f"FP {row['val_fp']:.3f} FN {row['val_fn']:.3f}  gate {row['gate']:+.3f}  train {train_s:.0f} s  eval {row['eval_s']:.0f} s  "
                   f"{hours:.2f} h  GPU {row['gpu_gb']:.1f} GB{marker}", flush=True)
-            if stopper.should_stop(epoch, hours):
+            if stopper.should_stop(epoch):
                 break
         if best.saved:
             model.load_state_dict(torch.load(best.path, map_location=device)["model"])     # the next stage resumes from the run's best
-        if done_hours + (time.time() - start) / 3600 >= args.max_hours:
-            break
-
     del splits["train"], splits["val"]                  # the test candidates are only needed now, and three splits at once exhaust a 16 GB host
     splits["test"] = load_split("test", args.limit_recordings, args.stage2, device)
     print(f"test: {len(splits['test'].lengths)} recordings, {splits['test'].lengths.sum()} frames, "
@@ -1215,7 +1232,7 @@ def train_calibration(args) -> None:
         schedule = exponential_schedule(optimizer, args.min_lr, int(args.max_epochs * iterations))
     else:
         schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=int(args.max_epochs * iterations))
-    stopper = EarlyStopping(args.patience, args.min_epochs, args.max_epochs, args.max_hours)
+    stopper = EarlyStopping(args.patience, args.min_epochs, args.max_epochs)
     start, step, history, losses, done = time.time(), 0, [], [], False
     done_hours = 0.0
     if resumed:
@@ -1274,7 +1291,7 @@ def train_calibration(args) -> None:
             print(f"  epoch {epoch:6.2f}  loss {row['loss']:.4f}  val AP {row['val_ap']:.2%}  FP {row['val_fp']:.3f} FN {row['val_fn']:.3f}  lr {row['lr']:.1e}  "
                   f"train {train_s:.0f} s  eval {row['eval_s']:.0f} s  {hours:.2f} h  GPU {row['gpu_gb']:.1f} GB{'  best' if improved else ''}", flush=True)
             losses, t_block = [], time.time()
-            if stopper.should_stop(epoch, hours):
+            if stopper.should_stop(epoch):
                 done = True
                 break
 
@@ -1410,7 +1427,7 @@ def train_joint(args) -> None:
     parameters = list(net.parameters()) + list(memory.parameters())
     optimizer = torch.optim.AdamW(parameters, lr=args.lr, weight_decay=args.weight_decay)
     schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=int(args.max_epochs * iterations))
-    stopper = EarlyStopping(args.patience, args.min_epochs, args.max_epochs, args.max_hours)
+    stopper = EarlyStopping(args.patience, args.min_epochs, args.max_epochs)
     sampler = StreamSampler(lengths, 1, rng)
     print(f"joint: {length} frames per chunk, {iterations} chunks per epoch, evaluating every {eval_every}", flush=True)
     state, start, step, history, losses, t_block = None, time.time(), 0, [], [], time.time()
@@ -1467,7 +1484,7 @@ def train_joint(args) -> None:
               f"FP {row['val_fp']:.3f} FN {row['val_fn']:.3f}  train {train_s:.0f} s  eval {row['eval_s']:.0f} s  {hours:.2f} h  GPU {row['gpu_gb']:.1f} GB"
               f"{'  best' if overall else ''}", flush=True)
         losses, t_block = [], time.time()
-        if stopper.should_stop(epoch, hours):
+        if stopper.should_stop(epoch):
             break
 
     if best.saved:
@@ -1584,7 +1601,6 @@ def build_parser() -> argparse.ArgumentParser:
         step1.add_argument("--max-epochs", type=float, default=100, help="per chunk length; patience usually ends a stage first")
         step1.add_argument("--patience", type=int, default=8, help="evaluations without a new best val AP")
         step1.add_argument("--min-epochs", type=float, default=5, help="per chunk length")
-        step1.add_argument("--max-hours", type=float, default=6.0, help="for the whole run")
         step1.add_argument("--reset-prob", type=float, default=0.2, help="chance a chunk starts from empty memory")
         step1.add_argument("--slots", type=int, default=256)
         step1.add_argument("--tokens", type=int, default=1048, help="streams x frames per iteration; ~3-4 GB of GPU memory at 256 slots")
@@ -1652,7 +1668,6 @@ def build_parser() -> argparse.ArgumentParser:
     step3b.add_argument("--eval-every", type=float, default=0.25, help="epochs between evaluations")
     step3b.add_argument("--patience", type=int, default=8, help="evaluations without a new best val AP")
     step3b.add_argument("--min-epochs", type=float, default=0.5)
-    step3b.add_argument("--max-hours", type=float, default=24.0)
     step3b.add_argument("--reset-prob", type=float, default=0.2, help="chance a chunk starts from empty memory")
     step3b.add_argument("--val-stride", type=int, default=10, help="score every Nth annotated frame of each val window")
     step3b.add_argument("--val-windows", type=int, default=16, help="val windows per evaluation, streamed together")
@@ -1706,7 +1721,6 @@ def build_parser() -> argparse.ArgumentParser:
     step2.add_argument("--eval-every", type=float, default=0.25, help="epochs between evaluations")
     step2.add_argument("--patience", type=int, default=12, help="evaluations without a new best val AP")
     step2.add_argument("--min-epochs", type=float, default=2)
-    step2.add_argument("--max-hours", type=float, default=24.0)
     step2.add_argument("--val-frames", type=int, default=2000, help="evenly spaced annotated val frames per evaluation")
     step2.add_argument("--test-stride", type=int, default=1, help="score every Nth annotated test frame at the end")
     return ap

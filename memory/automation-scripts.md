@@ -57,3 +57,11 @@ ruff check --config memory/scripts/ruff.toml memory/scripts/
 | [`scripts/verify_memory.py`](scripts/verify_memory.py) | Checks that internal links resolve, that the two indexes match the files on disk, and that the markdown house rules hold. Run it before committing a documentation change. |
 | [`scripts/machine_is_free.py`](scripts/machine_is_free.py) | Whether a second job may start: exits non-zero if one of the project's long scripts is running or under 2 GB of memory is free. Put it in front of `pytest` and any evaluation. |
 | [`scripts/ruff.toml`](scripts/ruff.toml) | Not a script: the lint config for this directory. |
+
+**The one that lives outside this directory**, because it imports the project's own modules rather than only the standard
+library's: [`../utils/run_queue.py`](../utils/run_queue.py) runs a session's long jobs as one queue (`TODO.md` A57). It is the
+worked example of this file's rule -- the PowerShell launcher it replaced was copied by hand eight times, and **every** incident
+in that session traced to a copy rather than to the research: a step that trained ahead of a failed test gate, a 6.8 h run that
+died with its parent session, a `` that became a carriage return twice, a completion marker typed differently in each copy,
+and a `Wait-Finished` hardcoded to `step3a` that silently never matched a `step3b` run. The fix was to write the launcher once,
+with tests, and make each session's queue a committed data module.
