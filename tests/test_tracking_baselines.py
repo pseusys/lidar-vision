@@ -19,7 +19,7 @@ from follow_the_drow.utils.tracking import ByteTracker
 from train_three_horizon import SequenceCandidates, pack, replay_sort, score_detections
 from tracking_baselines import (
     PrecisionRecall, block_ids, double_report_anatomy, drop_duplicate_annotations, first_detection_delays, gospa, gospa_frames,
-    merge_detections, occlusion_share, paired_bootstrap, replay_rule_scorer, replay_tracker, stride_frames,
+    merge_detections, occlusion_share, paired_bootstrap, parse_arms, replay_rule_scorer, replay_tracker, stride_frames, summarise,
 )
 
 
@@ -278,3 +278,49 @@ class TestDoubleReportAnatomy:
         frame = (np.array([0.9], np.float32), np.array([[0.0, 2.0]], np.float32), people)
         result = double_report_anatomy([frame], [frame], threshold=0.5)
         assert result["people"] == 1 and result["doubled"] == 0
+
+
+class TestArmsOption:
+    """`--arms` replays memory checkpoints other than A56's own, e.g. one seed per stage-2 seed on the adopted recipe (`TODO.md` A61)."""
+
+    def test_runs_are_grouped_by_arm_in_order(self):
+        assert parse_arms(["E13:a", "B0:b", "E13:c"]) == {"E13": ["a", "c"], "B0": ["b"]}
+
+    def test_a_run_without_its_arm_is_refused(self):
+        with pytest.raises(ValueError, match="ARM:RUN"):
+            parse_arms(["a60_e13_static_s0"])
+
+
+class TestSummary:
+    """A61 replays each stage-2 seed on its own, so one arm's seeds sit in three reports under three run names; the summary lines
+    them up by arm."""
+
+    @staticmethod
+    def _report(seed, e13, e14, low):
+        run = f"E13:a60_e13_static_s{seed}"
+        return dict(ap={"candidates": dict(ap=0.82, matched_fp_recall=0.85), "bytetrack_cbmot": dict(ap=e14, matched_fp_recall=0.86),
+                        run: dict(ap=e13, matched_fp_recall=0.88)},
+                    bootstrap={f"{run} - bytetrack_cbmot": dict(difference=e13 - e14, low=low, high=low + 0.02)},
+                    best_classical="bytetrack_cbmot",
+                    gospa={run: dict(at_val_best=dict(gospa=0.5))},
+                    latency={run: dict(first_frame=0.8, within_0_5_s=0.9)},
+                    strata={"occlusion": {"occluded": {run: dict(recall=0.7, people=10)}}})
+
+    def test_one_arm_s_seeds_line_up_across_reports(self):
+        summary = summarise([self._report(0, 0.86, 0.84, 0.005), self._report(1, 0.85, 0.84, -0.001)])
+        assert summary["ap"]["E13"]["seeds"] == [0.86, 0.85]
+        assert summary["ap"]["E13"]["mean"] == pytest.approx(0.855)
+        assert summary["ap"]["candidates"]["seeds"] == [0.82, 0.82]
+        assert summary["matched_fp_recall"]["E13"]["mean"] == pytest.approx(0.88)
+        assert summary["best_classical"] == ["bytetrack_cbmot", "bytetrack_cbmot"]
+
+    def test_bootstrap_intervals_are_counted_above_zero(self):
+        summary = summarise([self._report(0, 0.86, 0.84, 0.005), self._report(1, 0.85, 0.84, -0.001)])
+        pair = summary["bootstrap"]["E13 - bytetrack_cbmot"]
+        assert pair["difference"] == pytest.approx([0.02, 0.01]) and pair["above_zero"] == 1
+
+    def test_gospa_latency_and_strata_are_averaged_by_arm(self):
+        summary = summarise([self._report(0, 0.86, 0.84, 0.005), self._report(1, 0.85, 0.84, -0.001)])
+        assert summary["gospa"]["E13"]["mean"] == pytest.approx(0.5)
+        assert summary["first_frame"]["E13"]["mean"] == pytest.approx(0.8)
+        assert summary["strata"]["occlusion"]["occluded"]["E13"]["mean"] == pytest.approx(0.7)

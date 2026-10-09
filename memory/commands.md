@@ -55,6 +55,8 @@ python tracking_baselines.py arms                                               
 python tracking_baselines.py report                                             # AP with block-bootstrap intervals, GOSPA, strata, first-detection latency -> a56/report.json (~15 min)
 python tracking_baselines.py latency [--device cpu --threads 4]                 # A56 E22: the whole detector streamed one scan at a time, stage by stage
 python tracking_baselines.py merge --workers 6                                  # A58: merge radius per saved output, chosen on val, bootstrapped, double reports dissected -> a56/merge.json (~10 min, needs arms + track)
+python tracking_baselines.py {rule,track,arms,report} --stage2 <step2 ckpt> --out <dir> --arms E13:<run>   # A61: the same replays on another stage 2 and memory; one --out per stage-2 seed, --arms on arms/report/merge
+python tracking_baselines.py summary --out ../checkpoints_three_horizon/a61    # A61: <out>/s*/report.json lined up by arm, with each bootstrap pair's intervals above zero counted -> <out>/summary.json
 python tracker_sweep.py --tracker byte | byte-cbmot                             # ByteTrack (with CBMOT confidence) on the published LFE detectors
 python train_three_horizon.py step3a --stage2 ... --train-drift-m-per-s 0.05    # train with odometry drifting at a rate drawn per stream, the repair for D1's conditional win (A51 S3/E11)
 python train_three_horizon.py step3b --stage2 ... --memory ... --oracle-prior    # feed stage 2 a ground-truth prior: the ceiling on what feedback could buy (A51 E12b)
@@ -69,6 +71,8 @@ python duration_curve.py --dir ../checkpoints_three_horizon/step2_control ../che
 python stage2_probe.py --stage2 <step2 ckpts> --stride 5                        # A59: the same stage-2 outputs through 7 decoders (vote grid, DR-SPAAM's NMS, LFE's peaks...), and recall by range and crowding against LFE at matched FP (~5 min per checkpoint)
 python stage2_probe.py --stage2 <step2 ckpts> --split val --stride 25 --out ../results/stage2_probe_val.json   # A59: the decoders' AP on val, where a decoder is chosen
 python train_three_horizon.py step2 --label-assign last --no-mirror --dropout 0   # A59 ablation: the recipe before 2026-10-06; the defaults are nearest-person labels, mirroring and dropout 0.1, decoded by nms-mean
+python train_three_horizon.py step2 --input-features lfe | --channels 8 16 32   # A59 ladder F1 / W: LFE's input alone, LFE's widths; the probe and averaging rebuild either from the checkpoint's args
+python train_three_horizon.py step2 --batch 8 --max-epochs 5 --min-epochs 5 --schedule exponential --lr 1e-3 --min-lr 1e-6 --weight-decay 0 --select last   # A59 ladder R: DR-SPAAM's protocol; tests the last weights, kept as step2_calibration.last.pth beside the best
 python coarse_e2e.py                                                            # A60's verdict: the six E13 detectors' AP, AP@0.3, recall at a shared FP budget and first-second recall, and drop/keep for the coarse convolution; re-scores from its saved frames, since the coarse checkpoints no longer load (code at e76aa94)
 python average_checkpoints.py ../checkpoints_three_horizon/<run> [...]         # stage 2's weight averaging (recipe since 2026-10-06): val-chosen window of a `--checkpoint-every 0.25` run -> <run>/step2_calibration.averaged.pth (~2 min per run)
 python train_three_horizon.py step1        # stage 3 on cached LFE-Peaks candidates, the memory in isolation (dropped from the plan 2026-09-15)

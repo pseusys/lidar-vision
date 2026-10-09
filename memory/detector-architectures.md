@@ -93,7 +93,7 @@ A detector class not in this dict cannot be trained or evaluated through `train.
 
 ## Components
 
-- **`three_horizon.py`** — TAKHeLiPeD: `beam_features`/`sanitize_ranges`, `CalibrationNetwork` (single-frame; `fold_legacy_calibration` carries older checkpoints over), `ObjectMemory` + `Slots`/`SlotRules`/`manage_slots`, and `calibration_network()`/`object_memory()`, which rebuild either stage the way its checkpoint was trained. Not in `DETECTOR_REGISTRY` — it is stateful and has its own trainer.
+- **`three_horizon.py`** — TAKHeLiPeD: `beam_features`/`sanitize_ranges`, `CalibrationNetwork` (single-frame; `fold_legacy_calibration` carries older checkpoints over; `input_features="lfe"` swaps the ten beam features for LFE's one `lfe_features` channel, A59's attribution arm F1 only), `ObjectMemory` + `Slots`/`SlotRules`/`manage_slots`, and `calibration_network()`/`object_memory()` (in the trainer), which rebuild either stage the way its checkpoint was trained -- stage 2's range limit, input and widths through `network_shape`. Not in `DETECTOR_REGISTRY` — it is stateful and has its own trainer.
 - **`architectures.py`** — `DrSpaamDetector` (cutout + auto-regressive spatial attention).
 - **`drow_detector.py`** — `DrowDetector` (cutout + fixed temporal sum); the only detector the ROS deployment currently runs (`deployment.md`).
 - **`full_scan.py`** — `SpaceTimeCNNDetector`, `FullScanTCNDetector`, `TemporalUNetDetector`; this project's own novel designs.

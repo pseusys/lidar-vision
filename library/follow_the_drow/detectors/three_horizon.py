@@ -22,6 +22,8 @@ MAX_RANGE_M = 10.0
 MEDIAN_WINDOW_DEG = 11.0
 NEIGHBOUR_OFFSETS = (-2, -1, 1, 2)
 N_BEAM_FEATURES = 2 + 2 * len(NEIGHBOUR_OFFSETS)
+LFE_NEAR_M = 0.2                     # LFE clips readings below this (`lfe_detector._SCAN_NEAR`)
+INPUT_CHANNELS = {"beam": N_BEAM_FEATURES, "lfe": 1}
 LEGACY_VALIDITY_CHANNEL = 2          # index of the validity input that checkpoints before 2026-09-17 carried
 LAST_TEMPORAL_COMMIT = "e76aa94"     # the last commit with stage 2's coarse temporal convolution (TODO.md A60)
 SLOT_STATISTICS = 8
@@ -64,6 +66,13 @@ def beam_features(ranges: Tensor, angles: Tensor, max_range_m: float = MAX_RANGE
         dphi = a_pad[reach + offset:reach + offset + n] - angles
         channels += [neighbour * cos(dphi) - r, neighbour * sin(dphi)]
     return stack(channels, dim=-2)
+
+
+def lfe_features(ranges: Tensor, max_range_m: float = MAX_RANGE_M) -> Tensor:
+    """LFE's whole input (`lfe_detector._normalize_scan`), `[..., N] -> [..., 1, N]`: `1 - r / max_range_m`, readings clipped below
+    at `LFE_NEAR_M`, so a near obstacle reads 1 and empty space 0. Missing returns go through `sanitize_ranges` and read as empty
+    space, whatever their encoding. Only the attribution arm F1 uses it (`TODO.md` A59)."""
+    return (1 - sanitize_ranges(ranges, max_range_m).clamp(min=LFE_NEAR_M) / max_range_m).unsqueeze(-2)
 
 
 def sensor_to_world(xy: Tensor, pose: Tensor) -> Tensor:
@@ -444,18 +453,22 @@ class CalibrationNetwork(nn.Module):
     (`context`); a DROW-style head giving every beam a person logit and a vote to the person's centre. The memory's prior, when the
     network has prior channels, enters at the bottleneck. `dropout` regularises the head's input only, so the decoder features
     stage 3 pools from stay deterministic; it holds no parameters. Neither the per-beam fine nor the bottleneck coarse temporal
-    convolution survived its ablation (`TODO.md` A50, A60; `memory/rejected-ideas.md`).
+    convolution survived its ablation (`TODO.md` A50, A60; `memory/rejected-ideas.md`). `input_features` "lfe" replaces the ten
+    beam features with LFE's one input channel (`lfe_features`), for the attribution arm F1 (`TODO.md` A59).
     """
 
     def __init__(self, angles: Tensor, channels: Tuple[int, int, int] = (32, 64, 128), blocks: Tuple[int, int, int] = (2, 2, 2),
                  bottleneck_blocks: int = 2, kernel_size: int = 7, expansion: int = 4,
-                 prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M):
+                 prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M, input_features: str = "beam"):
         super().__init__()
+        if input_features not in INPUT_CHANNELS:
+            raise ValueError(f"input_features must be one of {sorted(INPUT_CHANNELS)}, not {input_features!r}")
         c0, c1, c2 = channels
         self.prior_channels = prior_channels
         self.max_range_m = max_range_m
+        self.input_features = input_features
         self.register_buffer("angles", angles.clone(), persistent=False)
-        self.stem = nn.Conv1d(N_BEAM_FEATURES, c0, 1)
+        self.stem = nn.Conv1d(INPUT_CHANNELS[input_features], c0, 1)
         self.encoder = nn.ModuleList([_stage(c, n, kernel_size, expansion) for c, n in zip(channels, blocks)])
         self.down = nn.ModuleList([nn.Conv1d(c0, c1, 2, stride=2), nn.Conv1d(c1, c2, 2, stride=2), nn.Conv1d(c2, c2, 2, stride=2)])
         self.aggregate = nn.Conv1d(2 * c2 + prior_channels, c2, 1)
@@ -487,7 +500,8 @@ class CalibrationNetwork(nn.Module):
     def forward(self, ranges: Tensor, prior: Optional[Tensor] = None) -> Tuple[Tensor, Tensor, Tensor]:
         """Person logits `[B, N]`, votes `[B, N, 2]` and decoder features `[B, C, N]` for scans `[B, N]`, with the memory prior
         `[B, prior_channels, N/8]` when the network has prior channels."""
-        skips, bottom = self._encode(self.stem(beam_features(ranges, self.angles, self.max_range_m)), prior)
+        x = lfe_features(ranges, self.max_range_m) if self.input_features == "lfe" else beam_features(ranges, self.angles, self.max_range_m)
+        skips, bottom = self._encode(self.stem(x), prior)
         return self._decode(self.context(bottom), skips)
 
 

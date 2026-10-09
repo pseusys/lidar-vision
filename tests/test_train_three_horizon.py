@@ -20,7 +20,7 @@ from follow_the_drow.utils.drow_utils import _win2global
 from train_three_horizon import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, coast_targets, decode_votes, evaluate, evaluation_segments,
     FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
-    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, coasting_hits, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
+    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, coasting_hits, exponential_schedule, network_shape, select_test_weights, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
 )
 
 
@@ -291,6 +291,104 @@ class TestCalibrationNetworkFor:
         assert rebuilt.max_range_m == MAX_RANGE_M
 
 
+class TestAttributionArmShapes:
+    """The attribution arms F1 and W (`TODO.md` A59) change the network's input and widths. Whatever `step2` trained must be rebuilt
+    from the checkpoint's args (stored as strings) by every script that loads it -- the averaging, the probe, stage 3's caches."""
+
+    ANGLES = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
+
+    @staticmethod
+    def _stored(argv):
+        return {k: str(v) for k, v in vars(build_parser().parse_args(["step2", *argv])).items()}
+
+    def test_step2_defaults_describe_today_s_network(self):
+        assert network_shape(self._stored([])) == dict(max_range_m=MAX_RANGE_M, input_features="beam", channels=(32, 64, 128))
+
+    def test_the_arms_flags_describe_their_network(self):
+        shape = network_shape(self._stored(["--input-features", "lfe", "--channels", "8", "16", "32"]))
+        assert shape == dict(max_range_m=MAX_RANGE_M, input_features="lfe", channels=(8, 16, 32))
+
+    def test_a_checkpoint_rebuilds_into_the_network_it_was_trained_as(self):
+        torch.manual_seed(0)
+        net = CalibrationNetwork(torch.from_numpy(self.ANGLES), channels=(8, 16, 32), input_features="lfe").eval()
+        stored = self._stored(["--input-features", "lfe", "--channels", "8", "16", "32"])
+        rebuilt = calibration_network(dict(model=net.state_dict(), args=stored), self.ANGLES).eval()
+        scans = torch.rand(2, 48) * 8
+        with torch.no_grad():
+            for a, b in zip(net(scans), rebuilt(scans), strict=True):
+                assert torch.equal(a, b)
+
+
+class TestExponentialSchedule:
+    """DR-SPAAM's learning rate, for the attribution arm R (`TODO.md` A59): geometric decay from the initial rate to a floor over
+    the run, stepped every iteration, then held."""
+
+    @staticmethod
+    def _optimizer():
+        return torch.optim.AdamW(torch.nn.Linear(1, 1).parameters(), lr=1e-3)
+
+    def test_the_rate_decays_geometrically_to_the_floor_and_stays_there(self):
+        optimizer = self._optimizer()
+        schedule = exponential_schedule(optimizer, min_lr=1e-6, iterations=10)
+        rates = [optimizer.param_groups[0]["lr"]]
+        for _ in range(12):
+            optimizer.step()
+            schedule.step()
+            rates.append(optimizer.param_groups[0]["lr"])
+        assert rates[0] == pytest.approx(1e-3)
+        assert rates[5] == pytest.approx(math.sqrt(1e-3 * 1e-6))
+        assert rates[10] == pytest.approx(1e-6) and rates[12] == pytest.approx(1e-6)
+
+    def test_a_resumed_schedule_continues_where_it_stopped(self):
+        optimizer = self._optimizer()
+        schedule = exponential_schedule(optimizer, min_lr=1e-6, iterations=10)
+        for _ in range(4):
+            optimizer.step()
+            schedule.step()
+        saved_optimizer, saved_schedule = optimizer.state_dict(), schedule.state_dict()
+        optimizer.step()
+        schedule.step()
+        resumed = self._optimizer()
+        again = exponential_schedule(resumed, min_lr=1e-6, iterations=10)
+        resumed.load_state_dict(saved_optimizer)
+        again.load_state_dict(saved_schedule)
+        resumed.step()
+        again.step()
+        assert resumed.param_groups[0]["lr"] == pytest.approx(optimizer.param_groups[0]["lr"])
+
+
+class TestSelectTestWeights:
+    """`step2 --select last` is DR-SPAAM's protocol (`TODO.md` A59 R): the test scores the weights training ended on, not the
+    best on val, and both are kept so the probe can score each."""
+
+    @staticmethod
+    def _best(tmp_path):
+        other = _small_calibration()
+        with torch.no_grad():
+            for p in other.parameters():
+                p.add_(1.0)
+        best = BestCheckpoint(tmp_path / "step2_calibration.best.pth")
+        best.offer(0.5, dict(model=other.state_dict()))
+        return best, other
+
+    def test_last_keeps_the_weights_training_ended_on_and_saves_them_beside_the_best(self, tmp_path):
+        net = _small_calibration()
+        before = {k: v.clone() for k, v in net.state_dict().items()}
+        best, _ = self._best(tmp_path)
+        select_test_weights(net, best, "last", dict(epoch=5.0, args={"select": "last"}), "cpu")
+        assert all(torch.equal(v, before[k]) for k, v in net.state_dict().items())
+        saved = torch.load(tmp_path / "step2_calibration.last.pth", weights_only=False)
+        assert saved["epoch"] == 5.0 and saved["args"] == {"select": "last"}
+        assert all(torch.equal(v, before[k]) for k, v in saved["model"].items())
+
+    def test_best_loads_the_run_s_best_on_val(self, tmp_path):
+        net = _small_calibration()
+        best, other = self._best(tmp_path)
+        select_test_weights(net, best, "best", dict(epoch=5.0, args={}), "cpu")
+        assert all(torch.equal(v, other.state_dict()[k]) for k, v in net.state_dict().items())
+        assert not (tmp_path / "step2_calibration.last.pth").exists()
+
+
 class TestCandidateCachePath:
     """Stage-3 candidate caches are keyed by the stage-2 checkpoint they come from. Every run writes the same file names
     (`step2_calibration.best.pth`, `.averaged.pth`), so the run's directory must be in the key: two runs whose checkpoints were
@@ -318,6 +416,15 @@ class TestStage2Recipe:
     def test_step2_defaults_to_the_adopted_recipe(self):
         args = build_parser().parse_args(["step2"])
         assert args.label_assign == "nearest" and args.mirror is True and args.dropout == 0.1
+
+    def test_the_attribution_arms_are_off_by_default(self):
+        args = build_parser().parse_args(["step2"])
+        assert (args.input_features, args.channels, args.select, args.schedule) == ("beam", None, "best", "plateau")
+
+    def test_r_is_expressible_as_flags(self):
+        args = build_parser().parse_args(["step2", "--batch", "8", "--max-epochs", "5", "--min-epochs", "5", "--schedule", "exponential",
+                                          "--lr", "1e-3", "--min-lr", "1e-6", "--weight-decay", "0", "--select", "last"])
+        assert (args.batch, args.schedule, args.min_lr, args.weight_decay, args.select) == (8, "exponential", 1e-6, 0.0, "last")
 
     def test_each_part_can_still_be_switched_off_for_an_ablation(self):
         args = build_parser().parse_args(["step2", "--label-assign", "last", "--no-mirror"])

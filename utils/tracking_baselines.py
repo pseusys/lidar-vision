@@ -11,6 +11,7 @@ on FROG `official` val and scores the test split once.
     report    AP with block-bootstrap intervals, GOSPA (E16), the gain by stratum (E20) and first-detection latency (E21)
     latency   E22: the proposed detector streamed one scan at a time, stage by stage, on the GPU and the CPU
     merge     A58: the LFE detectors' merge radius on every saved output, chosen on val, with the double reports dissected
+    summary   A61: the reports of several replays (`<out>/s*/report.json`, one per stage-2 seed) lined up by arm
 
 Usage (from utils/)
 -----
@@ -20,6 +21,8 @@ Usage (from utils/)
     python tracking_baselines.py report
     python tracking_baselines.py latency --device cpu --threads 4
     python tracking_baselines.py merge --workers 6
+    python tracking_baselines.py arms --stage2 <stage 2> --out <dir> --arms E13:a60_e13_static_s0      # another memory than A56's
+    python tracking_baselines.py summary --out ../checkpoints_three_horizon/a61
 
 The module itself imports no torch: the replays, GOSPA and the precision-recall arithmetic are numpy, so `track` can fan its
 configurations out over worker processes without paying for a torch import in each, which the commit limit forbids on this machine
@@ -84,6 +87,57 @@ ARMS = {"E13": [f"a51_e67_recurrent_s{s}" for s in range(3)],
         "E10": [f"a51_e10_norecurrent_s{s}" for s in range(2)]}
 
 Frames = List[Tuple[np.ndarray, np.ndarray, np.ndarray]]      # per frame: scores, xy, annotated people
+
+
+def parse_arms(items: Sequence[str]) -> Dict[str, List[str]]:
+    """`--arms` items `ARM:RUN` -> {arm: [runs, in order]}, the shape of `ARMS`."""
+    arms: Dict[str, List[str]] = {}
+    for item in items:
+        arm, sep, run = item.partition(":")
+        if not (sep and arm and run):
+            raise ValueError(f"--arms takes ARM:RUN items, e.g. E13:a60_e13_static_s0, not {item!r}")
+        arms.setdefault(arm, []).append(run)
+    return arms
+
+
+def arm_name(method: str) -> str:
+    """A method's name without its run, `E13:a60_e13_static_s0` -> `E13`, so one arm's seeds line up across reports."""
+    return method.split(":")[0]
+
+
+def seed_stats(values: Sequence[float]) -> Dict[str, object]:
+    return dict(seeds=list(values), mean=float(np.mean(values)), sd=float(np.std(values, ddof=1)) if len(values) > 1 else float("nan"))
+
+
+def summarise(reports: Sequence[Dict]) -> Dict[str, object]:
+    """Several `report` outputs -- one replay per stage-2 seed (`TODO.md` A61) -- lined up by arm: AP, recall at the candidates'
+    false-positive rate, GOSPA, first-frame detection and strata recall as seed lists with mean and sd, and each bootstrap pair's
+    differences with how many of its intervals sit above zero."""
+    ap, recall, gospa, first = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
+    boot = defaultdict(lambda: defaultdict(list))
+    strata = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
+    for r in reports:
+        for m, row in r["ap"].items():
+            ap[arm_name(m)].append(row["ap"])
+            recall[arm_name(m)].append(row["matched_fp_recall"])
+        for pair, b in r.get("bootstrap", {}).items():
+            a, other = pair.split(" - ", 1)
+            for k in ("difference", "low", "high"):
+                boot[f"{arm_name(a)} - {arm_name(other)}"][k].append(b[k])
+        for m, g in r.get("gospa", {}).items():
+            gospa[arm_name(m)].append(g["at_val_best"]["gospa"])
+        for m, lat in r.get("latency", {}).items():
+            first[arm_name(m)].append(lat["first_frame"])
+        for axis, values in r.get("strata", {}).items():
+            for value, cells in values.items():
+                for m, c in cells.items():
+                    strata[axis][value][arm_name(m)].append(c["recall"])
+    return dict(ap={m: seed_stats(v) for m, v in ap.items()}, matched_fp_recall={m: seed_stats(v) for m, v in recall.items()},
+                bootstrap={pair: dict(**{k: list(v) for k, v in b.items()}, above_zero=int(sum(low > 0 for low in b["low"])))
+                           for pair, b in boot.items()},
+                gospa={m: seed_stats(v) for m, v in gospa.items()}, first_frame={m: seed_stats(v) for m, v in first.items()},
+                strata={axis: {value: {m: seed_stats(v) for m, v in cells.items()} for value, cells in values.items()} for axis, values in strata.items()},
+                best_classical=[r.get("best_classical") for r in reports])
 
 
 # ---------------------------------------------------------------- metrics
@@ -471,10 +525,10 @@ def _worker_ap(config: Dict) -> Tuple[str, float, float]:
 MERGE_RADII = (None, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6)
 
 
-def merge_outputs() -> Dict[str, str]:
+def merge_outputs(arms: Dict[str, List[str]]) -> Dict[str, str]:
     """Every output A58 merges, by name, with the stem of its saved A56 frames."""
     outputs = {"candidates": "candidates", "E14": "track_bytetrack_cbmot"}
-    outputs.update({f"{arm}:{run}": f"arm_{arm}_{run}" for arm, runs in ARMS.items() for run in runs})
+    outputs.update({f"{arm}:{run}": f"arm_{arm}_{run}" for arm, runs in arms.items() for run in runs})
     return outputs
 
 
@@ -617,7 +671,7 @@ def run_arms(args) -> None:
     for split_name, stride in (("test", 1), ("val", SCORED_STRIDE)):
         split = load_split(split_name, 0, args.stage2, device)
         candidates_path = args.out / f"candidates_{split_name}.pkl"
-        for arm, runs in ARMS.items():
+        for arm, runs in args.arms.items():
             for run in runs:
                 path = args.out / f"arm_{arm}_{run}_{split_name}.pkl"
                 checkpoint_path = CHECKPOINTS / run / "step3a_object_memory.best.pth"
@@ -672,7 +726,7 @@ def run_report(args) -> None:
     for name in ("sort_m1", "sort_m3", "bytetrack", "bytetrack_cbmot"):
         methods[name] = dict(test=args.out / f"track_{name}_test.pkl", val=args.out / f"track_{name}_val.pkl")
     methods["rule_cbmot"] = dict(test=args.out / "rule_test.pkl", val=args.out / "rule_val.pkl")
-    for arm, runs in ARMS.items():
+    for arm, runs in args.arms.items():
         for run in runs:
             methods[f"{arm}:{run}"] = dict(test=args.out / f"arm_{arm}_{run}_test.pkl", val=args.out / f"arm_{arm}_{run}_val.pkl")
     methods = {m: p for m, p in methods.items() if p["test"].exists()}
@@ -688,7 +742,7 @@ def run_report(args) -> None:
         table[m] = dict(ap=pr.ap(), **{f"at_0.3_{k}": v for k, v in pr.at_threshold(OPERATING_THRESHOLD, n5).items()},
                         **{f"matched_fp_{k}": v for k, v in pr.at_fp_budget(budget, n5).items()})
     report["ap"] = table
-    for arm in ARMS:
+    for arm in args.arms:
         seeds = [table[m]["ap"] for m in table if m.startswith(f"{arm}:")]
         if seeds:
             report.setdefault("arm_means", {})[arm] = dict(seeds=seeds, mean=float(np.mean(seeds)), sd=float(np.std(seeds, ddof=1)) if len(seeds) > 1 else float("nan"))
@@ -870,7 +924,7 @@ def run_merge(args) -> None:
     budget = PrecisionRecall(subset(candidates["frames"], candidates["index"], scored)).at_threshold(OPERATING_THRESHOLD, len(scored))["fp_per_frame"]
     del candidates
     log(f"matched false-positive budget: {budget:.3f} per frame (the candidates at {OPERATING_THRESHOLD})")
-    outputs = {name: stem for name, stem in merge_outputs().items() if (args.out / f"{stem}_test.pkl").exists()}
+    outputs = {name: stem for name, stem in merge_outputs(args.arms).items() if (args.out / f"{stem}_test.pkl").exists()}
     result: Dict[str, object] = dict(budget=budget, radii=[str(r) for r in MERGE_RADII], outputs={}, bootstrap={})
     with ProcessPoolExecutor(max_workers=min(args.workers, len(outputs)), initializer=_merge_init,
                              initargs=(str(args.out), scored, blocks, budget)) as pool:
@@ -894,13 +948,32 @@ def run_merge(args) -> None:
     log(f"wrote {args.out / 'merge.json'}")
 
 
+def run_summary(args) -> None:
+    """A61: every `<out>/s*/report.json` lined up by arm (`summarise`)."""
+    paths = sorted(args.out.glob("s*/report.json"))
+    if not paths:
+        raise FileNotFoundError(f"no {args.out}/s*/report.json to summarise")
+    summary = dict(reports=[str(p) for p in paths], **summarise([json.loads(p.read_text()) for p in paths]))
+    (args.out / "summary.json").write_text(json.dumps(summary, indent=1, default=float))
+    log(f"{len(paths)} reports; AP over seeds, every 5th annotated test frame:")
+    for m, s in summary["ap"].items():
+        log(f"  {m:20s} {100 * s['mean']:.2f} (sd {100 * s['sd']:.2f})  " + " / ".join(f"{100 * v:.2f}" for v in s["seeds"]))
+    for pair, b in summary["bootstrap"].items():
+        log(f"  {pair}: " + "  ".join(f"{100 * d:+.2f} [{100 * lo:+.2f}, {100 * hi:+.2f}]" for d, lo, hi in zip(b["difference"], b["low"], b["high"]))
+            + f"  ({b['above_zero']} of {len(b['low'])} above zero)")
+    log(f"wrote {args.out / 'summary.json'}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="command", required=True)
-    for name in ("rule", "track", "arms", "report", "latency", "merge"):
+    for name in ("rule", "track", "arms", "report", "latency", "merge", "summary"):
         p = sub.add_parser(name)
         p.add_argument("--stage2", type=Path, default=STAGE2)
         p.add_argument("--out", type=Path, default=OUT_DIR)
+        if name in ("arms", "report", "merge"):
+            p.add_argument("--arms", nargs="+", default=None, metavar="ARM:RUN",
+                           help="memory runs to replay or read, e.g. E13:a60_e13_static_s0 (TODO.md A61); unset is A56's own")
         if name in ("rule", "arms"):
             p.add_argument("--streams", type=int, default=64)
         if name == "track":
@@ -915,9 +988,11 @@ def main() -> None:
             p.add_argument("--frames", type=int, default=2000)
             p.add_argument("--threads", type=int, default=0)
     args = ap.parse_args()
+    if hasattr(args, "arms"):
+        args.arms = parse_arms(args.arms) if args.arms else ARMS
     args.out.mkdir(parents=True, exist_ok=True)
     log(f"tracking_baselines {args.command}")
-    dict(rule=run_rule, track=run_track, arms=run_arms, report=run_report, latency=run_latency, merge=run_merge)[args.command](args)
+    dict(rule=run_rule, track=run_track, arms=run_arms, report=run_report, latency=run_latency, merge=run_merge, summary=run_summary)[args.command](args)
 
 
 if __name__ == "__main__":

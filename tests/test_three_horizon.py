@@ -20,9 +20,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
 from follow_the_drow.detectors.three_horizon import (
     N_BEAM_FEATURES, CalibrationNetwork, ObjectMemory, SlotRules, beam_features, fold_legacy_calibration,
-    free_range_profile, initial_slots, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
+    free_range_profile, initial_slots, lfe_features, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
     sensor_to_world, visibility_feature, world_to_sensor,
 )
+from follow_the_drow.detectors.lfe_detector import _normalize_scan
 
 
 def _angles(n: int, fov_deg: float = 180.0) -> torch.Tensor:
@@ -587,6 +588,34 @@ class TestStage2WithoutTime:
     def test_one_scan_in_needs_no_pose_and_no_state(self):
         logit, votes, features = _small_network()(_scans(2))
         assert logit.shape == (2, 48) and votes.shape == (2, 48, 2) and features.shape == (2, 8, 48)
+
+
+class TestAttributionArms:
+    """Two of the arms that test why stage 2 beats LFE (`TODO.md` A59, F1 and W): LFE's input alone, and LFE's widths. Each is a
+    constructor option; the default network is pinned by the fixture above."""
+
+    def test_the_lfe_input_is_lfe_s_own_normalisation(self):
+        ranges = torch.tensor([[0.05, 0.2, 0.7, 4.0, 9.99, 10.0, 61.0, math.inf]])
+        got = lfe_features(ranges, 10.0)
+        assert got.shape == (1, 1, 8)
+        assert np.allclose(got[:, 0].numpy(), _normalize_scan(ranges.numpy()), atol=1e-7)
+
+    def test_a_missing_return_reads_as_far_whatever_its_encoding(self):
+        assert torch.equal(lfe_features(torch.tensor([0.0, -1.0, math.nan, math.inf, 61.0]), 10.0), torch.zeros(1, 5))
+
+    def test_the_lfe_input_network_reads_one_channel(self):
+        net = CalibrationNetwork(_angles(48), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, input_features="lfe").eval()
+        assert net.stem.in_channels == 1 and _small_network().stem.in_channels == N_BEAM_FEATURES
+        logit, votes, _ = net(_scans(2))
+        assert logit.shape == (2, 48) and votes.shape == (2, 48, 2)
+
+    def test_an_unknown_input_is_refused(self):
+        with pytest.raises(ValueError, match="input_features"):
+            CalibrationNetwork(_angles(48), input_features="raw")
+
+    def test_lfe_s_widths_give_the_parameter_count_the_arm_was_planned_at(self):
+        assert sum(p.numel() for p in CalibrationNetwork(_angles(720)).parameters()) == 976_707
+        assert sum(p.numel() for p in CalibrationNetwork(_angles(720), channels=(8, 16, 32)).parameters()) == 63_891
 
 
 class TestLegacyCheckpoints:

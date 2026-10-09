@@ -38,6 +38,56 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A61 done: the learned memory still beats a tuned tracker on the adopted recipe, by +2.36 pp (2026-10-09)
+
+*keywords:* A61, A56, E13, E14, E15, ByteTrack, CBMOT, SORT, rule scorer, tracking_baselines summary, a61/summary.json, recall at matched FP, GOSPA, lidar_queue
+
+The second half of `lidar_queue` finished at 19:02 (three replays of `rule`, `track`, `arms`, `report`, then `summary`; 12.3 h; each `arms` step hung in ROCm teardown after writing everything and was stopped by the chain 10 min later, as designed). The whole chain: 26 steps, 18.2 h, no retries; task deleted.
+
+| what reads the stage-2 candidates | AP, 3 seeds | vs candidates, per seed | recall at matched FP | GOSPA |
+| --- | --- | --- | --- | --- |
+| nothing | 82.19% | -- | 94.13% | 0.494 |
+| SORT `min_hits` 1 | 82.31% | +0.14 / +0.12 / +0.12, all above zero | 94.19% | 0.494 |
+| ByteTrack as published | 81.17% | -0.94 / -1.11 / -1.00 | 94.29% | 0.494 |
+| the memory's bookkeeping with CBMOT's score (E15) | 72.02% | -10.55 / -9.80 / -10.14 | 94.58% | 0.619 |
+| ByteTrack + CBMOT, tuned on val (E14) | 83.51% | +1.30 / +1.35 / +1.32, all above zero | **95.56%** | 0.493 |
+| **learned state, no attention (E13)** | **85.87%** | **+4.13 / +3.66 / +3.26; over E14 +2.84 [+1.99, +3.73] / +2.31 [+1.28, +3.36] / +1.94 [+0.94, +3.01]** | 95.47% | **0.454** |
+
+- **Predictions** (`TODO.md` A61): E13 - E14 +1.0 to +2.5, at least two intervals above zero -- held (+2.36, all three); E15 below the candidates -- held; the lead on occluded people, first 0.5 s and far people -- held (+3.4 / +3.4 / +3.2 recall at matched FP); E14 +1.5 to +2.5 over the candidates -- missed low (+1.32).
+- **Changed against A56: recall at the candidates' false-positive rate is now a tie** (E13 95.47%, E14 95.56%; old recipe +1.0). The memory trades visible, standing and near people for occluded, new and far ones; its lead is ranking over the whole curve, which GOSPA confirms (0.454 against 0.493).
+- Docs: `memory/experiments/2026-09-tracking-claims.md` (new section), `memory/performance-log.md` and `memory/slot-design-evidence.md` (the new recipe leads, the old kept beside it), `docs/RESEARCH.md` §7.4.
+
+## A59's attribution ladder scored: not the input, not the size, not the protocol (2026-10-09)
+
+*keywords:* A59, F1, W, R, attribution ladder, stage2_probe_a59_ladder.json, a59_f1_lfe_input, a59_w_lfe_width, a59_r_drspaam_recipe, step2_calibration.last.pth, why do we beat LFE
+
+The first half of `lidar_queue` finished at 06:45 (gate, nine trainings, averaging, the probe; 6 h, no retries). Three seeds per arm, `nms-mean`, every 5th annotated test frame, against C1 (81.95% as selected, 82.20% averaged):
+
+| arm | parameters | selected | averaged |
+| --- | --- | --- | --- |
+| F1 LFE's input alone | 976,419 | 81.47% (-0.48) | **82.34% (+0.14)** |
+| W LFE's widths | 63,891 | 80.66% (-1.29) | 80.70% (-1.50) |
+| R DR-SPAAM's protocol, last weights | 976,707 | 80.11% (-1.84) | -- |
+| R, best on val | 976,707 | 81.35% (-0.60) | -- |
+
+- **Every prediction missed in the same direction**: each arm lost less than predicted (F1 -1 to -3, W -2 to -4, R 75-78%); only R's val-best (within 1.5) held.
+- **W's loss is the far range** (8-10 m recall -4.8 pp at LFE-Peaks' FP rate) and it gains on close pairs (+2.4); **R's is selection**: -1.24 of its -1.84 is testing the last weights, which report 1.98 FP and 0.38 FN per frame at 0.3 against C1's 3.11 and 0.20.
+- **For the paper**: input, size and DR-SPAAM's protocol each cost at most ~1.8 pp and every arm scores 80-82% against LFE-Peaks' 65.1%; what is left of the lead is the network's form and the training recipe (`memory/static-detector-diagnosis.md`, `docs/PAPER.md`). LFE retrained with its own code (A59 phase 3b) is the remaining converse test.
+- **Correction, same session**: two progress messages quoted C1's operating point as ~2.4 FP and ~0.30 FN per frame; those were F1 seed 0's figures. C1's are 3.11 and 0.20 (three-seed means at 0.3), as above.
+- **W's ms/frame, measured after A61 the same evening** (`results/a59_w_latency.json`, a scratch timing of network plus `nms-mean` decoding on 2,000 test scans): **no faster than C1** -- 11.14 against 11.46 ms on 4 CPU threads, 9.04 against 8.80 on the GPU. Per-scan time is overhead, not width.
+
+## A59's attribution ladder and A61's tracker re-run: built and launched (2026-10-09)
+
+*keywords:* A59, A61, F1, W, R, attribution ladder, input_features, lfe_features, LFE_NEAR_M, INPUT_CHANNELS, channels, network_shape, exponential_schedule, select_test_weights, --select, step2_calibration.last.pth, parse_arms, summarise, --arms, tracking_baselines summary, run_queue_ladder_a61.ps1, lidar_queue
+
+**Owner's go-ahead** on both proposals of the A60 report. Plans, predictions and controls are in `TODO.md` A59 (the ladder) and A61 (new); nothing is measured yet.
+
+- **Ladder flags, all opt-in** (`step2`): `--input-features lfe` (`CalibrationNetwork(input_features=)`, `lfe_features`: LFE's `_normalize_scan`, `1 - r/10` clipped at 0.2 m, as the only input channel; F1), `--channels 8 16 32` (LFE's widths, 63,891 parameters; W), `--schedule exponential` (`exponential_schedule`, DR-SPAAM's per-iteration decay) and `--select last` (`select_test_weights`: the test scores the last weights, saved as `step2_calibration.last.pth` beside the val-best; R). `calibration_network` now rebuilds the input and the widths from a checkpoint's args through `network_shape`, so the averaging, the probe and stage 3's caches read the arms without flags; checkpoints without those args rebuild at the defaults, as before.
+- **Tracker re-run tooling** (`tracking_baselines.py`): `--arms ARM:RUN` on `arms`, `report` and `merge` replays memories other than A56's hardcoded A51 runs (`parse_arms`); `summary` lines up several replays' reports by arm (`summarise`), counting each bootstrap pair's intervals above zero. A61 needs one replay per seed, because each A60 memory was trained on its own stage-2 seed.
+- **Control for the ladder: C1, not retrained.** Today's trainer draws the same permutation and mirror flips as the code C1 trained on, and loads C1 bit-identically (A60's fixture), so a fresh control would differ by GPU noise only.
+- **Tested**: 19 new tests (5 network, 9 trainer, 5 baselines), red first; the full suite **681 passed**. A real-data smoke run with every ladder flag at once (63,819 parameters: W's widths with F1's one-channel stem) decayed the rate to exactly 1e-6, saved `last.pth`, and the probe's `nms-mean` AP on the rebuilt weights equalled the trainer's own (33.41%, every 500th frame). Nothing previously trained or cached is invalidated: the default network, its initialisation order and every existing checkpoint's rebuild are unchanged.
+- **Launched 2026-10-09 00:48** as one resumable chain, `checkpoints_three_horizon/run_queue_ladder_a61.ps1` (Task Scheduler `lidar_queue`, hidden window; `progress.txt` lines start `QUEUE`): the test gate, F1/W/R at three seeds, averaging, the probe (`results/stage2_probe_a59_ladder.json`), then A61's `rule`, `track`, `arms`, `report` per seed into `checkpoints_three_horizon/a61/s{0,1,2}` and `summary`. ~4 h for the ladder, ~10 h for A61; a failed ladder step does not block A61.
+
 ## A60 done: the coarse convolution is removed; stage 2 reads one frame (2026-10-08)
 
 *keywords:* A60, removal, CausalTemporalConv, TemporalCache, CalibrationState, align_sectors, POSE_CHANNELS, coarse_lags, clip_length, clip_frames, clip_batch, mirror_clips, mirror_scans, frame_batch, context, fold_legacy_calibration, LAST_TEMPORAL_COMMIT, e76aa94, no_temporal_stage2.pt

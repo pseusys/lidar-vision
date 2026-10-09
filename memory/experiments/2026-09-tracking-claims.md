@@ -93,6 +93,23 @@ About 6 h of machine time, no training.
 ## Outcome
 
 Run 2026-10-02/03 with `utils/tracking_baselines.py` (results in `checkpoints_three_horizon/a56/`, `report.json`).
+**On the old stage-2 recipe** (vote-grid candidates, 77.66%; E13 83.86%). The re-run on the adopted recipe (C1's `nms-mean` candidates, the A60 memories at 85.87%), one replay per stage-2 seed, is `TODO.md` A61, done 2026-10-09 (`checkpoints_three_horizon/a61/summary.json`); the numbers further below are the old recipe's.
+
+### On the adopted recipe (A61, 2026-10-09)
+
+| what reads the stage-2 candidates | AP, 3 seeds | vs candidates, per seed | recall at matched FP | GOSPA |
+| --- | --- | --- | --- | --- |
+| nothing | 82.19% | -- | 94.13% | 0.494 |
+| SORT `min_hits` 1 | 82.31% | +0.14 / +0.12 / +0.12, all above zero | 94.19% | 0.494 |
+| ByteTrack as published | 81.17% | -0.94 / -1.11 / -1.00 | 94.29% | 0.494 |
+| the memory's bookkeeping with CBMOT's score (E15) | 72.02% | -10.55 / -9.80 / -10.14 | 94.58% | 0.619 |
+| ByteTrack + CBMOT, tuned on val (E14) | 83.51% | +1.30 / +1.35 / +1.32, all above zero | **95.56%** | 0.493 |
+| **learned state, no attention (E13)** | **85.87%** | **+4.13 / +3.66 / +3.26; over E14 +2.84 [+1.99, +3.73] / +2.31 [+1.28, +3.36] / +1.94 [+0.94, +3.01]** | 95.47% | **0.454** |
+
+- **The claim survives**: E13 over the tuned tracker +2.36 pp (old recipe +2.90), every seed's interval above zero. The tuned tracker's own gain shrank more, +3.30 -> +1.32: a stronger stage 2 leaves a rule less to fix.
+- **Predictions** (`TODO.md` A61): E14's gain missed low (+1.3 against +1.5 to +2.5); E13 - E14 held (+1.0 to +2.5, all three above zero); E15 below the candidates held; the lead on occluded people (+3.4 recall at matched FP over E14), a trajectory's first 0.5 s (+3.4) and beyond 8 m (+3.2) held.
+- **Changed: recall at one matched false-positive rate is now a tie with the tuned tracker** (95.47 against 95.56%; old recipe +1.0). The memory trades visible, standing and near people (-0.5, -1.8, -1.5) for occluded, new and far ones; its lead is ranking over the whole curve (AP, GOSPA 0.454 against 0.493), not more people at one threshold. The paper must not claim higher recall at matched FP on this recipe.
+- First-frame detection: E13 93.0%, the candidates 91.2%, E14 83.0% -- still no confirmation delay.
 Test split, AP at 0.5 m on every 5th annotated frame; every classical setting tuned on val and scored on test once; 95% intervals from a paired block bootstrap (30 s blocks, 1,000 resamples), one per learned seed.
 
 **Four real-data checks passed before any number was read:** the candidates reproduce their recorded 77.66% AP and 88.8% recall at 2.62 FP per frame; re-scoring the stored memory checkpoints reproduces their recorded test APs (B0 82.96 / 83.18 / 83.88, E10 81.84 / 82.04); E14's SORT row is frame-for-frame identical to `replay_sort` (AP 0.774032 both); and GOSPA's false and missed terms for LFE-Peaks at 0.3 are 1.760 and 0.635 per frame, against its documented 1.76 FP and 0.63 FN (LFE-PPN 5.028 / 0.377 against 5.03 / 0.38).

@@ -44,16 +44,16 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 **DR-SPAAM `T=5` at 75.6% on FROG was the number to beat, and the object memory clears it by 7.7 pp.**
 That is ours measured here, three seeds, against theirs published, one paper figure — read footnote 5 and [`interpreting-evaluation.md`](interpreting-evaluation.md) before quoting it.
 
-**The comparison a tracking reviewer will ask for is within one model, on identical candidates** (`TODO.md` A56, 2026-10-03; FROG test, every 5th annotated frame, 95% block-bootstrap intervals; tables in [`experiments/2026-09-tracking-claims.md`](experiments/2026-09-tracking-claims.md)):
+**The comparison a tracking reviewer will ask for is within one model, on identical candidates** (`TODO.md` A61, 2026-10-09, on the adopted recipe; one replay per stage-2 seed; FROG test, every 5th annotated frame, 95% block-bootstrap intervals per seed; tables in [`experiments/2026-09-tracking-claims.md`](experiments/2026-09-tracking-claims.md)):
 
-| what reads TAKHeLiPeD's stage-2 candidates | AP | vs the candidates |
+| what reads TAKHeLiPeD's stage-2 candidates | AP, 3 seeds | vs the candidates |
 | --- | --- | --- |
-| nothing | 77.66% | -- |
-| SORT (`min_hits` 1) / ByteTrack, as published | 77.40% / 76.49% | -0.25 / -1.17 |
-| ByteTrack + CBMOT track confidence, tuned on val | 80.96% | +3.30 [+2.83, +3.77] |
-| **object memory, no attention (A51 E13, 3 seeds)** | **83.86%** | **+6.20; +2.90 over the tuned tracker, every seed's interval above zero** |
+| nothing | 82.19% | -- |
+| SORT (`min_hits` 1) / ByteTrack, as published | 82.31% / 81.17% | +0.13 / -1.02 |
+| ByteTrack + CBMOT track confidence, tuned on val | 83.51% | +1.32, every seed's interval above zero |
+| **object memory, no attention (E13)** | **85.87%** | **+3.68; +2.36 over the tuned tracker (+2.84 / +2.31 / +1.94), every seed's interval above zero** |
 
-All on FROG's official test labels, which include 2,254 duplicate circles that only a second detection can match; without them every row rises 0.7-1.05 pp and the memory's margin over the tuned tracker is +2.71, still above zero at every seed ([`interpreting-evaluation.md`](interpreting-evaluation.md), 2026-10-05).
+At one matched false-positive rate the two now find the same people (95.47 against 95.56%); the memory's lead is ranking, not recall at a threshold. On the old recipe (A56, 2026-10-03, vote-grid candidates) the rows read 77.66 / 77.40 / 76.49 / 80.96 / 83.86%, the memory +2.90 over the tuned tracker. All on FROG's official test labels, which include 2,254 duplicate circles that only a second detection can match; on the old recipe, without them every row rose 0.7-1.05 pp and the memory's margin over the tuned tracker was +2.71, still above zero at every seed ([`interpreting-evaluation.md`](interpreting-evaluation.md), 2026-10-05).
 
 **TAKHeLiPeD** (`T`emporal `A`daptive `K`nee-`He`ight `Li`dar `Pe`rson `D`etector, named 2026-09-23) is what earlier entries in this file, `CHANGELOG.md` and `TODO.md` call *the three-horizon detector*; the code still spells it `three_horizon`.
 

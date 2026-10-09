@@ -325,6 +325,13 @@ def plateau_schedule(optimizer: torch.optim.Optimizer, factor: float, patience_e
     return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=factor, patience=patience_evals, min_lr=min_lr)
 
 
+def exponential_schedule(optimizer: torch.optim.Optimizer, min_lr: float, iterations: int) -> torch.optim.lr_scheduler.LambdaLR:
+    """DR-SPAAM's learning rate (its `_ExpDecayScheduler`), stepped every iteration: geometric from the optimizer's rate down to
+    `min_lr` over `iterations` steps, then held there (`TODO.md` A59, arm R)."""
+    ratio = min_lr / optimizer.param_groups[0]["lr"]
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: ratio ** min(1.0, step / iterations))
+
+
 def gradient_verdict(loss: float, grad_norm: float, skipped: int, limit: int = GRAD_SKIP_LIMIT) -> str:
     """What to do with this iteration: `take` it, `skip` it, or `stop` the run.
 
@@ -543,18 +550,24 @@ def decode_candidates(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, vo
     return candidates, candidate_pooling_weights(candidates[:, 1:], vote_xy, prob, VOTE_DECODING["vote_collect_radius"])
 
 
-def calibration_network(checkpoint: dict, angles: np.ndarray, **overrides) -> CalibrationNetwork:
-    """The checkpoint's weights in a network shaped the way they were trained.
-
-    `max_range_m` changes what the input means, so it is read from the checkpoint's `args` (stored as strings); a checkpoint written
-    before the flag existed falls back to the constructor's own default rather than to a second copy of it here. `overrides` (e.g.
-    `prior_channels`) go straight to the constructor. Weights load through `load_calibration_weights`, which folds checkpoints of
-    earlier architectures and refuses those whose temporal convolutions read past frames (`TODO.md` A50, A60).
-    """
-    args = checkpoint.get("args", {})
+def network_shape(args: Dict[str, str]) -> Dict[str, object]:
+    """The `CalibrationNetwork` arguments a stage-2 run's `args` (stored as strings) fix, because they change what the input means
+    or which weights exist: the range limit, the input (`--input-features`) and the widths (`--channels`), the last two for the
+    attribution arms F1 and W (`TODO.md` A59). A flag left unset, or written before it existed, falls back to the constructor's own
+    default rather than to a second copy of it here."""
     parameters = signature(CalibrationNetwork).parameters
-    shape = {"max_range_m": parameters["max_range_m"].default if args.get("max_range_m") is None else float(args["max_range_m"])}
-    net = CalibrationNetwork(torch.from_numpy(angles), **shape, **overrides)
+    unset = (None, "None")
+    return {"max_range_m": parameters["max_range_m"].default if args.get("max_range_m") in unset else float(args["max_range_m"]),
+            "input_features": parameters["input_features"].default if args.get("input_features") in unset else args["input_features"],
+            "channels": parameters["channels"].default if args.get("channels") in unset else tuple(literal_eval(args["channels"]))}
+
+
+def calibration_network(checkpoint: dict, angles: np.ndarray, **overrides) -> CalibrationNetwork:
+    """The checkpoint's weights in a network shaped the way they were trained (`network_shape`); `overrides` (e.g.
+    `prior_channels`) go straight to the constructor and win. Weights load through `load_calibration_weights`, which folds
+    checkpoints of earlier architectures and refuses those whose temporal convolutions read past frames (`TODO.md` A50, A60).
+    """
+    net = CalibrationNetwork(torch.from_numpy(angles), **{**network_shape(checkpoint.get("args", {})), **overrides})
     load_calibration_weights(net, checkpoint["model"])
     return net
 
@@ -1159,6 +1172,18 @@ def evaluate_calibration(net: CalibrationNetwork, split: FrameSplit, positions: 
     return score_detections(frames)
 
 
+def select_test_weights(net: CalibrationNetwork, best: BestCheckpoint, select: str, last: Dict[str, object], device) -> None:
+    """Put into `net` the weights the test scores: the run's best on val, or with `select` "last" (DR-SPAAM's protocol, `TODO.md`
+    A59 arm R) the weights training ended on, saved first as `step2_calibration.last.pth` beside the best so the probe can score
+    both. `last` is the rest of that checkpoint: its epoch and args."""
+    if select == "last":
+        torch.save(dict(model=net.state_dict(), **last), best.path.with_name("step2_calibration.last.pth"))
+    elif best.saved:
+        net.load_state_dict(torch.load(best.path, map_location=device)["model"])
+    else:
+        print("no validation score was ever defined, so no checkpoint was selected: testing the last weights", flush=True)
+
+
 def train_calibration(args) -> None:
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
@@ -1167,7 +1192,8 @@ def train_calibration(args) -> None:
     for name, split in splits.items():
         print(f"{name}: {len(split.scans)} frames, {len(split.annotated)} annotated", flush=True)
     angles = frog_laser_angles(720)
-    net = CalibrationNetwork(torch.from_numpy(angles), dropout=args.dropout, max_range_m=args.max_range_m).to(device)
+    stored_args = {k: str(v) for k, v in vars(args).items()}
+    net = CalibrationNetwork(torch.from_numpy(angles), dropout=args.dropout, **network_shape(stored_args)).to(device)
     if args.init:
         load_calibration_weights(net, torch.load(args.init, map_location=device)["model"])
         print(f"starting from {args.init}", flush=True)
@@ -1185,6 +1211,8 @@ def train_calibration(args) -> None:
     optimizer = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     if args.schedule == "plateau":
         schedule = plateau_schedule(optimizer, args.lr_factor, args.lr_patience, args.min_lr)
+    elif args.schedule == "exponential":
+        schedule = exponential_schedule(optimizer, args.min_lr, int(args.max_epochs * iterations))
     else:
         schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=int(args.max_epochs * iterations))
     stopper = EarlyStopping(args.patience, args.min_epochs, args.max_epochs, args.max_hours)
@@ -1221,7 +1249,7 @@ def train_calibration(args) -> None:
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), GRAD_CLIP)
             optimizer.step()
-            if args.schedule == "cosine":
+            if args.schedule != "plateau":
                 schedule.step()
             losses.append(loss.item())
             step += 1
@@ -1232,7 +1260,7 @@ def train_calibration(args) -> None:
             improved = stopper.update(val["ap"])
             if args.schedule == "plateau":
                 schedule.step(val["ap"])
-            checkpoint = dict(model=net.state_dict(), epoch=epoch, val=val, args={k: str(v) for k, v in vars(args).items()})
+            checkpoint = dict(model=net.state_dict(), epoch=epoch, val=val, args=stored_args)
             best.offer(val["ap"], checkpoint)
             periodic.offer(epoch, checkpoint)
             hours = done_hours + (time.time() - start) / 3600
@@ -1242,7 +1270,7 @@ def train_calibration(args) -> None:
             history.append(row)
             save_resume(resume_path, model=net.state_dict(), optimizer=optimizer.state_dict(), schedule=schedule.state_dict(),
                         stopper=stopper.state(), best=best.state(), periodic=periodic.state(), history=history, hours=hours,
-                        step=step, rng=rng_snapshot(rng), args={k: str(v) for k, v in vars(args).items()})
+                        step=step, rng=rng_snapshot(rng), args=stored_args)
             print(f"  epoch {epoch:6.2f}  loss {row['loss']:.4f}  val AP {row['val_ap']:.2%}  FP {row['val_fp']:.3f} FN {row['val_fn']:.3f}  lr {row['lr']:.1e}  "
                   f"train {train_s:.0f} s  eval {row['eval_s']:.0f} s  {hours:.2f} h  GPU {row['gpu_gb']:.1f} GB{'  best' if improved else ''}", flush=True)
             losses, t_block = [], time.time()
@@ -1250,10 +1278,7 @@ def train_calibration(args) -> None:
                 done = True
                 break
 
-    if best.saved:
-        net.load_state_dict(torch.load(best.path, map_location=device)["model"])
-    else:
-        print("no validation score was ever defined, so no checkpoint was selected: testing the last weights", flush=True)
+    select_test_weights(net, best, args.select, dict(epoch=step / iterations, args=stored_args), device)
     test = splits["test"]
     positions = np.arange(0, len(test.annotated), args.test_stride)
     results = dict(history=history, test=evaluate_calibration(net, test, positions, device, args.eval_batch))
@@ -1650,10 +1675,17 @@ def build_parser() -> argparse.ArgumentParser:
     step3b.add_argument("--limit-recordings", type=int, default=0, help="only the first N recordings of each split (smoke runs)")
     step2 = sub.choices["step2"]
     step2.add_argument("--init", type=Path, default=None, help="start from this checkpoint's weights (a fresh optimizer)")
-    step2.add_argument("--schedule", choices=("plateau", "cosine"), default="plateau", help="plateau: cut the rate when val AP stalls")
+    step2.add_argument("--schedule", choices=("plateau", "cosine", "exponential"), default="plateau", help="plateau: cut the rate when "
+                       "val AP stalls; exponential: DR-SPAAM's decay from --lr to --min-lr over --max-epochs, every iteration (TODO.md A59 R)")
     step2.add_argument("--lr-factor", type=float, default=0.3)
     step2.add_argument("--lr-patience", type=int, default=4, help="evaluations without improvement before a cut (4 = one epoch)")
-    step2.add_argument("--min-lr", type=float, default=1e-5)
+    step2.add_argument("--min-lr", type=float, default=1e-5, help="plateau's floor, or where exponential ends")
+    step2.add_argument("--select", choices=("best", "last"), default="best", help="the weights the test scores: the best on val, or the "
+                       "last, DR-SPAAM's protocol (TODO.md A59 R), which are also saved as step2_calibration.last.pth")
+    step2.add_argument("--input-features", choices=("beam", "lfe"), default="beam", help="beam: the ten per-beam features; lfe: LFE's "
+                       "1 - r/10 alone, the attribution arm F1 (TODO.md A59)")
+    step2.add_argument("--channels", type=int, nargs=3, default=None, metavar="C", help="U-Net widths at N, N/2 and N/4 beams; unset is "
+                       "the constructor's (32 64 128); LFE's 8 16 32 are the attribution arm W (TODO.md A59)")
     step2.add_argument("--dropout", type=float, default=0.1, help="dropout on the head's input, 0.1 since 2026-10-06 (TODO.md A59); 0 reproduces every result before, "
                                                                  "`docs/RESEARCH.md` §5.4 intends 0.1 for this project's own architectures")
     step2.add_argument("--checkpoint-every", type=float, default=0.0, help="epochs between checkpoints kept whatever they score, "

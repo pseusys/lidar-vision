@@ -276,7 +276,7 @@ On FROG train 6.9% of positive beams sit inside two people's radius and 3.3% vot
 Eight of the ten `beam_features` -- each neighbour's endpoint along and across the beam -- are fixed linear combinations of the five ranges `r[i-2..i+2]`, because the angular steps are constant.
 So for a network whose stem is a learned linear map, they carry no information a 5-tap convolution on raw range lacks; the 1-NN advantage of Cartesian offsets above is an advantage for a *fixed* metric and does not transfer to a learned one.
 The one feature LFE's `1 - r/10` input cannot reproduce linearly is `r - median` over 11 deg, a depth-centring filter.
-Whether it matters is A59's arm F1, not yet run.
+**It does not matter measurably** (A59 arm F1, 2026-10-09, below): with LFE's input as the only channel the network scores 81.47% as selected and 82.34% averaged, against 81.95 / 82.20% with all ten.
 
 **It goes blind up close.** The 11 deg window is sized for a person at 4 m, so nearer people fill it: a person's own beams read `r - median` ~0 for 98% of people at 0-1 m and 41% at 1-2 m, and only -0.19 m at 2-3 m (FROG test, every 50th frame).
 Over 33 deg the same beams read -1.2 m at 1-2 m and -2.5 m at 2-3 m.
@@ -285,7 +285,7 @@ Its cost is unmeasured -- the 1-4 m deficit it was first blamed for is the vote 
 ### What it is not
 
 - **Not capacity against the cutouts:** 976,707 parameters against DROW3's 1,518,918 and DR-SPAAM's 1,978,054 (this project's ports).
-  Against LFE (53,258 / 170,903) the 6-18x gap is untested (A59 arm W).
+  **Nor against LFE** (53,258 / 170,903): at LFE's widths (A59 arm W, 63,891 parameters) the network keeps 80.7%, losing ~1.4 pp, all of it on far people (below).
 - **Not training compute:** the selected checkpoint has seen ~108k scans, against DR-SPAAM's 541k and LFE's up to 100 epochs.
 
 ### Training duration moves it more than any architecture arm
@@ -294,7 +294,7 @@ Test AP of the no-temporal seed 0 by epoch, every annotated frame (`checkpoints_
 The network memorises the two training recordings, and only validation on *other* recordings sees it.
 The published recipes cannot: DR-SPAAM trains a fixed 5 epochs, and LFE early-stops on loss over `split == 1` frames interleaved with its own training frames, for up to 100 epochs (`robotics-upo/2DLaserPeopleBenchmark`).
 LFE's segmentation trainer also never shuffles: `SegDataGenerator.__call__` shuffles a copy and iterates the original.
-**Whether this explains the gap to the baselines is A59's arm R**, our network trained on DR-SPAAM's recipe; the duration curve says it is a candidate of the right size, not that it is the answer.
+**It explains ~1.8 pp of the gap to the baselines, not the gap** (A59 arm R, 2026-10-09, below): our network on DR-SPAAM's protocol -- 5 epochs at batch 8, the rate decaying to 1e-6, last weights -- still scores 80.1%, and its own best-on-val checkpoint 81.35%.
 
 ### What lifts it (`TODO.md` A59 phase 2)
 
@@ -304,6 +304,24 @@ Together, on the trainer's new defaults: mirror + nearest labels 81.60%, **+ dro
 The blind spot of the 11 deg window costs little once the decoder is right: the extra channel moves 1-4 m recall by +0.6 pp.
 
 Averaging the weights of a run's checkpoints helps on the same curve: epochs 0.5-1.5, chosen on val, score 78.53% against the selected checkpoint's 77.58% on seed 0; over eighteen runs it gains in fifteen, +0.66 pp on average, and most reliably with dropout (every seed).
+
+### The attribution ladder: what the lead is not (`TODO.md` A59, 2026-10-09)
+
+Each arm moves one thing in today's stage 2 (C1) toward LFE's or DR-SPAAM's setting; three seeds, `nms-mean`, every 5th annotated test frame (`results/stage2_probe_a59_ladder.json`); recall at LFE-Peaks' 1.78 FP/frame.
+
+| arm | parameters | AP selected | AP averaged | 8-10 m | close pairs |
+| --- | --- | --- | --- | --- | --- |
+| C1 | 976,707 | 81.95% | 82.20% | 81.7% | 86.0% |
+| F1 LFE's input `1 - r/10` alone | 976,419 | 81.47% | 82.34% | 79.4% | 86.6% |
+| W LFE's widths (8, 16, 32) | 63,891 | 80.66% | 80.70% | 76.9% | 88.4% |
+| R DR-SPAAM's protocol, last weights | 976,707 | 80.11% | -- | 80.2% | 81.7% |
+| R, best on val | 976,707 | 81.35% | -- | 80.3% | 86.2% |
+| LFE-Peaks, published | 53,258 | 65.1% | -- | 50.3% | 83.2% |
+
+- **The input features are worth nothing measurable** once weights are averaged, as the linear-stem argument above predicts; as selected they are worth ~0.5 pp, partly far away.
+- **Width is worth ~1.4 pp, and it is far range**: 8-10 m -4.8, 6-8 m -2.2, while close pairs *gain* 2.4. A 64k-parameter network of this form still scores 80.7% -- **and runs no faster**: 11.14 ms per scan on 4 CPU threads against C1's 11.46, 9.04 against 8.80 on the GPU (`results/a59_w_latency.json`), because at one scan per call the time is fixed overhead, not width.
+- **DR-SPAAM's protocol costs 1.84 pp**: 1.24 from taking the last weights rather than the best on val (precision up, recall down: 1.98 FP and 0.38 FN per frame at 0.3 against 3.11 and 0.20), 0.60 from batch 8, the decaying rate and no weight decay.
+- **Every arm still beats every baseline.** With the head's share from the decomposition above (about half the lead over LFE-Peaks), what is left is the network's form -- a ConvNeXt U-Net with a whole-scan aggregator -- and the training recipe, not its input, size or compute. Separating LFE's architecture from LFE's training needs LFE retrained with its own code, shuffling fixed (A59 phase 3b).
 
 ## Caveats that apply to every number here
 

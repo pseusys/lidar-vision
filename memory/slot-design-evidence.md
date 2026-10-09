@@ -30,7 +30,7 @@ history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/
 | claim | evidence |
 | --- | --- |
 | The memory earns its place | **+5.68 pp of AP over its own candidates** (83.34% mean against 77.66%), and **+3.7 pp of recall at the candidates' own false-positive rate** (92.5% against 88.8%), 3 seeds |
-| It is not just temporal filtering | SORT replayed on the same candidates **loses** at every setting (77.40 / 76.67% at `min_hits` 1/3 against 77.66% on the current candidates). **The strongest classical pipeline does not lose but falls short**: ByteTrack with CBMOT's track confidence, tuned on val, reaches 80.96% (+3.30 [+2.83, +3.77]); the proposed memory (E13) is **+2.90 above it**, every seed's 95% block-bootstrap interval above zero (A56, `experiments/2026-09-tracking-claims.md`) |
+| It is not just temporal filtering | **On the adopted recipe (A61, 2026-10-09)** SORT ties the candidates (+0.13) and ByteTrack as published loses (-1.02); ByteTrack with CBMOT's track confidence, tuned on val, reaches 83.51% (+1.32); the memory (E13) is **+2.36 above it**, every seed's interval above zero, though at one matched false-positive rate the two find the same people. On the old recipe: SORT lost at every setting (77.40 / 76.67% against 77.66%), the tuned tracker reached 80.96% (+3.30) and E13 was +2.90 above it's 95% block-bootstrap interval above zero (A56, `experiments/2026-09-tracking-claims.md`) |
 | Memory belongs inside the model, not behind it | every place-keyed variant failed first: persistence map 0.57 false positives removed per false negative added, background subtraction 1.90, acausal trail oracles 2.54 and 4.20, against the merge radius's 21.9 (`rejected-ideas.md`) |
 | It costs little | **4.4-4.6 ms per frame**, one stream, beside stage 2's 6.5 ms, inside FROG's 25 ms budget |
 | Its cost does not grow with the horizon | the memory is carried as state, so per-frame work is **constant in elapsed time**; window methods (DR-SPAAM, Li2Former) re-encode `T` scans every frame, so their cost scales with the horizon they want. This is the efficiency claim the design is built on (owner, 2026-09-25): linear-time memory for an embedded platform |
@@ -357,6 +357,8 @@ candidates, every classical setting tuned on val and scored on test once. Full t
 | ByteTrack + CBMOT, tuned (E14) | 80.96 | 92.17 |
 | a learned scorer on the bookkeeping, no state (E10, 2 seeds) | 81.94 | 90.88 |
 | learned state, no attention (E13, 3 seeds) | **83.86** | **93.16** |
+
+**On the adopted recipe (A61, 2026-10-09; `experiments/2026-09-tracking-claims.md` has the table):** candidates 82.19%, E14 83.51%, E13 85.87%, recall at matched FP 94.13 / 95.56 / 95.47%. The rule now recovers about a third of the memory's gain (+1.32 of +3.68), the learned state the rest (+2.36, every seed above zero); the edge over the rule is still occluded people (+3.4), a trajectory's first 0.5 s (+3.4) and people beyond 8 m (+3.2), but it is paid for with visible and standing ones, so at one false-positive rate the two tie. The paragraphs below are the old recipe's.
 
 **What it settles.** A rule that raises a detection's score from its track's confidence recovers about half the memory's gain
 (+3.30 of +6.20 pp) -- but only with a confidence decay, without which persistent phantoms saturate exactly as people do. The
