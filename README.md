@@ -44,7 +44,6 @@ What the memory is, and is not:
 - **Still open**: precision at that operating point is 70%, so nearly a third of reported detections are false; and training both stages jointly with feedback has not yet beaten training the memory on a frozen backbone.
 
 Full tables, the regime behind every number, and the caveats that stop two of them being compared: [`memory/performance-log.md`](memory/performance-log.md) and [`memory/interpreting-evaluation.md`](memory/interpreting-evaluation.md).
-A short standalone summary of the result is [`docs/SHOWCASE.md`](docs/SHOWCASE.md).
 
 ## Documentation
 
@@ -65,7 +64,6 @@ The rest:
 - [`memory/`](memory/README.md) — the knowledge base: how things work now, the house rules, the environment traps, and what was tried and rejected
 - [`docs/PROPOSAL.md`](docs/PROPOSAL.md) — TAKHeLiPeD's design document: the three horizons, the slot rules, the configuration and the build plan
 - [`docs/PAPER.md`](docs/PAPER.md) — the measurements the design is argued from, and how to reproduce each one
-- [`docs/SHOWCASE.md`](docs/SHOWCASE.md) — the result on one page
 - [`docs/ROS_IMAGE.md`](docs/ROS_IMAGE.md) — building and running the ROS/Docker deployment
 - [`CHANGELOG.md`](CHANGELOG.md) — what changed, when, and the evidence
 - [`TODO.md`](TODO.md) — what's open

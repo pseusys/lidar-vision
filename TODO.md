@@ -55,66 +55,63 @@ That's a structural gap, not a pending deploy — see §E below.
 >
 > Previous items A20, A24, A25 (dataset framing) and A22, A26, A27 (architecture) are folded into the phases below rather than left as separate threads.
 
-### The actionable list, set 2026-10-09
+### The FROG pre-print list, set 2026-10-10
 
-**Owner's call:** everything that touches FROG -- the experiments still open, the runs that may have gone stale, and the numbers
-the write-up has to defend -- becomes actionable now; the other datasets wait as **A62** and **A63**, the last two items.
+**The goal that orders this list:** after these, a pre-print on **FROG alone** can be written -- every number in it defensible,
+every design choice measured, every baseline fair. The other datasets (**A62**, **A63**) then run in parallel with the writing
+rather than blocking it.
 
-**Read this list, not the running order below it.** The running order is the 2026-09-10 reorganisation and is kept for history;
-every row here points at the item where its plan, its pre-registered rule and its blast radius already live.
+**Everything here is FROG, unblocked, and can start now.** One decision is the owner's and gates the longest job:
 
-**Tier 1 -- numbers the write-up has to defend.** No training; hours, not days. These come first because the paper cannot be
-written around numbers whose convention or provenance is unsettled.
+> **The decision (owner's, one answer, gates ~2 GPU-days).** A51's six single-seed arms -- D2 `--latest-value`, D3
+> `--fixed-decay-s 8`, T1 `--no-rescore-gate`, T2 `--schedule plateau`, O1 bounded rescoring, O2 `--coast-weight 3` -- were
+> screened on the superseded no-temporal backbone. Either **(a) re-screen them on the adopted recipe** (~5 h each, two GPU-days,
+> and the ablation table then describes the model being proposed) or **(b) report them as they stand**, each labelled with the
+> backbone it ran on. **(b) costs nothing and is defensible**, because none of the six changed the adopted design; **(a) is what
+> a reviewer would prefer** on noticing the backbone moved under the table. Nothing else waits on this.
 
-| # | action | plan lives in | cost |
+| # | action | blocks the pre-print? | cost | plan |
+| --- | --- | --- | --- | --- |
+| 1 | **Settle the frame-rate convention, then restate every per-second FROG figure.** `evaluate._frame_period_s` takes the stamped median (26.2 Hz) while the sensor delivers a scan every 25 ms (40 Hz, A49), so every `FP/s` in the repo -- including the person-free table just written -- is 1.53x low on the real clock, and the "38.2 ms real-time budget" the cost claims are set against is really 25 ms. Fix the constants that hardcode the other convention (`informational_capacity.DT_NATIVE_S`, `motion_analysis.FRAME_HZ`, `persistence_map.SPANS`/`--hz`, `slot_budget`'s `dt` fallback), re-run the affected analysis rows, and check `error_breakdown.py` while there (A37's last open bullet) | **yes** -- a per-second number and a real-time claim appear in the abstract | ~2 h plus re-runs | A49's FROG residual, A37 |
+| 2 | **One end-to-end cost table on the adopted recipe**: stages 1-2 plus the memory, ms/frame at batch 1, CPU and GPU, against the real-time budget item 1 settles. The pieces exist apart (stage 2 ~8.8 ms, memory 5.17-5.22 ms); measure the sum rather than adding them | **yes** -- `AGENTS.md` rule 2b: an accuracy number without its speed counterpart is incomplete, and the deployment claim rests on it | ~1 h | A59's latency note, A51 E4 |
+| 3 | **Explain the displacement oracle's 4.20 -> 2.58.** The same command gave a different answer after the heading-wrap fix, by far more than the ~0.14% of frames it touched, and `docs/PAPER.md` quotes it | **yes** -- an unexplained 1.6x move in a quoted number is a reviewer's first question | ~1 h | A48, last bullet |
+| 4 | **Refresh the pages the pre-print is built from**: `docs/PAPER.md` and `memory/performance-log.md` still lead with the pre-A59 recipe, so the headline tables, the cost table and the finding bullets all describe a superseded model | **yes** -- these are the pre-print's source tables | ~half a day | A50's documentation note |
+| 5 | **Close A33-A36 against A35's own acceptance criteria.** They are the funnel for an architecture search that TAKHeLiPeD replaced, and its two pre-registered criteria are now met: single-frame at least LFE-PPN's 66.5% (stage 2 alone is **82.2%**) and a strict benefit from ordered time (the memory adds **+3.7 pp** over its own candidates, 95% of it within 10 s). Record that, with the numbers | **yes** -- it is the pre-print's "why a rebuild rather than tuning" argument, and it currently reads as an open funnel | ~30 min | A33, A34, A35, A36 |
+| 6 | **A47: DR-SPAAM in its official streaming form**, and **A48 item 6**'s FROG half (the windowed evaluations at `T > 1`) -- one piece of work, since both touch the same path. Every DR-SPAAM number here is the windowed form, which is not the detector the authors published | **yes** -- it is a published baseline we quote | ~3 h with its test | A47, A48 |
+| 7 | **A59 phase 3b: LFE retrained with its authors' recipe**, as a PyTorch port proven against the published ONNX weights, then three arms (as published / shuffling fixed / selected on AP) | **yes, for the central comparative claim** -- the paper says a single-frame network beats LFE and can currently say only where and what it is not | ~2 h port, ~3-6 h unattended | A59 phase 3 (b) |
+| 8 | **D4: `step3a --learn-value`** -- implemented 2026-09-20, never run. One flag; answers whether the value rule's two hand-set constants are the right ones | **yes, weakly** -- A51 phase 3b is "the design decisions the write-up has to defend", and this is the one left unmeasured | ~5 h unattended | A51 phase 3b |
+| 9 | **A52 steps 1-4: the code rename to `takheliped`.** Step 4 moves `checkpoints_three_horizon/`, so it needs a moment with no run in flight -- which is now | no | ~2 h | A52 |
+| 10 | **A53: rewrite `docs/RESEARCH.md` around TAKHeLiPeD.** It is the document a reader outside this repo is pointed at, and it still argues for the superseded line of work | no, but it is the natural first draft of the pre-print's related-work and fidelity sections | ~a day, no compute | A53 |
+| 11 | **The small gaps**: `duration_curve.py --help` exits 1 through its `BaseException` wrapper; a project-level `ruff` config for `library/` and `utils/`; the `Makefile`'s `python3`/`make venv` | no | ~2 h together | §D, A6 |
+| 12 | **F1 + W together** -- the one unmeasured cell of A59's attribution ladder | no | ~1 h | A59 |
+
+**Items 13 and up run in parallel with the writing.** They are the FROG experiments that could still improve the model, none of
+them blocking a pre-print, ordered by how well a measurement already motivates them. Each is one training run (~1 h stage 2,
+~5 h stage 3), and each slots into a table the pre-print already has:
+
+| # | action | why this one | plan |
 | --- | --- | --- | --- |
-| ~~1~~ | ~~**Finish the person-free table**~~ **done 2026-10-09**: three seeds, 0.740 FP/frame against stage 2's 2.622 and LFE-Peaks' 1.39. The three `gap` rows stay gaps -- they are the pre-TAKHeLiPeD architectures, and filling them with our numbers would have mislabelled three models. LFE-PPN's own row was half-stale and is fixed | A50 phase 1 item 7 | done |
-| 2 | **Settle the frame-rate convention and restate every per-second FROG figure.** `evaluate._frame_period_s` takes the *stamped median* (26.2 Hz) while the sensor delivers a scan every 25 ms (40 Hz, A49): every `FP/s` in `performance-log.md` is 1.53x low on the real clock. Pick one convention, say which, and fix the constants that hardcode the other -- `informational_capacity.DT_NATIVE_S`, `motion_analysis.FRAME_HZ`, `persistence_map.SPANS`/`--hz`, `slot_budget`'s `dt` fallback | A49's FROG residual | ~2 h, then re-run the affected analysis rows |
-| 3 | **Explain the displacement oracle's 4.20 -> 2.58.** The same command gave a different answer after the heading-wrap fix, by far more than the ~0.14% of frames it touched, and `docs/PAPER.md` would quote it | A48, last bullet | ~1 h |
-| 4 | **A48 item 6**: the DR-SPAAM windowed evaluations at `T > 1` on DROW and FROG, the last unre-run row downstream of the heading fixes. Do it with action 12 | A48 | ~1 h |
-| 5 | **LFE-Peaks and LFE-PPN on `balanced` test** -- the headline metric A31 defined, never measured, ~2 min each since the PPN fix | A32 | ~15 min |
-| 6 | **One end-to-end cost table on the adopted recipe**: stage 1-2 plus memory ms/frame at batch 1, CPU and GPU, against the 25 ms budget. The pieces exist separately (stage 2 ~8.8 ms, memory 5.17-5.22 ms); the paper needs the sum, measured, not added | A59's latency note, A51 E4 | ~1 h |
-| 7 | **Close A33-A36 against A35's own acceptance criteria.** They were written as a funnel for an architecture search that TAKHeLiPeD replaced; its criteria are "single-frame at least 66.5%" (stage 2 alone is **82.2%**) and "strictly benefits from ordered time" (the memory adds **+3.7 pp** over its own candidates, 95% of it within 10 s). Record that they are met and by what, rather than leaving a stalled funnel in §A | A33, A34, A35, A36 | ~30 min |
-| 8 | **Decide A51's ablation table**: re-screen the six single-seed arms on the adopted recipe (~2 GPU-days) or report them labelled with the superseded backbone they ran on. **Owner's call, and it gates nothing else** | A51's re-based block | 0 or ~2 days |
-| 9 | **Refresh the stale pages**: `docs/SHOWCASE.md` still calls the joint-training regression "under investigation" and presents step 3b as a test of feedback, which E12 closed; `docs/PAPER.md` and `memory/performance-log.md` still lead with the pre-A59 recipe | A50's documentation note | ~half a day |
+| 13 | **Range anchors for far people**, as LFE-PPN | **two independent measurements point here**: A59 found width's entire gain is on far people, A61 found the memory's lead largest beyond 8 m | A50 phase 3 |
+| 14 | **Slot creation and confirmation**: a higher creation threshold, or confirmation over several frames | the memory's surviving person-free phantoms are its *most* persistent detections (92.2% recur against the candidates' 84.9%), which is a creation-rule question | A50 phase 3 |
+| 15 | **A39's locally range-centred input channel**, and the metric-width first layer it generalises | the one Tier-0 candidate never run; §2.6 prices the adaptive window at ~1 point | A39, A50 phase 3 |
+| 16 | **The recurrence family**: minGRU, GRU or LRU against the selective diagonal decay | E10 says the learned state is the mechanism, D3 says the learned *decay* is worth little | A50 phase 3 |
+| 17 | **Every beam as a candidate**, against the 64 best after merging | an unexamined ceiling on recall; `TOP_P` was never swept | A50 phase 3 |
+| 18 | **Sensor-frame vote targets** instead of beam-relative offsets | A59 puts about half the lead over LFE-Peaks in the output head | A50 phase 2 |
+| 19 | **A plain residual U-Net, and widening 2** | A59's W arm priced shrinking to LFE's widths; the block and the widening are untested | A50 phase 3 |
+| 20 | **D5: a learned association width** | gated on 8 | A51 phase 3b |
+| 21 | **An identity loss**, and **training everything together** | both are chains, and both should wait until the headline numbers are frozen | A50 phase 3 |
+| 22 | **A learned grid over the room** | research-scale, and hand-built grids already failed (§2.4) | A50 phase 3 |
 
-**Tier 2 -- FROG experiments still worth running, one training run each (~1 h stage 2, ~5 h stage 3).** Ordered by how well
-each is motivated by a measurement already taken, not by how interesting it sounds.
+**Out of scope for the FROG pre-print, deliberately:**
 
-| # | action | why this one | plan lives in |
-| --- | --- | --- | --- |
-| 10 | **Range anchors for far people**, as LFE-PPN | **two independent measurements point here**: A59 found width's entire gain is on far people, A61 found the memory's lead largest beyond 8 m | A50 phase 3 |
-| 11 | **A39's locally range-centred input channel**, and the metric-width first layer it generalises | the one Tier-0 candidate never run; §2.6 prices the adaptive window at ~1 point, and A42 found local-Cartesian input does not replace it | A39, A50 phase 3 |
-| 12 | **D4: `step3a --learn-value`** -- implemented 2026-09-20, never run | it is one flag and it answers A50 phase 1b item 4: are the value rule's two hand-set constants the right ones? Expected small, and D5 is gated on it | A51 phase 3b |
-| 13 | **Slot creation and confirmation**: a higher creation threshold, or confirmation over several frames, against creating a slot from any candidate above 0.01 | the memory's phantoms on person-free frames are its *most* persistent detections (91.3% recur against the candidates' 85.0%), which is a creation-rule question | A50 phase 3 |
-| 14 | **The recurrence family**: minGRU, GRU or LRU against the selective diagonal decay | E10 says the learned state is the mechanism and D3 says the learned *decay* is worth little, so the family is the open half | A50 phase 3 |
-| 15 | **Every beam as a candidate**, against the 64 best after merging | the candidate pool is an unexamined ceiling on recall, and `TOP_P` was never swept | A50 phase 3 |
-| 16 | **Sensor-frame vote targets** instead of beam-relative offsets | A59 puts about half the lead over LFE-Peaks in the output head, which is where this acts | A50 phase 2 |
-| 17 | **A plain residual U-Net, and widening 2** against ConvNeXt blocks at widening 4 | A59's W arm priced *shrinking* to LFE's widths (-1.4 pp, no faster); the block and the widening themselves are untested | A50 phase 3 |
-| 18 | **D5: a learned association width** | gated on 12 | A51 phase 3b |
-| 19 | **An identity loss from pseudo-identities**, and **training everything together from the start** | both are chains rather than runs, and both should wait until the headline numbers are frozen | A50 phase 3 |
-| 20 | **A learned grid over the room** | research-scale, and hand-built grids already failed (§2.4) | A50 phase 3 |
-
-**Tier 3 -- baseline fidelity.** Both are about what a reviewer will ask of the comparison, not about our own model.
-
-| # | action | plan lives in | cost |
-| --- | --- | --- | --- |
-| 21 | **A59 phase 3b: LFE retrained with its authors' recipe**, as a PyTorch port proven against the published ONNX weights, then three arms (as published / shuffle fixed / selected on AP). The converse of ladder arm R, and the last piece of "why does a single-frame network beat LFE?" | A59 phase 3 (b) | ~1.5-2 h port, ~3-6 h unattended |
-| 22 | **A47: DR-SPAAM in its official streaming form.** Every DR-SPAAM number here is the windowed form; the official detector keeps its template across calls | A47 | ~2 h with its test |
-
-**Tier 4 -- housekeeping that unblocks the write-up.**
-
-| # | action | plan lives in | cost |
-| --- | --- | --- | --- |
-| 23 | **A52 steps 1-4: the code rename to `takheliped`.** Mechanical, tests green between each step, and step 4 needs a moment with no run in flight | A52 | ~2 h |
-| 24 | **A53: rewrite `docs/RESEARCH.md` around TAKHeLiPeD** | A53 | ~a day, no compute |
-| 25 | **The small gaps**: `duration_curve.py --help` exits 1 through its `BaseException` wrapper; a project-level `ruff` config for `library/` and `utils/`; the `Makefile`'s `python3`/`make venv` (A6) | §D, A6 | ~2 h together |
-
-**Not on this list, deliberately:** anything needing another dataset (**A62**, **A63**); the `balanced` second-partition check
-(§D, for just before publication); and the ROS deployment gap (§E), which is a separate project rather than a queued task.
+- **Every other partition and dataset: A62** (make the code dataset-agnostic) and **A63** (DROW, JRDB -- and **`balanced`**, moved
+  there 2026-10-10 on the owner's call, because it is functionally another dataset: every model would need retraining on it, even
+  though it shares FROG's sensor and venue).
+- **The ROS deployment gap** (§E), which is a separate project rather than a queued task.
+- **Owner-side and not blocking a pre-print:** A54's formal citation for prof. Aycard's `AlgorithmicDetector` (cite as personal
+  communication until it arrives), the pending review of `docs/PROPOSAL.md`, and A55's driver revert.
 
 ### Running order
-
 
 | phase | item | gate | cost |
 | --- | --- | --- | --- |
@@ -173,7 +170,8 @@ Argument in `docs/PAPER.md`; numbers in `CHANGELOG.md` and `memory/performance-l
 The false-positive rate barely moves between them: the benchmark was concealing a constant absolute error inside a ratio, not failing to provoke one.
 See `docs/PAPER.md`.
 
-**Left to run.** Both models on `balanced` test, now ~2 minutes each since the LFE-PPN fix.
+**Left to run, and moved to A63 step 0 on 2026-10-10** (owner: `balanced` is functionally another dataset, so our side of the
+comparison needs retraining there). Both models on `balanced` test, ~2 minutes each since the LFE-PPN fix.
 Expect degradation against `official`: the split is 19.1% person-free, so the same false positives that `transferred` isolates now land inside a valid AP.
 That number is the **headline metric** (A31), so it is the one our own architectures will have to beat.
 
@@ -265,6 +263,7 @@ the code rather than a claim in the paper.
 
 | step | what | notes |
 | --- | --- | --- |
+| 0 | **FROG `balanced`** -- the cheapest "other dataset" and the one to do first: same sensor, same venue, same loader, **two** test recordings against `official`'s one, and a 121,329-frame val split with 19.8% empty frames against a 2,000-frame populated-only sample. Train the adopted recipe there at three seeds, score LFE-Peaks and LFE-PPN on its test split (~2 min each, never measured, A32's last open row), and extract the `official`-test subset from the same pass, since `balanced` holds `frog_16-41` whole | **Moved here 2026-10-10, owner's call:** it is functionally another dataset, because every model needs retraining on it. **Never mix partitions**: `balanced`'s val is 11-36 + 10-31 and 11-36 is half of `official`'s train, so validating there while training on `official` scores the model on its own training data. State the deviation when quoting: published baselines trained on 11-36 + 12-43, `balanced` trains on 12-43 + 14-57 |
 | 1 | **DROW**: train stage 2 and stage 3 with the settings in physical units, three seeds, and report against DROW's own published baselines | 12.7 Hz, every 5th scan annotated (20x less stage-3 supervision than FROG), three classes |
 | 2 | **FROG -> DROW zero-shot**, beside it | the owner's 2026-09-15 question: one model per dataset, one transferred, or both -- each result says which |
 | 3 | **JRDB**: measure the loader's geometry, rate and annotation density first (the table's "to measure" row), then repeat | the official DR-SPAAM repo merges two lasers into 1091 points / 360 deg; our loader assumes 541 / 270 deg |
@@ -275,8 +274,9 @@ the code rather than a claim in the paper.
 set against that dataset's published baselines only; and every number states its range limit, since 10 m is not a neutral choice
 on DROW.
 
-**Cost.** DROW ~2 days of GPU at three seeds plus the zero-shot pass; JRDB unknown until step 3's measurements.
-**Gated on A62.**
+**Cost.** `balanced` ~1 day of GPU at three seeds plus the two LFE evaluations; DROW ~2 days plus the zero-shot pass; JRDB
+unknown until step 3's measurements. **Step 0 is gated on nothing** -- it needs no part of A62, since it shares FROG's loader,
+sensor and angular grid -- so it can run beside the FROG pre-print list whenever the machine is free. Steps 1-5 are gated on A62.
 
 ### A48. Re-run everything downstream of the two heading-wrap fixes
 
@@ -1194,7 +1194,7 @@ E19 ran as A51 S2. The Mahalanobis gate turned out to need a re-tuned Kalman fil
 | remove the coarse temporal convolution | the ~1.2 s motion scale. `step2 --coarse-lags 0`, expected parameter count **979,843**: the conv is `Conv1d(128*5 + 4*3, 128, 3)` = 250,496 params against 49,280 ablated (cross-checked against the drift inspection, which reported `coarse.conv.weight` at 250,368 weights plus 128 bias). **Capacity confound, recorded before the result:** this strips 201,216 parameters, 17% of the network, where the fine ablation strips 2,048 (0.17%), so a fall in AP cannot be read as the ~1.2 s span alone. The capacity-matched control is `--coarse-lags 0 0 0 0 0` — five taps on the current frame, keeping the conv 640 inputs wide against 652, which removes the temporal information without the capacity. **Result: test AP 77.01% against the control's 76.62%, +0.39 pp** (val best 73.01% at epoch 0.75; parameter count 979,843 as predicted). **The pre-registered confound does not bite**: it was registered against a *fall*, and this is a rise — losing 17% of the parameters and still gaining is the harder direction, so capacity cannot explain it away, and the matched control is not needed to defend this result. The shuffled-history penalty collapses 1.18 -> 0.18 pp, leaving the network almost static: with the coarse conv gone its whole history is the fine conv's 3 frames (0.08 s). Training is also 3.5x faster, 46 s against 165 s per epoch. One seed, screening only |
 | ~~cap every decay time at 1 s~~ | ~~whether the long horizon carries anything~~ **moot since 2026-10-08**: A60 removed the coarse convolution and the fine one went 2026-09-17, so stage 2 holds no decay time to cap. The question moved to the slots, where A51's E1 answered it: 95% of the memory's gain is inside 10 s |
 | sensor-frame x, y instead of beam-relative offsets | the input description and cache validity. **Still open and no longer about the cache**, which went with the temporal convolutions: it is now purely a question about the vote target, one training run, and A59's decomposition puts about half the lead over LFE-Peaks in the output head, which is where this would act |
-| then repeat the headline runs on the `balanced` split | §10 step 4: `official` first, then `balanced`. **Never mix partitions** (checked 2026-09-16): `balanced`'s val is 11-36 + 10-31 and **11-36 is half of `official`'s train**, so validating there while training on `official` would score the model on its own training data. Stay inside `balanced` for train/val/test — its test is 16-41 + 15-53 and holds `frog_16-41` *whole* precisely so the official-test subset is extractable from the same evaluation pass, giving the balanced number and a published-comparable one in one run. Its val is 121,329 frames with 19.8% empty against official-val's populated-only sample, which is the weakness that mis-selected the dropout checkpoint (owner's point 2026-09-16: use `balanced` where `official` fails, but never quote a published baseline on it). State the deviation when quoting: published baselines trained on 11-36 + 12-43 where `balanced` trains on 12-43 + 14-57, so the test recording is held out for everyone but the training sets differ. **Owner's call 2026-09-16: re-run the temporal ablations here, at the very end, as an artefact test.** On `official` they came out backwards — removing the fine convolution gained +1.41 pp and removing the coarse one +0.39, while validation ranked the arms in nearly the opposite order — and neither the literature nor the architecture explains it (`CHANGELOG.md`). If the same ablations behave differently on `balanced`, what we measured is an `official`-split artefact rather than a property of the model. `balanced` tests both suspects at once: **two** test recordings against `official`'s one, and a val split of 121,329 frames with empties against a 2,000-frame populated-only sample. **Sharper still, and the reason to prefer this over a plain replication:** because `balanced` holds 16-41 whole, one evaluation pass yields both subsets, so the ablation effect can be compared on 16-41 against 15-53 **with identical weights, varying only the frames**. If it appears on 16-41 alone it is pinned to that recording; if on both, the finding is real and `official` was never the problem **Re-tiered to §D 2026-10-09:** it was scheduled as the artefact test for the temporal ablations, and both convolutions have since been removed, so the arms in question no longer exist. What is left -- does the adopted recipe hold on a second partition? -- is a smaller claim for just before publication. |
+| then repeat the headline runs on the `balanced` split | §10 step 4: `official` first, then `balanced`. **Never mix partitions** (checked 2026-09-16): `balanced`'s val is 11-36 + 10-31 and **11-36 is half of `official`'s train**, so validating there while training on `official` would score the model on its own training data. Stay inside `balanced` for train/val/test — its test is 16-41 + 15-53 and holds `frog_16-41` *whole* precisely so the official-test subset is extractable from the same evaluation pass, giving the balanced number and a published-comparable one in one run. Its val is 121,329 frames with 19.8% empty against official-val's populated-only sample, which is the weakness that mis-selected the dropout checkpoint (owner's point 2026-09-16: use `balanced` where `official` fails, but never quote a published baseline on it). State the deviation when quoting: published baselines trained on 11-36 + 12-43 where `balanced` trains on 12-43 + 14-57, so the test recording is held out for everyone but the training sets differ. **Owner's call 2026-09-16: re-run the temporal ablations here, at the very end, as an artefact test.** On `official` they came out backwards — removing the fine convolution gained +1.41 pp and removing the coarse one +0.39, while validation ranked the arms in nearly the opposite order — and neither the literature nor the architecture explains it (`CHANGELOG.md`). If the same ablations behave differently on `balanced`, what we measured is an `official`-split artefact rather than a property of the model. `balanced` tests both suspects at once: **two** test recordings against `official`'s one, and a val split of 121,329 frames with empties against a 2,000-frame populated-only sample. **Sharper still, and the reason to prefer this over a plain replication:** because `balanced` holds 16-41 whole, one evaluation pass yields both subsets, so the ablation effect can be compared on 16-41 against 15-53 **with identical weights, varying only the frames**. If it appears on 16-41 alone it is pinned to that recording; if on both, the finding is real and `official` was never the problem **Moved to A63 step 0 on 2026-10-10** (owner: `balanced` is functionally another dataset). Was re-tiered to §D 2026-10-09: it was scheduled as the artefact test for the temporal ablations, and both convolutions have since been removed, so the arms in question no longer exist. What is left -- does the adopted recipe hold on a second partition? -- is a smaller claim for just before publication. |
 
 **The four temporal arms, screened 2026-09-16** on `official`, seed 0, dropout 0.0, every one parameter-count verified:
 
@@ -1265,7 +1265,7 @@ The static arm scores **identically ordered and shuffled** (77.22% / 2.776 FP / 
 
 **Order and bookkeeping:** phase 1 items 4-6 change training settings, so run them before phases 2-3 and state the settings with every later number; A49's cross-dataset runs use whatever phase 1 settles on.
 
-**The documentation refresh waits for the end of phase 3** (owner's call 2026-09-16). `docs/SHOWCASE.md` is already stale on two points — it calls the joint-training regression "under investigation", which item 2 closed, and it presents step 3b as a test of feedback when that run's prior never left zero and contributes 0.00 points — and phases 2-3 will stale its cost table and finding bullets further, so the pages are revised once at the end rather than after each result.
+**The documentation refresh waits for the end of phase 3** (owner's call 2026-09-16). It is now `docs/PAPER.md` and `memory/performance-log.md` only: **`docs/SHOWCASE.md` was deleted 2026-10-10** (owner's call), because a standalone one-page summary of the result duplicates what the write-up says and had already gone stale on two points — it called the joint-training regression "under investigation", which phase 1 item 2 closed, and it presented step 3b as a test of feedback when that run's prior never left zero.
 
 **How every model option is judged** (owner's call 2026-09-16: dropout is one option among many, so one procedure covers them all). Single runs cannot resolve the effect sizes at stake — two identically configured runs differ by ~0.3 pp of test AP and 0.74 false positives per frame, against dropout's own +0.70 pp — and with ~14 options across phases 2 and 3, chance alone would produce several convincing-looking winners. So:
 
@@ -1581,7 +1581,7 @@ Budget for it.
 ### A52. Finish the migration to the name TAKHeLiPeD
 
 **What.** The owner named the detector on 2026-09-23: **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector), *TA-KHé-Li-PeD*.
-The **documentation** half is done (`CHANGELOG.md` 2026-09-23): `README.md`, `AGENTS.md`, `memory/performance-log.md`, `memory/detector-architectures.md`, `memory/keywords.md`, `memory/commands.md`, `docs/SHOWCASE.md`, `docs/PROPOSAL.md`, `docs/PAPER.md` and `docs/RESEARCH.md`'s header.
+The **documentation** half is done (`CHANGELOG.md` 2026-09-23): `README.md`, `AGENTS.md`, `memory/performance-log.md`, `memory/detector-architectures.md`, `memory/keywords.md`, `memory/commands.md`, `docs/PROPOSAL.md`, `docs/PAPER.md` and `docs/RESEARCH.md`'s header (and `docs/SHOWCASE.md`, deleted 2026-10-10).
 The **code** half is not, deliberately: every identifier still says `three_horizon`, so no checkpoint, cache or log path moved.
 
 Left to rename, in the order that minimises breakage:
@@ -1628,7 +1628,7 @@ Neither describes the two-2D-LiDAR leg-and-chest detector, so they are context f
 
 ### A53. Rewrite `docs/RESEARCH.md` around TAKHeLiPeD
 
-**What.** `RESEARCH.md` is still titled and framed as *Full-Scan, Non-Recursive Convolutional Architectures*, which names the superseded line of work. A header note added 2026-09-23 says so and points at `PROPOSAL.md`/`PAPER.md`/`SHOWCASE.md`, but the body below it has not moved.
+**What.** `RESEARCH.md` is still titled and framed as *Full-Scan, Non-Recursive Convolutional Architectures*, which names the superseded line of work. A header note added 2026-09-23 says so and points at `PROPOSAL.md`/`PAPER.md`, but the body below it has not moved.
 
 **How.** Keep §1 (problem and metric), §3 (baselines and the fidelity audit), §4 (preprocessing) and §7 (related work), which are all still authoritative. Replace §2's goal and constraints with TAKHeLiPeD's, fold §5 and §6 into one provenance section, and fill §8 from `memory/performance-log.md` rather than restating numbers that will go stale.
 
@@ -1708,7 +1708,13 @@ Previously blocked on registration requiring a university email; no public mirro
 
 The owner's 2026-09-17 hypothesis, now planned and with a decision rule: see A60.
 
-### The adopted recipe on a second FROG partition (`balanced`) -- re-tiered here 2026-10-09 from A50 phase 2
+### ~~The adopted recipe on a second FROG partition (`balanced`)~~ -- moved to A63 step 0 on 2026-10-10
+
+**The owner's call:** `balanced` is functionally another dataset, because every model needs retraining on it, so it belongs with
+A63's other-dataset work rather than in the FROG queue. It is the *first* step there, being the cheapest -- same loader, same
+sensor, same angular grid, so it needs no part of A62. The plan below is kept for its partition rules, which A63 inherits.
+
+### Why it was here (kept for the partition rules)
 
 **What.** Train and score the adopted recipe on FROG `balanced`, which holds two test recordings against `official`'s one and a
 121,329-frame val split against a 2,000-frame populated-only sample, and which keeps `frog_16-41` whole so the official-test

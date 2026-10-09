@@ -38,6 +38,34 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The FROG work becomes a pre-print list; `balanced` becomes another dataset; SHOWCASE.md is dropped (2026-10-10)
+
+*keywords: pre-print, FROG only, balanced, A62, A63, A32, SHOWCASE.md, docs, actionable list, frame rate convention, A33-A36*
+
+Three owner calls, all bookkeeping rather than measurement, and all of them narrow what the next weeks are for.
+
+**`docs/SHOWCASE.md` is deleted.** A standalone one-page summary of the result duplicates what the write-up says, and it had
+already gone stale on two points -- it called the joint-training regression "under investigation" after A50 phase 1 item 2 closed
+it, and it presented step 3b as a test of feedback when that run's prior never left zero. References in `README.md`,
+`docs/RESEARCH.md` and `TODO.md` are gone with it; `CHANGELOG.md` keeps its mentions, being history.
+
+**`balanced` is another dataset, not another FROG split.** Every model needs retraining on it, so it moved out of the FROG queue
+into **A63 step 0**, where it is the *first* step because it is the cheapest: same sensor, same venue, same loader and the same
+angular grid, so unlike DROW and JRDB it needs no part of A62 and can run whenever the machine is free. It takes A32's last open
+row with it -- LFE-Peaks and LFE-PPN on `balanced` test, ~2 min each, never measured -- because our side of that comparison needs
+retraining there to mean anything. Its partition rules are unchanged and inherited: `balanced`'s val holds half of `official`'s
+train, so the two must never be mixed.
+
+**The FROG list is now ordered by what a pre-print needs**, not by item number. Eight items block it: the frame-rate convention
+behind every per-second figure (`evaluate` reads the stamped median, 26.2 Hz, where the sensor delivers 40 Hz, so every `FP/s` in
+the repo is 1.53x low and the "38.2 ms budget" is really 25 ms); one end-to-end cost table on the adopted recipe; the
+displacement oracle's unexplained 4.20 -> 2.58; refreshing `docs/PAPER.md` and `memory/performance-log.md` off the pre-A59
+recipe; closing A33-A36 against A35's own acceptance criteria, which TAKHeLiPeD now meets (82.2% single-frame against the 66.5%
+bar, +3.7 pp from ordered time); DR-SPAAM in its official streaming form; LFE retrained with its authors' recipe; and D4's one
+unrun flag. Ten more experiments run **in parallel with the writing** rather than before it. The owner's one open decision is
+whether A51's six single-seed arms are re-screened on the adopted recipe (~2 GPU-days) or reported labelled with the backbone
+they ran on.
+
 ## A50 phase 1 item 7: the memory is a phantom filter, and it beats LFE-Peaks where nobody is (2026-10-09)
 
 *keywords: A50, person-free, transferred, empty_scene.py, phantoms, furniture, 72533, LFE-Peaks 1.39, LFE-PPN 3.17, stale row, lidar_person_free, queue_a50_person_free*
