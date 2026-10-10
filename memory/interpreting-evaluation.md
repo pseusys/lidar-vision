@@ -159,6 +159,16 @@ The sweep is deliberate: a single operating point would be a choice presented as
 
 `duration_s` is `n_frames * frame_period_s`, never the span from the first timestamp to the last: `transferred`'s person-free frames are interleaved with populated ones the split drops, so a span would bill the detector for time it was never asked about and understate its rate.
 
+## A number in a draft is not evidence that it was measured
+
+**Found 2026-10-10.** `docs/PAPER.md` carried LFE-Peaks at **59.8%** and LFE-PPN at **63.5%** on the `balanced` partition, inside a sentence arguing that "the target any temporal architecture of ours must beat is fixed".
+No `CHANGELOG.md` entry held those numbers, no file under `memory/` held them, `TODO.md` listed the measurement as still pending — and the owner confirmed that **nothing has ever been run on `balanced`**.
+They were deleted rather than re-derived.
+
+**What this changes about reading the documents here.** `verify_memory.py` checks links, indexes and markdown style; **nothing checks that a number in `docs/` corresponds to a measurement**, and the convention that every figure is traceable to a `CHANGELOG.md` entry is enforced by review alone.
+So when a number appears only in `docs/` — in `PAPER.md`, `PROPOSAL.md` or `RESEARCH.md` — and nowhere in `CHANGELOG.md` or `memory/`, treat it as unverified until the entry is found, especially where it supports a claim rather than merely illustrating one.
+The three partitions make this easy to get wrong in one direction in particular: `official` and `transferred` share their train and val halves by construction, so a result on one often *is* a result on the other, while `balanced` shares nothing and needs its own training run.
+
 ## A frame rate is the elapsed time over the frames, never the median interval
 
 **Settled 2026-10-10, and it moved every per-second figure in the repo by 1.53x.**

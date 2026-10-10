@@ -38,6 +38,23 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Retracted: the draft's `balanced` figures, which no measurement produced (2026-10-10)
+
+*keywords: balanced, retraction, 59.8, 63.5, PAPER.md, traceability, A32, A63, LFE-Peaks, LFE-PPN, unverified number*
+
+`docs/PAPER.md` carried **LFE-Peaks 59.8%** and **LFE-PPN 63.5%** on FROG `balanced` test, supporting the claim that "the target
+any temporal architecture of ours must beat is fixed". Found while refreshing the draft for the pre-print (item 4): no
+`CHANGELOG.md` entry and no file under `memory/` holds either number, and `TODO.md` A32 still listed that evaluation as pending.
+**The owner confirms nothing has ever been exercised on `balanced`** -- the partition is defined in the loader and has never
+been run. Both figures are **deleted** from the draft, with a note in their place; `TODO.md` A32 and A63 step 0 now say plainly
+that the step starts from nothing.
+
+**The general lesson is recorded in `memory/interpreting-evaluation.md`**, because it outlives this retraction: nothing in this
+repository checks that a number in `docs/` corresponds to a measurement. `verify_memory.py` checks links, indexes and markdown
+style, and the convention that every figure traces to a `CHANGELOG.md` entry is enforced by review alone. A number that appears
+only in `docs/` is unverified until the entry is found -- and this one got as far as supporting a claim about what our own
+architecture must beat.
+
 ## Item 3: the heading-wrap fix did not move the displacement oracle, so 4.20 is superseded, not contradicted (2026-10-10)
 
 *keywords: A45, A48, displacement oracle, role C, 4.20, 2.58, heading wrap, _load_odom, np.unwrap, heading_ab.py, exchange rate, association gate, merge radius*
