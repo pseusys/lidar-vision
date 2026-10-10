@@ -38,6 +38,38 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 6 / A47: our DR-SPAAM was a windowed approximation, and that was most of its reproduction gap (2026-10-10)
+
+*keywords: A47, A48, DR-SPAAM, DrSpaamDetector, stream, _SpatialAttentionMemory, windowed, streaming, DROW test, 67.84, 69.08, 69.6, baseline fidelity, evaluate_auc stream*
+
+The official DR-SPAAM keeps its spatial-attention template between calls and clears it at `reset()`; ours re-encoded a `T`-scan
+window per frame and seeded the template from that window's oldest scan. `DrSpaamDetector.stream(scan, template)` adds the
+published form -- state in, state out, as `ObjectMemory.step` already does here -- and six tests pin the equivalence exactly:
+streaming frames 0..k reproduces the windowed forward over that prefix window, for every k, because both evaluate the same
+recursion. `evaluate_auc(stream=True)` walks every scan of each sequence in order and scores the annotated ones, so both forms
+share one decoder and one metric.
+
+| DR-SPAAM, DROW test, published weights | wp-AUC | wall clock |
+| --- | --- | --- |
+| windowed `T=5`, every figure in this repository until today | 67.84% | 1,239 s |
+| **streaming, the published algorithm** | **69.08%** | 8,719 s |
+| the authors' own published figure | 69.6% | -- |
+
+**The published algorithm is +1.24 pp better than what we were calling DR-SPAAM**, and our reproduction of it moves from -1.5 pp
+to **-0.52 pp**. Under this project's standing rule -- an undershoot has innocent explanations, an overshoot means the harness is
+wrong -- the innocent explanation turned out to be the wrapper, which also makes the result a harness self-test that now passes
+more tightly. Every DR-SPAAM accuracy figure here is the windowed form and understates the baseline by about that much.
+
+**Its cost is wrong in the other direction.** The windowed form runs the first two conv blocks five times per frame where the
+published one runs them once, so our 350.4 ms FROG row *overstates* it: we have been reporting DR-SPAAM as both less accurate
+and slower than it is. The corrected timing belongs to item 29's one-protocol sweep, which now has `stream()` to measure. The
+8,719 s above is an evaluation artefact, not a deployment cost -- the streaming pass walks every scan of every sequence one at a
+time where the windowed pass scores only annotated frames in batches of eight.
+
+**A48 item 6 closes with it.** Today's windowed run is the post-heading-fix re-measurement that item asked for: **67.84% against
+the 68.1% on record**, so the two heading-wrap fixes moved DR-SPAAM on DROW by at most ~0.3 pp. Since both fixes act through
+`cutout()`, which every cutout detector shares, that bounds their effect on DROW3 and Li2Former too.
+
 ## Retracted: the draft's `balanced` figures, which no measurement produced (2026-10-10)
 
 *keywords: balanced, retraction, 59.8, 63.5, PAPER.md, traceability, A32, A63, LFE-Peaks, LFE-PPN, unverified number*

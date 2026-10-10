@@ -133,6 +133,19 @@ Everything marked `check paper` should be transcribed from the paper, not measur
 This project *has* independently reproduced several published numbers, and those reproductions stay useful for one specific purpose: **checking the evaluation harness against a known answer.**
 On DROW the pipeline lands close — DROW3 66.5% against a published 61.9%, DR-SPAAM 68.1% against 69.6%.
 
+**DR-SPAAM's 1.5 pp undershoot was mostly our own wrapper, found 2026-10-10** (`TODO.md` A47). The official detector is
+*stateful*: it keeps its spatial-attention template between calls and clears it only at a sequence boundary. Ours re-encoded a
+`T`-scan window from scratch per frame and seeded the template from that window's oldest scan, which is a different detector.
+Scored both ways on DROW test with the published weights, through one decoder and one metric: **windowed 67.84%, streaming
+69.08%** — so the published algorithm is **+1.24 pp** better than what we were calling DR-SPAAM, and our reproduction of it
+moves from −1.5 pp to **−0.52 pp** of the authors' 69.6%. **Every DR-SPAAM accuracy figure in this file is the windowed form and
+understates the baseline by about that much**, on all three datasets.
+
+**Its cost is misreported in the opposite direction.** The windowed form runs the first two conv blocks five times per frame
+where the published one runs them once and attends to its carried template, so the 350.4 ms FROG row below *overstates* the
+published detector — we have been reporting DR-SPAAM as both less accurate and slower than it is. The corrected figure is part of
+the one-protocol timing sweep (`TODO.md` §A item 29), which now has `DrSpaamDetector.stream()` to time.
+
 On FROG it did not, and that was the visible symptom of the contamination all along: **LFE-Peaks measured 74.6% here against its authors' own 64.9%** — a +9.7pp overshoot for the same published weights on the same dataset, which is not a thing that can legitimately happen.
 
 **Standing rule: if our reproduction of a published number overshoots it, the harness is wrong.**
@@ -274,7 +287,7 @@ The paper's own figures in parentheses are **GPU** numbers and are not comparabl
 | --- | --- | --- | --- |
 | AlgorithmicDetector | **0.04 ms** | **0.06 ms** | **0.06 ms** |
 | DrowDetector (DROW3) | **203.3 ms** | **276.4 ms** *(paper, GPU, T=1: 13.08 ms)* | **235.0 ms** |
-| DrSpaamDetector (DR-SPAAM) | **201.5 ms** | **350.4 ms** *(paper, GPU: 13.95/13.99 ms)* | **298.3 ms** |
+| DrSpaamDetector (DR-SPAAM) ¹⁰ | **201.5 ms** | **350.4 ms** *(paper, GPU: 13.95/13.99 ms)* | **298.3 ms** |
 | Li2FormerDetector | **431.7 ms** *(paper, GPU: 14.95 ms)* | **590.6 ms** | **498.3 ms** *(paper, GPU: 17.54 ms)* |
 | LFEPeaksDetector | **1.07 ms** | **1.08 ms** *(paper, GPU: 1.76 ms)* | re-measure⁵ |
 | LFEPPNDetector | **1.46 ms**⁴ | **1.56 ms**⁴ *(paper, GPU: 1.49 ms)* | re-measure⁵ |
@@ -285,6 +298,9 @@ The paper's own figures in parentheses are **GPU** numbers and are not comparabl
 | **TAKHeLiPeD, stages 1-2 + decode** | n/a | **~10.4 ms**⁶ | n/a |
 | **TAKHeLiPeD, stage 3 alone** (object memory) | n/a | **4.4-4.6 ms**⁷ | n/a |
 | **TAKHeLiPeD, whole detector streaming** (A60 recipe and memory) | n/a | **20.8 ms** *(4 threads, p99 24.1)*⁹ *(old recipe 19.5 ms, GPU 12.9 ms⁸)* | n/a |
+
+¹⁰ **The windowed form**, which encodes five scans per frame; the published streaming detector encodes one and attends to its
+carried template, so this row overstates it. Re-timed under one protocol in `TODO.md` §A item 29.
 
 ⁴ Was **315.5 / 243.8 / 278.3 ms** here until 2026-09-10, and blamed on the Python decode loop.
 It was not the loop: the decoder applied a second sigmoid to a channel `lfe_ppn.onnx` had already sigmoided, so every one of the 3,600 anchors cleared any threshold and entered an O(n²) greedy merge, 182 survivors per frame on scenes holding ~3 people.
