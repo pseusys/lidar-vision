@@ -33,7 +33,7 @@ Published FROG detectors, authors' own ONNX weights, objectness threshold 0.3, A
 ¹ Average precision is undefined on a person-free split, not low: no true positives means precision is 0 at every threshold and recall has no denominator. A number here would name something the quantity is not.
 ² A false negative needs something to miss. With no annotated people, `FN / (TP + FN)` has a zero denominator — which is itself informative: the person-free split cannot see the *cost* of any false-positive reduction, so the populated columns must be read beside it.
 
-*Populated: `frog_16-41`, every 5th frame (10,034 frames, 30,737 annotated people). Person-free: all 72,533 such frames of `frog_10-31`, `frog_14-57`, `frog_15-53` — 46.1 minutes at 26.2 Hz, so the FP columns are 36 and 83 phantoms per second respectively. Published figures are the FROG benchmark's `d = 0.5 m` column, not its leading mAP-over-[0.3:0.05:0.5] column. Detections are matched to people one-to-one by Hungarian assignment gated at 0.5 m, so a second detection on an already-matched person is a false positive rather than a second true positive.*
+*Populated: `frog_16-41`, every 5th frame (10,034 frames, 30,737 annotated people). Person-free: all 72,533 such frames of `frog_10-31`, `frog_14-57`, `frog_15-53` — 30.2 minutes at 40.1 Hz, so the FP columns are 56 and 127 phantoms per second respectively. Published figures are the FROG benchmark's `d = 0.5 m` column, not its leading mAP-over-[0.3:0.05:0.5] column. Detections are matched to people one-to-one by Hungarian assignment gated at 0.5 m, so a second detection on an already-matched person is a false positive rather than a second true positive.*
 
 **The LFE-PPN row was re-measured on 2026-09-11 and every figure in it moved.** Its `nms_radius` was recalibrated from the paper's implied 0.8 m to 0.30 m — the value that actually reproduces its published AP at *both* association distances the benchmark reports — and the false-positive tables were never re-run against it. A smaller suppression radius keeps more detections, so LFE-PPN now resolves adjacent people its old radius merged (its miss rate falls) while emitting far more phantoms and duplicates. LFE-Peaks is unaffected: its own recalibration, 0.40 m to 0.30 m, changes its detection count by 3%. `CHANGELOG.md` carries the full correction.
 
@@ -50,7 +50,70 @@ Published FROG detectors, authors' own ONNX weights, objectness threshold 0.3, A
 
 1. **AP and false-positive burden rank the two detectors oppositely.** LFE-PPN wins on AP — by 3.6pp in the authors' own figures, 69.2% against 65.6% — while emitting **42% more phantoms per frame** and firing in 64.0% of empty frames against 51.0%. AP rewards the recall it holds at high thresholds and never charges for absolute phantom count, so a ranking taken from the published benchmark is not a ranking for deployment.
 2. **Both miss more than a fifth of the people present** at their own operating threshold, so the phantoms are not the price of exhaustive recall — both errors are large at once.
-3. **Half to two-thirds of person-free frames contain a phantom**, which at 26.2 Hz is a detector reporting a person who is not there dozens of times per second of empty corridor.
+3. **Half to two-thirds of person-free frames contain a phantom**, which at 40 Hz is a detector reporting a person who is not there 56 to 127 times per second of empty corridor.
+
+## The detector this argument leads to
+
+Every row below is FROG `official` test, every 5th annotated frame, three training seeds, on the recipe adopted 2026-10-08;
+`wp-AUC` is the person-class curve at a 0.5 m association distance, which is the column the published figures above also use.
+The architecture is [`PROPOSAL.md`](PROPOSAL.md): per-beam features, a single-frame ConvNeXt U-Net with a whole-scan aggregator
+and a DROW-style vote head (**stage 2**), and an object memory of 256 slots in room coordinates carrying a learned per-slot
+state (**stage 3**). **Stage 2 reads one scan per call** — it has no temporal input of any kind — so every temporal claim below
+belongs to the memory.
+
+| | wp-AUC | phantoms per person-free frame | ms/frame, CPU (4 threads) | ms/frame, GPU |
+| --- | --- | --- | --- | --- |
+| LFE-Peaks, authors' weights | 65.1% | 1.39 | 1.08 | — |
+| LFE-PPN, authors' weights | 69.6% | 3.17 | 1.56 | — |
+| DR-SPAAM, **authors' published FROG figures** ¹ | 73.7% (`T=1`), 75.6% (`T=5`) | not reported | 350.4 ² | — |
+| **stage 2 alone**, one scan per call | **82.20%** | 2.62 | 11.54 | 8.64 |
+| **stage 2 + object memory** | **85.87%** | **0.74** | 20.98 *(p99 25.32)* | 13.32 *(p99 15.32)* |
+
+*¹ Cited, not measured here: these are the authors' FROG numbers. ² Measured here, on this machine's CPU: DR-SPAAM runs one
+forward pass per beam, which is where the two orders of magnitude go. Our CPU column is the whole pipeline — network, candidate
+decoding and the memory — streamed one scan at a time.*
+
+**Three results carry the argument.**
+
+**1. The memory removes phantoms, which is what the problem statement asked for.** On the 72,533 person-free frames stage 2
+alone emits **2.62** detections per frame — worse than both published detectors, because it is tuned for recall where people
+exist — and the memory takes that to **0.740**, a 72% cut and **below LFE-Peaks' 1.39**, which no published detector on this
+split reaches. At a 0.9 confidence threshold the contrast is categorical: the published detectors still hallucinate in a third
+to a half of empty frames, and the whole detector does so in **0.9%** of them. It is not an artefact of remembering people who
+have just left: 42.4% of those frames fall within the slots' 10 s fade of someone in view, and restricted to the 41,797 frames
+beyond that horizon the cut is **larger** (−76%). What survives is furniture, as the theory says it must — the memory's
+remaining phantoms recur in the next frame **92.2%** of the time, against 84.9% for the candidates it filtered and 99.8% for
+real people.
+
+**2. The gain is the learned memory, not association.** Every row shares one detector's candidates, so the only difference is
+what reads them:
+
+| what reads stage 2's candidates | wp-AUC, 3 seeds | against the candidates |
+| --- | --- | --- |
+| nothing | 82.19% | — |
+| SORT, `min_hits = 1` | 82.31% | +0.14 / +0.12 / +0.12 |
+| ByteTrack as published | 81.17% | −0.94 / −1.11 / −1.00 |
+| ByteTrack + CBMOT, tuned on validation | 83.51% | +1.30 / +1.35 / +1.32 |
+| **the object memory** | **85.87%** | **+4.13 / +3.66 / +3.26** |
+
+The memory beats a tuned published tracker by **+2.36 pp**, with every seed's bootstrap interval above zero, and GOSPA agrees
+(0.454 against 0.493). The ablations locate the mechanism: removing the slot-to-slot attention costs nothing and saves 43% of
+the parameters, removing the learned matching costs nothing, and **removing the learned per-slot state is the only ablation that
+costs anything** — −1.60 pp of recall at a matched false-positive rate, at 1.9 times its three-sigma bar. Feeding the memory's
+state back into stage 2 was measured null in three configurations, including one with a ground-truth prior and no competitor,
+and the cause was measured: the prior carries 0.012–0.045% of its layer's input.
+
+**3. It is a real-time detector on a GPU, and marginal on a CPU.** Streamed one scan at a time against FROG's own 25 ms frame
+period: **13.32 ms** on an RX 9060 XT, 53% of the budget and 61% at the 99th percentile; **20.98 ms** on four CPU threads, 84%
+of the budget but **101% at p99**, so a CPU-only deployment would drop occasional frames. The memory is the larger half of the
+CPU cost and the smaller half of the GPU's.
+
+**What the design still owes the reader.** The memory's advantage shrinks as stage 2 improves — **+5.68 pp** over candidates
+scoring 77.66%, **+3.68** over candidates scoring 82.2% — which is about 2 pp of gain per 4.5 pp of detector improvement, and a
+trend a reader is entitled to extrapolate. Room coordinates, the design's central claim, win only below roughly 0.015 m/s of
+odometry drift; training with jittered poses buys +1.75 pp at 0.05 m/s and +4.34 at 0.1 for nothing at zero drift, but does not
+move that crossover. And the coasting head, which reports a remembered person no candidate supports, fires **0.001 times per
+frame** on this recipe: it is described here because the architecture contains it, not because it acts.
 
 ## Model extensions: temporal reasoning on top of a frozen detector
 
@@ -108,17 +171,16 @@ This does not rescue the single-frame setting — the radius saturates exactly a
 
 ### How far any such stage could reach: two oracles
 
-The tracking result bounds what *association* can achieve; it does not bound what temporal reasoning could achieve, and conflating the two would let a weak method stand in for a class of methods. We therefore measure the second directly, with an oracle that is agnostic to mechanism: treating every annotated person as a trajectory, a miss counts as recoverable if that same trajectory was detected both before and after it within a horizon `h`; treating every prediction on a person-free frame as a trajectory, a phantom counts as removable if its longest consecutive trail is shorter than `h`. Sweeping `h` separates two horizons the literature has always reported as one. **Gap-bridging saturates early** — 90% of the available recall gain is reached by 10 s and all of it by 20-30 s, lifting LFE-Peaks from 75.9% to 85.5% recall and LFE-PPN from 83.8% to 90.5% — whereas **trail-rejection is still climbing where the other has finished**, reaching 90% of its available phantom reduction only at 30 s (89.7% of LFE-Peaks' phantoms, 93.9% of LFE-PPN's) and completing at 60 s. The recall half stops where it does for a reason that is a property of the venue rather than of any model: ground-truth person trajectories have a median duration of **4.9 s** and only **3.6%** survive 30 s, so beyond that horizon there is nothing left to bridge. The phantom side inverts under the correct weighting — 4.2% of LFE-Peaks' phantom trajectories reach one second, but those carry **67.7%** of its phantom detections, and the 0.1% reaching thirty seconds still carry 10.3% — so almost every phantom *trajectory* is a single-frame flicker while almost every phantom *detection* belongs to a handful of very long-lived ones, and **the object that must be remembered longest is never a person**. This is not an artifact of the observation window: the person-free run is 305 s long and the longest trail in it is 44.1 s.
+The tracking result bounds what *association* can achieve; it does not bound what temporal reasoning could achieve, and conflating the two would let a weak method stand in for a class of methods. We therefore measure the second directly, with an oracle that is agnostic to mechanism: treating every annotated person as a trajectory, a miss counts as recoverable if that same trajectory was detected both before and after it within a horizon `h`; treating every prediction on a person-free frame as a trajectory, a phantom counts as removable if its longest consecutive trail is shorter than `h`. Sweeping `h` separates two horizons the literature has always reported as one. **Gap-bridging saturates early** — 90% of the available recall gain is reached by **5 s** and 95% by **10 s**, lifting LFE-Peaks from 75.9% to 85.5% recall and LFE-PPN from 83.8% to 90.5% — whereas **trail-rejection is still climbing where the other has finished**, reaching 79.8% of LFE-Peaks' phantoms at 10 s, 89.7% at 20 s and completing only at **30 s**. The recall half stops where it does for a reason that is a property of the venue rather than of any model: ground-truth person trajectories have a median duration of **4.5 s** and only **0.9%** survive 30 s — carrying 5.5% of all person-observations — so beyond that horizon there is nothing left to bridge. The phantom side inverts under the correct weighting — **3.0%** of LFE-Peaks' phantom trajectories reach one second, but those carry **62.7%** of its phantom detections, and the 0.2% reaching ten seconds still carry 20.2% — so almost every phantom *trajectory* is a single-frame flicker while almost every phantom *detection* belongs to a handful of very long-lived ones, and **the object that must be remembered longest is never a person**. This is not an artifact of the observation window: the person-free run is 200 s long and the longest trail in it is 24.0 s.
 
 **The precision half of that oracle bounds removal, not discrimination, and the difference turned out to be most of the story.** It was measured on person-free frames, where every detection is a phantom and a filter cannot destroy a true positive. We therefore re-measured it where it must discriminate: on all 50,088 populated frames of the test recording, with trails built by nearest-neighbour association over every detection and the filter charged for every person it removes.
 
 | acausal filter, LFE-Peaks | best exchange rate | at |
 | --- | --- | --- |
-| trail length, no gap tolerated | 2.43 FP per FN | 0.10 s |
-| trail length, 1 s gap tolerated | 2.54 | 0.25 s |
-| **world-frame displacement** | **4.20** | 0.30 m |
+| trail length, no gap tolerated | **2.37 FP per FN** | 0.10 s |
+| **world-frame displacement** | **2.58** | 0.10 m |
 
-Displacement is the right feature — the separating claim was always that *a person eventually moves and a chair never does*, which is displacement rather than persistence — and at 0.80 m it removes 36.1% of phantoms for 6.9% of true positives. But even with perfect hindsight on the right feature, **the best filter only just clears the tracker and is five times worse than the merge radius.** And the ceiling is **association-limited**: in FROG's crowds (~3.9 people per frame) nearest-neighbour association merges a person's detections into a nearby phantom's trail, which then carries the phantom's low displacement, so a filter aimed at the chair destroys the person. A trail cannot be filtered better than it can be formed.
+Displacement is the right feature — the separating claim was always that *a person eventually moves and a chair never does*, which is displacement rather than persistence — and at 0.30 m it removes 36.0% of phantoms for 10.7% of true positives. But even with perfect hindsight on the right feature, **the best filter does not even match a standard tracker, and is 8.5 times worse than a post-processing constant.** *(Both rows were 2.43 and 4.20 in earlier drafts, measured before LFE-Peaks' merge radius was recalibrated; the fall is not caused by the heading-wrap fix, which accounts for 0.05 of it — `CHANGELOG.md` 2026-10-10.)* And the ceiling is **association-limited**: in FROG's crowds (~3.9 people per frame) nearest-neighbour association merges a person's detections into a nearby phantom's trail, which then carries the phantom's low displacement, so a filter aimed at the chair destroys the person. A trail cannot be filtered better than it can be formed.
 
 The recall half is untouched by this correction: it follows annotated identities, so its association is perfect by construction, and its +9.6 and +6.7 points of recall remain the largest measured headroom in this study.
 
@@ -151,15 +213,16 @@ The reason is structural, and the table shows it directly: requiring a location 
 | stage after the detector | causal | LFE-Peaks | LFE-PPN |
 | --- | --- | --- | --- |
 | persistence map over detections | yes | 0.57 | — |
-| background model over scan returns | yes | 1.90 | 3.32 |
-| trail-length filter | **no** — oracle | 2.54 | — |
-| SORT, `min_hits = 3` | yes | 3.8 | 9.8 |
-| displacement filter | **no** — oracle | 4.20 | — |
+| background model over scan returns | yes | ~1.80 | 2.92 |
+| trail-length filter | **no** — oracle | 2.37 | — |
+| **displacement filter** | **no** — oracle | **2.58** | — |
+| SORT, `min_hits = 3` | yes | **4.06** | withdrawn ³ |
 | **merge radius, 0.30 → 0.40 m** | yes | **21.9** | **~63** |
 
 *False positives removed per false negative added, populated frames, best setting of each.*
+*³ LFE-PPN's SORT rate was derived from figures measured before its `nms_radius` was recalibrated, and the claim built on it — that LFE-PPN benefits less from tracking — did not survive the re-run (`CHANGELOG.md` 2026-09-11). It is withdrawn rather than corrected.*
 
-**Nothing built on top of a frozen detector beats a post-processing constant, and only an acausal oracle beats the tracker.** The ordering is the same on both detectors wherever both were measured.
+**Nothing built on top of a frozen detector beats a post-processing constant, and no temporal stage — not even an acausal oracle on the right feature — beats a plain tracker.** The ordering is the same on both detectors wherever both were measured, and the restatement of 2026-10-10 strengthened it: the displacement oracle, which earlier drafts put above SORT at 4.20, is **2.58** against SORT's 4.06 once it is measured on detections from the recalibrated detector. Every temporal stage tried on a frozen detector therefore sits between 0.57 and 4.06, while simply widening the merge radius returns **21.9**.
 
 The failures share two causes, and neither is the horizon. **Association:** the tracker's single match radius cannot be tight enough for FROG's crowds and loose enough for one person's own motion at once, and the best displacement filter is capped by exactly that association. **Keying:** memory indexed by world location, on a platform that moves through its world, records the robot's path rather than the scene's structure. The horizon argument survives both — the separating evidence still lives at tens of seconds, and the recall half of the oracle, which assumes neither a radius nor a location, is still worth +9.6 points — but the negative results constrain what can reach it. **The memory must be keyed by object rather than by place, its association must be learned rather than set by a radius, and its evidence must reach the detector before the threshold rather than after it**: a stage after the threshold can only delete detections or coast tracks, while a fifth of LFE-Peaks' misses (4.4 points of recall) sit in the 0.1-0.3 band of its own probability map, where evidence from memory could lift them. Thirty seconds at FROG's 26.2 Hz is **786 frames**, which is infeasible as a feed-forward window over 720 beams and unremarkable as a recurrent state over a handful of objects — and that arithmetic, rather than any appeal to expressiveness, is our argument for a recurrent architecture. The design that follows from these constraints is [`PROPOSAL.md`](PROPOSAL.md).
 
@@ -202,12 +265,14 @@ Three things worth knowing before running these.
 
 ## Status of this draft
 
-Written and measured: the theory, the dataset design, the baseline table, and every model extension — tracker, merge radius, both oracles, persistence map and background model — with a negative result for each.
+Written and measured: the theory, the dataset design, the baseline table, every model extension — tracker, merge radius, both oracles, persistence map and background model — with a negative result for each, and **the detector itself**: stage 2 at 82.20%, the whole detector at 85.87%, its phantom rate on empty scenes, its cost against the frame period, and the ablations that locate its mechanism.
+
+**One number in this draft is not traceable and must be fixed or dropped before it is circulated.** The `balanced` figures below — LFE-Peaks 59.8%, LFE-PPN 63.5% — appear in no `CHANGELOG.md` entry and in no file under `memory/`, while `TODO.md` A32 still lists that measurement as pending. This document's own rule is that every number is traceable to an entry, so either the measurement is re-run and recorded (it takes ~2 minutes with the published weights) or the sentence goes. It is queued as part of A63 step 0, where `balanced` now lives.
 
 Not yet written, and not yet measured:
 
 - `balanced` results for a model of ours, which need their own training run to mean anything and are the expensive remaining item. The published detectors have now been measured there — LFE-Peaks **59.8%**, LFE-PPN **63.5%**, against 65.1% and 69.6% on `official` — so the target any temporal architecture of ours must beat is fixed.
-- Any result for a temporal *architecture*. The theory predicts short-window models will not fix this and long-horizon ones will; the tracking result supports the first half, and the second half is untested.
-- The architecture itself. [`PROPOSAL.md`](PROPOSAL.md) carries the three-stage design derived from the extensions' failures; it is now built and measured as TAKHeLiPeD (`../memory/performance-log.md`: stage 2 alone 82.2% and the whole detector 85.9% on the recipe adopted 2026-10-06 (77.7% and 83.3-83.9% before it); its stage 2 reads one frame since its coarse temporal convolution was dropped, 2026-10-08), and this draft does not yet describe it.
+- ~~Any result for a temporal *architecture*.~~ **Measured**: the theory predicted short-window models would not fix this and long-horizon ones would, and both halves now have numbers — a five-frame window costs 0.5 pp when shuffled and a tuned tracker buys +1.32 pp, against the memory's +3.68 over the same candidates, with 95% of that gain available within 10 s of history (`memory/slot-design-evidence.md`). What is **not** measured is whether the advantage survives a stronger single-frame detector: it has already fallen from +5.68 to +3.68 pp as stage 2 went from 77.66% to 82.2%.
+- ~~The architecture itself.~~ **Built, measured and now in this document** (section "The detector this argument leads to"). [`PROPOSAL.md`](PROPOSAL.md) carries the design derived from the extensions' failures (`../memory/performance-log.md`: stage 2 alone 82.2% and the whole detector 85.9% on the recipe adopted 2026-10-06 (77.7% and 83.3-83.9% before it); its stage 2 reads one frame since its coarse temporal convolution was dropped, 2026-10-08), and this draft does not yet describe it.
 - **Why stage 2 alone already beats DR-SPAAM and LFE**, which a reviewer will ask before anything about memory. Measured so far (`TODO.md` A59, `../memory/static-detector-diagnosis.md`): not the decoder (DR-SPAAM's own decoder on our outputs scores ~2.6 pp *higher*), not capacity against the cutout detectors (half their parameters), not compute (fewer scans seen than any baseline); the gain is far and isolated people, and the close-pair and 1-4 m deficits seen through our own vote-grid decoder vanish under NMS, which also lifts stage 2 to ~80%. The attribution ladder (2026-10-09) then rules out the input, the size and the training protocol as the main cause: LFE's `1 - r/10` as the only input costs nothing once weights are averaged (82.34% against 82.20%), LFE's widths (64k parameters) cost ~1.4 pp, all on people beyond 6 m, and DR-SPAAM's protocol costs 1.84 pp, two thirds of it from testing the last weights rather than the best on held-out recordings -- and every arm still scores 80-82%. What remains is the network's form (a ConvNeXt U-Net with whole-scan aggregation) and its training recipe; LFE retrained with its own code, shuffling fixed, would separate LFE's architecture from LFE's training (A59 phase 3b).
 - A residual +2.1pp on our LFE-Peaks reproduction was traced to our own merge radius and closed; a residual mislocalisation in our LFE-PPN decoder, visible only at the 0.3 m association distance, remains open (`TODO.md` A32d).
