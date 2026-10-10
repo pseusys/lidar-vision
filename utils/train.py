@@ -1034,7 +1034,8 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
                  diff_channels: bool = False, global_normalize: bool = False,
                  local_normalize_window: int = 0,
                  return_curves: bool = False, tracker_kwargs: dict = None,
-                 max_frames: int = 0, return_detections: bool = False):
+                 max_frames: int = 0, return_detections: bool = False,
+                 stream: bool = False):
     """
     Run full inference on every annotated frame and compute per-class AUC.
 
@@ -1055,6 +1056,15 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
     evaluated. It exists so the false-positive rate on a person-free split
     (TODO.md A31) counts exactly the detections this function would have
     scored, rather than a second decoder written for that metric alone.
+
+    `stream` plays every scan of each sequence in order through the detector's
+    own `stream()` method, carrying its state and dropping it at sequence
+    boundaries, and scores the annotated frames among them. It is the form the
+    DR-SPAAM authors published, where a frame's answer depends on the whole
+    sequence before it; the default re-encodes a `T`-scan window per annotated
+    frame, which is a different detector (TODO.md A47). Only detectors that
+    define `stream()` support it, and the two share this function's decoder and
+    metric so that the difference between them is the detector and nothing else.
 
     Returns a dict with keys 'agnostic', 'wc', 'wa', 'wp'.
     """
@@ -1134,6 +1144,40 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
         # auto-regressive template gets the refinement depth it expects.
         _time_frame = getattr(net, "num_scans", dataset.time_frame)
 
+        if stream:
+            if not hasattr(net, "stream"):
+                raise ValueError(f"{type(net).__name__} defines no stream(); only a stateful detector can be streamed")
+            wanted = {}
+            for seq, det_idx in all_pairs:
+                wanted.setdefault(seq, {})[int(dataset.idet2iscan[seq][det_idx])] = det_idx
+            for seq in sorted(wanted):
+                state = None
+                for iscan in range(len(dataset.scans[seq])):
+                    scan = dataset.scans[seq][iscan]
+                    scans_hist, odoms_hist = dataset.get_scan(seq, iscan, 1, dtime=1)
+                    one = _extract_input(net, scan, scans_hist, odoms_hist, _angles, cfg, device,
+                                         align_scans=align_scans, history_mode=history_mode, history_seed=iscan,
+                                         diff_channels=diff_channels, global_normalize=global_normalize,
+                                         local_normalize_window=local_normalize_window)
+                    logits, vpred, state = net.stream(one[:, 0, :], state)
+                    det_idx = wanted[seq].get(iscan)
+                    if det_idx is None:
+                        continue
+                    if logits.shape[-1] == 1:
+                        confs = torch.zeros(logits.shape[0], 4, device=logits.device)
+                        confs[:, 3] = torch.sigmoid(logits)[:, 0]
+                    else:
+                        confs = F.softmax(logits, dim=-1)
+                    all_confs.append(confs.cpu().numpy())
+                    all_votes_raw.append(vpred.cpu().numpy())
+                    all_scans_for_pr.append(scan)
+                    all_wcs.append(dataset.det_wc[seq][det_idx])
+                    all_was.append(dataset.det_wa[seq][det_idx])
+                    all_wps.append(dataset.det_wp[seq][det_idx])
+                    pbar.update(1)
+            pbar.close()
+            all_pairs = []
+
         for seq, det_idx in all_pairs:
             iscan = dataset.idet2iscan[seq][det_idx]
             scan  = dataset.scans[seq][iscan]
@@ -1157,7 +1201,8 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
 
         if buf_x:
             _flush_auc()
-        pbar.close()
+        if not stream:
+            pbar.close()
 
     # ------------------------------------------------------------------ #
     # Decode raw model outputs -> (det_x, det_y, det_p, det_f)            #

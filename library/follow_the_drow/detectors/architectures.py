@@ -263,6 +263,27 @@ class DrSpaamDetector(nn.Module):
         return logits, votes
 
     @torch.no_grad()
+    def stream(self, scan: torch.Tensor, template: Optional[torch.Tensor]
+               ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """One scan at a time, carrying the attention template between calls -- the form the authors published.
+
+        `scan` is `(N_beams, S)`, `template` the state this method returned for the previous frame of the same sequence, or
+        `None` at a sequence boundary, which is what the official `reset()` does. Returns `(logits, votes, template)`.
+
+        `forward` above re-encodes a whole `T`-scan window and initialises the template from its oldest scan, so it answers
+        "what would the detector say having seen exactly these `T` scans?" -- which is not what a deployed DR-SPAAM says
+        (`TODO.md` A47). Both evaluate the same recursion, so streaming frames 0..T-1 reproduces `forward` on that window
+        exactly; `tests/test_drspaam_streaming.py` pins it per prefix.
+        """
+        self.eval()
+        feat = self._encode(scan.reshape(-1, 1, scan.shape[-1])).reshape(1, -1, 256, self._n_pts)
+        carried = feat if template is None else self.gate(feat, template)[0]
+        out = carried.reshape(-1, 256, self._n_pts)
+        out = F.max_pool1d(self.conv_block_3(out), 2)
+        out = F.avg_pool1d(self.conv_block_4(out), self._n_pts // 2)
+        return self.conv_cls(out)[:, :, 0], self.conv_reg(out)[:, :, 0], carried.detach()
+
+    @torch.no_grad()
     def forward_one(self, xb) -> Tuple[np.ndarray, np.ndarray]:
         """Numpy-in, numpy-out inference (single scan)."""
         self.eval()
