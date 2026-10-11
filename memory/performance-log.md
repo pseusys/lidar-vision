@@ -172,6 +172,23 @@ It points at the anchor-decode geometry calibrated on 2026-09-10, whose angular 
 
 ## Why stage 2 beats LFE and DR-SPAAM: what it is *not*
 
+**What the lead is made of, measured on fixed weights** (A59 phase 1; FROG `official` test, 0.5 m match radius). Each row changes one thing and keeps everything above it, so the deltas add to the whole gap:
+
+| | wp-AUC | step |
+| --- | --- | --- |
+| LFE-Peaks, as its authors published it | 65.11% | — |
+| **our network, read through LFE's own peak decoder** | 71.26% | **+6.15** |
+| its peaks reported at the regressed vote, not the beam's endpoint | 74.10% | +2.84 |
+| DROW's vote grid instead of per-beam peaks | 77.27% | +3.17 |
+| DR-SPAAM's NMS at 0.5 m | 79.88% | +2.61 |
+| A59's adopted training recipe (`nms-mean`, mirroring, nearest-person labels, dropout, weight averaging) | **82.20%** | +2.32 |
+
+**Half the lead is the output head.** The three decoding steps are worth **+8.62 pp** together — 50% of the 17.09 pp gap — against **+6.15** for swapping in our network while keeping LFE's decoder, and **+2.32** for the training recipe on top.
+So *how a detection is reported* matters more here than *what network produces it*: given identical per-beam outputs, reporting one peak per probability maximum and merging at 0.30 m leaves about 8.6 points on the table.
+
+**Read the +6.15 honestly.** It is our *trained* network through their decoder, so it bundles the network's form with our training, and the ladder below is what narrows that: LFE's input features are worth nothing to us (+0.14), its widths cost 1.50 pp, both together 1.58, and DR-SPAAM's whole training protocol 1.84 — so the +6.15 is neither the input, nor the capacity, nor the optimiser.
+What it is instead — the network's form, a ConvNeXt U-Net with a whole-scan aggregator, against the training that produced LFE's own weights — is the one split this study does not make (`TODO.md` §A item 7, dropped).
+
 **A59's attribution ladder, completed 2026-10-11.** Each arm takes one thing from a published baseline and leaves everything else in the adopted recipe, three seeds, weights averaged, `nms-mean` decoding, every 5th annotated FROG test frame.
 
 | arm | what it borrows | wp-AUC | against C1 |
