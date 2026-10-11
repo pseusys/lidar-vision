@@ -84,10 +84,31 @@ The four papers this research compares against (Sections 3, 7) each report their
 
 | Baseline | Used as a comparison point by | Why not replicated here |
 |---|---|---|
-| **ROS `leg_detector`** (Pantofaru, ROS package, 2010) — jump-distance leg clustering + random-forest classifier + Kalman-filter tracking, off-the-shelf pretrained model | DROW (IROS 2018), Li2Former (TIM 2024), and FROG (2025) all use it as their weakest baseline | Consistently the lowest-scoring method in every one of those papers' own tables (e.g. FROG Table 4: mAP 15.8 vs. 73+ for DROW3/DR-SPAAM). This repo already carries a non-learned reference point, prof. O. Aycard's `AlgorithmicDetector` (Section 2.1) — replicating a second classical leg-tracker would duplicate that role without adding anything to the actual research question (full-scan vs. cutout **deep** architectures). |
+| **ROS `leg_detector`** (Pantofaru, ROS package, 2010) — jump-distance leg clustering + random-forest classifier + Kalman-filter tracking, off-the-shelf pretrained model | DROW (IROS 2018), Li2Former (TIM 2024), and FROG (2025) all use it as their weakest baseline | Consistently the lowest-scoring method in every one of those papers' own tables (e.g. FROG Table 4: mAP 15.8 vs. 73+ for DROW3/DR-SPAAM). This repo already carries a non-learned reference point, prof. O. Aycard's `AlgorithmicDetector` (Section 2.1) — replicating a second classical leg-tracker would duplicate that role without adding anything to the actual research question (full-scan vs. cutout **deep** architectures). **Reconsidered and declined 2026-10-11** (`TODO.md` §A item 33), on the owner's proposal to prefer it precisely because it is the official, better-maintained ROS answer: see below. |
 | **Segment-based detector, Arras et al.** (ICRA 2007) — jump-distance segmentation + boosted-features classifier on hand-crafted geometric features | DROW (IROS 2018), Li2Former (TIM 2024) | No official training code was ever released — even the DROW paper itself had to fall back on a third-party ROS reimplementation (Linder & Breuers et al.) rather than the original. Replicating it here would itself be an unverified reimplementation, several steps removed from the actual paper, for a baseline that isn't part of this project's own architectural question. |
 | **Joint leg tracker, Leigh et al.** (ICRA 2015) — Kalman-filter tracker jointly associating pairs of leg clusters into person tracks | DROW (IROS 2018), Li2Former (TIM 2024) | The DROW paper's own evaluation found it stops producing detections beyond ~7 m range and requires per-dataset threshold retuning to be usable at all — a known, paper-acknowledged limitation of the two-leg-assumption approach, not a competitive comparison point for this project's learned-detector research. |
 | **PeTra** (Guerrero-Higueras et al., Frontiers in Neurorobotics, 2019) — full 2D U-Net over a 256×256 rasterized occupancy-grid image, with an external leg-pairing post-process | FROG (2025), as its "modern leg-based" baseline | Already discussed as the closest *related* full-scan work in Section 7.2 — but its task framing differs (binary occupancy-grid segmentation, not this project's shared beam-classification-plus-vote-regression head) and it is markedly slower in FROG's own benchmark (~28 ms/scan vs. <2 ms for LFE, ~14 ms for DROW3/DR-SPAAM). A fair replication would need a separate evaluation harness rather than a drop-in addition to the shared pipeline. |
+
+**The `leg_detector` question, reopened and settled 2026-10-11.** The owner asked whether it should *replace* Aycard's
+detector rather than merely be skipped, on the reasonable grounds that it is the detector a ROS user would actually reach for
+and is better explored and maintained than an algorithm written for one lab. Three findings decided it, and the resolution was
+to **cite it rather than measure it**:
+
+1. **It is not the rule-based counterpart it looks like.** `leg_detector` extracts hand-crafted features from laser clusters —
+   point count, width, linearity, circularity, boundary regularity — and feeds them to a **trained OpenCV random forest shipped
+   with the package**. It is a classical-*ML* baseline. Aycard's detector is the only genuinely rule-based point in this
+   comparison, so substituting one for the other would not swap like for like; it would delete a category.
+2. **A number for it here would be zero-shot, and this repo has a rule about that.** Its shipped forest was trained on the
+   authors' own data at their own sensor height, so a FROG score would be cross-regime transfer reported beside in-domain
+   numbers — the exact mixing `AGENTS.md` rule 3 exists to prevent, requiring the caveat restated at every mention.
+3. **Obtaining one costs days, not hours.** It is a ROS 1 catkin package, so it means either replaying FROG as `LaserScan`
+   messages inside the Docker image and capturing its output, or porting its feature extraction and forest and verifying the
+   port against the original. "Maintained" also cuts the other way: ROS 1 is end-of-life and this detector has no ROS 2
+   successor in the `people` stack.
+
+So it is named here as the standard ROS answer and as the weakest baseline in three of the four papers this project compares
+against, with no row of our own — **revisited only alongside a real-ROS deployment of TAKHeLiPeD**, where its own stack is
+available and the comparison would sit in its natural setting instead of being ported into ours.
 
 No other model variants were found published alongside `LFEPeaksDetector`/`LFEPPNDetector`: the FROG paper's own benchmark (Table 4) and the authors' file host (`robotics.upo.es/~famozur/onnx/`) contain exactly these two ONNX exports for the LFE family — `LFE-Peaks.onnx` and `LFE-PPN.onnx`, both already bundled here — alongside unrelated models from the same lab's other projects (object detection, dialogue ontologies), not additional LFE variants.
 

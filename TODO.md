@@ -154,7 +154,7 @@ than it was put, and the reasons are below rather than in a commit message.
 | # | action | why | cost |
 | --- | --- | --- | --- |
 | 32 | **Retire `FullScanTCNDetector` and `TemporalUNetDetector`**, and **keep `SpaceTimeCNNDetector`** -- the owner's refinement: the one architecture the project's decisions rest on stays, so those decisions stay reproducible | Nothing has been trained on any of the three since 2026-09, but SpaceTimeCNN is the one whose history ablation reorganised the whole project and whose 63.0% is what A35's acceptance criteria were written against. The other two influenced no decision | ~1 h, and the cascade below **disappears** |
-| ~~33~~ | ~~**The ROS `leg_detector` as a baseline**~~ **Closed 2026-10-11 by the owner: mention it, do not build it.** It cannot be reproduced in this setup, so a number would be unobtainable or unfair; revisited only if TAKHeLiPeD is taken to real ROS (§E). The findings below stay, because they are the reasons | -- | -- |
+| ~~33~~ | ~~**The ROS `leg_detector` as a baseline**~~ **Done 2026-10-11, by the owner's call: mention it, do not build it.** It cannot be reproduced in this setup, so a number would be unobtainable or unfair. The mention and its three reasons are now `docs/RESEARCH.md` §2.2, routed from `memory/keywords.md`; revisited only if TAKHeLiPeD is taken to real ROS (§E) | -- | done |
 
 **Item 32's scope, after the owner's refinement.** Keeping SpaceTimeCNN removes every consequence that made this risky:
 **exactly six definitions go** -- `FullScanTCNDetector`, `TemporalUNetDetector` and the four blocks only they use
