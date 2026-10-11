@@ -207,17 +207,39 @@ Width's 1.5 pp is also entirely on far people, which is what makes range anchors
 
 ## TAKHeLiPeD's cost, end to end, one scan at a time
 
-**Measured 2026-10-10 on the adopted recipe** (`tracking_baselines.py latency`, E22; 2,000 consecutive test scans, batch 1, one stream, as on the robot; `checkpoints_three_horizon/a61/latency_*.json`).
+**Re-measured 2026-10-11 on the adopted recipe** (`tracking_baselines.py latency`, E22 / item 30; 2,000 consecutive test
+scans, batch 1, one stream, as on the robot; `checkpoints_three_horizon/a61/latency_*.json`, with the pre-item-30 files kept
+beside them as `*.pre-item30.json`).
 The budget is **25 ms**, FROG's real frame period — not the 38.2 ms that every earlier cost claim was set against (`interpreting-evaluation.md`).
 
 | | stage 1-2 | candidate decoding | object memory | **total** | p99 | share of the 25 ms budget |
 | --- | --- | --- | --- | --- | --- | --- |
-| **GPU** (RX 9060 XT) | 5.41 | 3.23 | 4.58 | **13.32 ms** | 15.32 | **53%**, 61% at p99 |
-| **CPU, 4 threads** | 8.71 | 2.83 | 9.27 | **20.98 ms** | 25.32 | **84%**, **101% at p99** |
+| **GPU** (RX 9060 XT) | 5.58 | 2.01 | 4.65 | **12.32 ms** | 13.63 | **49%**, 55% at p99 |
+| **CPU, 4 threads** | 8.44 | 1.51 | 9.14 | **19.15 ms** | 22.07 | **77%**, **88% at p99** |
 
-**The GPU has headroom; the CPU's tail does not.** At the 99th percentile four CPU threads take 25.32 ms against a 25 ms budget, so a CPU-only deployment would drop frames occasionally — which the old 38.2 ms figure concealed, since the same measurement read as 55% of budget.
-**The memory is the larger half of the CPU cost** (9.27 ms against stage 2's 8.71) and the smaller half of the GPU's (4.58 against 5.41): it is latency-bound on a CPU and bandwidth-cheap on a GPU.
-Decoding is 2.8-3.2 ms either way and is pure Python plus numpy, so it is the obvious target if a deployment needs margin.
+**Both now have headroom, and the CPU only got it in item 30.** The same CPU row read **20.98 ms, p99 25.32 — 101% of the
+budget** until the candidate decode was restructured: it ran one Python iteration per voting beam, 314 per frame to keep 22
+detections, and built a 314x314 distance matrix to do it. Iterating only the beams still alive took decoding from **2.83 ms to
+1.51** (p99 5.47 to 2.44) and the whole detector from 101% to **88% at p99**. The output is **bit-identical**, which is what
+makes it free: no checkpoint, no candidate cache and no accuracy number moves, and a randomised test pins the new loop against
+a transcription of the old one in both decoding modes (`tests/test_stage2_probe.py`).
+
+**Thread scaling saturates at two, and the memory does not scale at all** (item 30, same 2,000 scans and checkpoints):
+
+| CPU threads | stage 1-2 | decoding | memory | **total** | p99 | p99 vs budget |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 20.56 | 1.47 | 8.92 | **31.03 ms** | 37.82 | 151% |
+| 2 | 9.16 | 1.48 | 9.10 | **19.75 ms** | 22.68 | **91%** |
+| 4 | 8.44 | 1.51 | 9.14 | **19.15 ms** | 22.07 | **88%** |
+| 8 | 8.53 | 1.53 | 9.14 | **19.26 ms** | 22.17 | 89% |
+
+**Two cores are enough and one is not.** The step from one thread to two halves stage 2 (20.56 -> 9.16) and takes the detector
+from 151% of budget to 91%; everything after that is worth 0.6 ms, and eight threads is marginally *worse* than four. For a
+robot that is the useful sentence: this detector needs **two CPU cores**, not eight.
+**The memory is flat across every thread count** (8.92 / 9.10 / 9.14 / 9.14) because it is latency-bound rather than
+compute-bound — pure PyTorch over 256 slots of which about 24 are in use — so threads cannot touch it, and at **48% of the CPU
+total** it is now the largest term and the only remaining lever worth pulling (slot compaction, `TODO.md` item 30). Decoding is
+likewise flat (1.47-1.53), being numpy and Python, but it is now small enough not to matter.
 
 **Slot count barely matters**: 4.86 / 4.81 / 4.74 / 4.92 / 5.21 ms per memory step at 64 / 128 / 256 / 512 / 720 slots (A51 E4), so the O(K²) exchange is not what the cost is made of — and E6 removed that exchange altogether for nothing.
 
@@ -341,17 +363,17 @@ every budget 1.53x too generous.
 | TemporalUNet | 0.13 | 5.27 | 0.07 | -- | **5.48 ms** | 7.21 | **29%** |
 | FullScanTCN | 0.13 | 3.71 | 1.66 | -- | **5.52 ms** | 7.91 | **32%** |
 | SpaceTimeCNN | 0.13 | 14.36 | 1.75 | -- | **16.29 ms** | 25.93 | **104%** |
-| **TAKHeLiPeD**, whole detector | -- | 8.71 | 2.83 | 9.27 | **20.98 ms** | 25.32 | **101%** |
+| **TAKHeLiPeD**, whole detector | -- | 8.44 | 1.51 | 9.14 | **19.15 ms** | 22.07 | **88%** |
 | DrowDetector (DROW3) | 2.25 | 317.33 | 1.34 | -- | **320.93 ms** | 339.86 | **1359%** |
 | DrSpaamDetector (DR-SPAAM) | 2.52 | 1191.46 | 1.89 | -- | **1195.88 ms** | 1316.46 | **5266%** |
 | Li2FormerDetector | 2.86 | 1670.19 | 1.98 | -- | **1675.24 ms** | 1758.21 | **7033%** |
 
-**Five detectors fit the sensor and five do not, and the budget line runs between our two.** At the 99th percentile
-`AlgorithmicDetector`, both LFE graphs, `TemporalUNet` and `FullScanTCN` all finish inside 25 ms with room to spare.
-**TAKHeLiPeD misses it barely, at 101%** — 0.32 ms past, on one frame in a hundred — and
-**`SpaceTimeCNN` misses it by more, at 104%**, which is worth stating plainly: the proposed detector carries an object memory
-and a candidate decode that `SpaceTimeCNN` does not, pays **9.27 ms** for the memory alone, and still has the **better tail**
-of the two. Its median leaves 4 ms of the period unspent; what it lacks is tail headroom, which is what item 30 is for.
+**Six detectors fit the sensor and four do not, and TAKHeLiPeD is on the right side of the line.** At the 99th
+percentile `AlgorithmicDetector`, both LFE graphs, `TemporalUNet`, `FullScanTCN` and **the proposed detector at 88%** all
+finish inside 25 ms. It got there in item 30 rather than by being measured generously — the same row read **101%** until the
+candidate decode was restructured — and the comparison worth stating is with `SpaceTimeCNN`, the architecture it replaced,
+which **does not fit, at 104%**: ours additionally carries an object memory costing **9.14 ms** and a candidate decode, and
+still has both the better median and the better tail.
 
 **The cutout detectors are 13x to 70x over budget, and that is structural rather than an implementation failing.** They run one
 forward pass **per beam**: at FROG's 720 beams that is **3,600 cutouts per frame** for DROW3 at its `T=5`, **7,200** for

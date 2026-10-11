@@ -66,8 +66,8 @@ belongs to the memory.
 | LFE-Peaks, authors' weights | 65.1% | 1.39 | 1.14 | — |
 | LFE-PPN, authors' weights | 69.6% | 3.17 | 2.06 | — |
 | DR-SPAAM, **authors' published FROG figures** ¹ | 73.7% (`T=1`), 75.6% (`T=5`) | not reported | 1195.88 ² | — |
-| **stage 2 alone**, one scan per call | **82.20%** | 2.62 | 11.54 | 8.64 |
-| **stage 2 + object memory** | **85.87%** | **0.74** | 20.98 *(p99 25.32)* | 13.32 *(p99 15.32)* |
+| **stage 2 alone**, one scan per call | **82.20%** | 2.62 | 9.95 | 7.59 |
+| **stage 2 + object memory** | **85.87%** | **0.74** | **19.15** *(p99 22.07)* | 12.32 *(p99 13.63)* |
 
 *¹ Cited, not measured here: these are the authors' FROG numbers. ² Measured here, and **every row in this column was
 re-measured together on 2026-10-11 under one protocol** — the same 2,000 consecutive FROG test scans, in order, batch 1, at the

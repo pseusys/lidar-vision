@@ -38,6 +38,48 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 30 done: the detector now fits FROG's frame period on a CPU, and two cores are enough (2026-10-11)
+
+*keywords: item 30, nms_decode, 314 iterations 22 kept, bit-identical, p99 25.32 -> 22.07, 101% -> 88%, two threads 91%, thread saturation, memory latency-bound, 48% of CPU total, latency_cpu_t1 t2 t4 t8, pre-item30.json*
+
+Two measurements and one change, on the adopted recipe's own checkpoints throughout.
+
+**Thread scaling saturates at two.** Same 2,000 scans, same checkpoints, four thread counts:
+
+| CPU threads | stage 1-2 | decoding | memory | total | p99 | p99 vs 25 ms |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 20.56 | 1.47 | 8.92 | 31.03 | 37.82 | 151% |
+| 2 | 9.16 | 1.48 | 9.10 | 19.75 | 22.68 | **91%** |
+| 4 | 8.44 | 1.51 | 9.14 | 19.15 | 22.07 | **88%** |
+| 8 | 8.53 | 1.53 | 9.14 | 19.26 | 22.17 | 89% |
+
+One thread to two halves stage 2 and takes the detector from 151% of budget to 91%; everything beyond is worth 0.6 ms and
+eight is marginally worse than four. **The deployment sentence is two CPU cores, not eight.**
+
+**The decode was 93% overhead, and fixing it met the budget.** `nms_decode` ran one Python iteration per voting beam — **314
+per frame to keep 22 detections** — and built a 314x314 distance matrix to do it. Iterating only the beams still alive, and
+measuring distance against those alone, took decoding from **2.83 ms to 1.51** (p99 5.47 to 2.44) and the whole detector from
+**p99 25.32 (101% of the 25 ms period) to 22.07 (88%)**; on the GPU 13.32 to 12.32.
+
+**The output is bit-identical, which is what makes it free.** No checkpoint, candidate cache or accuracy number moves. That is
+tested rather than asserted: `tests/test_stage2_probe.py` now carries a transcription of the previous loop and checks exact
+array equality against it on 40 randomised frames in both decoding modes, plus the property a careless speed-up would break —
+**`members` must be drawn from the beams still alive, not every beam within the radius**, so that when A suppresses B and C is
+too far from A to be suppressed, C averages over itself alone because B has already been consumed. Being a behaviour-preserving
+refactor, this was characterised first and kept green rather than driven red-green, which `AGENTS.md`'s routine asks to be said
+out loud.
+
+**What is left is the memory, and threads cannot touch it.** It is flat at **8.92-9.14 ms across every thread count** because
+it is latency-bound rather than compute-bound — pure PyTorch over 256 slots of which about 24 are in median use — and at **48%
+of the CPU total** it is now the largest term. Slot compaction is the lever; an ONNX export or `torch.compile` on stage 2 is
+the other, untried.
+
+**One confound caught in the measuring, not the result.** `tracking_baselines.py latency`'s default checkpoints are the A56-era
+`step2_static` and `a51_e67_recurrent_s0`, not the adopted recipe, so the first sweep timed a different model than the
+published 20.98 ms row and its before/after pairing at four threads was invalid. Every number above comes from a re-run with
+the adopted recipe passed explicitly; the pre-item-30 measurements are kept beside the new ones as
+`checkpoints_three_horizon/a61/latency_*.pre-item30.json`.
+
 ## Item 29 done: one CPU latency protocol, and the budget line runs between our own two detectors (2026-10-11)
 
 *keywords: item 29, cpu_latency.py, one protocol, 4 threads, p99, 25 ms budget, 0.05 1.14 2.06 5.48 5.52 16.29 20.98 320.93 1195.88 1675.24, per beam, 3600 cutouts, five axes, _bench_manual.py, evaluate.py --bench, PAPER.md CPU column*

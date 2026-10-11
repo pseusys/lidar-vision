@@ -523,15 +523,19 @@ def nms_decode(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np
     voters = np.nonzero(prob > VOTE_FLOOR)[0]
     voters = voters[np.argsort(-prob[voters], kind="stable")]
     p, xy = prob[voters], beam_votes(scan[voters], angles[voters], votes[voters])
-    dist = np.linalg.norm(xy[:, None, :] - xy[None, :, :], axis=-1)
-    alive = np.ones(len(voters), dtype=bool)
+    # The loop walks only the beams still alive -- a frame offers ~314 voters and keeps ~22, so iterating all of them spent
+    # 93% of the decode deciding to do nothing (`TODO.md` item 30). `alive` stays sorted and ascending, which is what makes
+    # this identical rather than merely equivalent: `members` is drawn in the same order, so the weighted means agree bit for
+    # bit with the decoder every number on disk was produced under (`tests/test_stage2_probe.py::_reference_nms`).
+    alive = np.arange(len(voters))
     kept, centres = [], []
-    for i in range(len(voters)):
-        if alive[i]:
-            members = alive & (dist[i] < min_dist)
-            kept.append(i)
-            centres.append(np.average(xy[members], axis=0, weights=p[members]) if average else xy[i])
-            alive[members] = False
+    while len(alive):
+        i = alive[0]
+        near = np.linalg.norm(xy[alive] - xy[i], axis=-1) < min_dist
+        members = alive[near]
+        kept.append(i)
+        centres.append(np.average(xy[members], axis=0, weights=p[members]) if average else xy[i])
+        alive = alive[~near]
     return np.column_stack([p[kept], np.array(centres).reshape(-1, 2)])
 
 
