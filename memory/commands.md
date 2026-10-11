@@ -203,6 +203,7 @@ The test suite runs by hand only; there is no CI job invoking `pytest` yet (`TOD
 ## Linting
 
 ```bash
+ruff check library/ utils/                                  # the project's own Python: the bug-shaped rules, clean as of 2026-10-11
 ruff check --config memory/scripts/ruff.toml memory/scripts/   # the automation scripts in memory/scripts/ only
 actionlint                                                       # workflows, plus shellcheck on run: blocks
 npx markdownlint-cli2 "**/*.md"                                  # markdown, if Node is available

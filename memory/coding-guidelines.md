@@ -7,6 +7,8 @@ Workflow rules — what to edit, when to abstract, what to re-run — are in [`d
 
 **None of the linters below are wired into CI yet** (`TODO.md` §A) — the rules are written as the intended standard, enforced today only by review.
 
+**The project's own Python has its own config, and it selects far less than this document asks for.** [`../ruff.toml`](../ruff.toml) selects the rules that find **bugs** — pyflakes, pylint's error category, bugbear — because pointed at `library/` and `utils/` the full rule set reports about **2,800 findings**, nearly all missing annotations and whitespace. A config that fails on every run teaches people to ignore the linter, so the bug-shaped subset is what is enforced and the rest is listed in that file with the work each would cost. When it was first run it found two latent crashes: a call to `_win2global` that was never imported, and a `numpy` import inside a function whose return annotation had to be quoted to compensate.
+
 ## Everywhere
 
 - **Generate nothing that is not used.**
@@ -86,7 +88,7 @@ A language with no row is a language with no enforcement, which means the rules 
 | Language | Tool | Config | Command | Status |
 | --- | --- | --- | --- | --- |
 | Python (`memory/scripts/`) | `ruff` | [`scripts/ruff.toml`](scripts/ruff.toml) | `ruff check --config memory/scripts/ruff.toml memory/scripts/` | enforced |
-| Python (`library/`, `utils/`) | `ruff` | none yet | — | not yet enforced (`TODO.md`) |
+| Python (`library/`, `utils/`) | `ruff` | [`../ruff.toml`](../ruff.toml) | `ruff check library/ utils/` | enforced |
 | Markdown | `markdownlint`, `verify_memory.py` | [`../.markdownlint.jsonc`](../.markdownlint.jsonc) | `python memory/scripts/verify_memory.py` | enforced (CI); `--strict` (style warnings fail too) is available locally but not run in CI — `docs/RESEARCH.md` predates the one-sentence-per-line convention (`dos-and-donts.md`) |
 | C++ | none chosen | — | — | not yet enforced (`TODO.md`) |
 | Shell | `shellcheck` | none yet | — | not yet enforced (`TODO.md`) |

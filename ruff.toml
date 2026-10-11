@@ -1,0 +1,56 @@
+# Ruff configuration for this project's own Python: `library/` and `utils/`.
+#
+#     ruff check library/ utils/
+#
+# `memory/scripts/` has its own stricter config, which ruff picks up because it
+# sits nearer those files. That one is the worked example of the full rule set
+# in memory/coding-guidelines.md; this one is what the project's own code can
+# actually satisfy today, which is the only kind of rule anybody runs.
+#
+# **Why this selects so little.** Pointed at `library/` and `utils/`, the strict
+# config reports ~2,800 findings: 548 missing argument annotations, 387 aligned
+# assignments, 301 pre-PEP-585 type hints, and so on down. Adopting it wholesale
+# would mean committing a config that fails on every run, which teaches people
+# to ignore the linter. So this selects the rules that find **bugs**, which are
+# clean as of 2026-10-11 and therefore enforceable in CI, and records the rest
+# below as deliberately deferred with its cost.
+#
+# Long lines are preferred over broken ones (memory/coding-guidelines.md); this
+# is a backstop against runaway lines, not a wrapping target.
+line-length = 320
+
+[lint]
+select = [
+    "F",        # pyflakes: undefined names, unused imports and variables, f-string mistakes
+    "E9",       # syntax and IO errors
+    "PLE",      # pylint's error category
+    "B",        # bugbear, minus the three below
+]
+
+ignore = [
+    "B007",     # unused loop control variable: 11 findings, all cosmetic (`for i, x in ...` with `i` unused)
+    "B008",     # function call in a default argument: deliberate in argparse-heavy scripts
+    "B905",     # zip() without strict=: 81 findings, and several zips here are intentionally ragged
+]
+
+# Per-file exceptions. Each one carries the reason it exists, because an
+# uncommented ignore is indistinguishable from a mistake six months later.
+[lint.per-file-ignores]
+"**/__init__.py" = ["F401"]     # the package's public surface: these imports are re-exports, not dead weight
+
+# Deferred, with what each would cost to adopt, measured 2026-10-11 over
+# `library/` and `utils/`. None of them finds a bug; all are style debts, and
+# the number is the work, not the risk:
+#
+#   "ANN"      ~800  missing type hints on arguments and returns
+#   "E2"       ~700  whitespace: aligned assignments, spaces after commas
+#   "UP"       ~400  pre-PEP-585 and pre-PEP-604 type syntax, old-style formatting
+#   "PLR2004"    93  magic values in comparisons
+#   "PLC0415"    65  imports inside functions (some deliberate: optional dependencies)
+#   "E402"       53  module imports after the sys.path insert the scripts need
+#   "I001"       52  import sorting
+#   "SIM"             simplifications
+#
+# `E402` and `PLC0415` are the two that would need judgement rather than work:
+# every script under `utils/` inserts `library/` on `sys.path` before importing
+# from it, so its imports cannot all sit at the top.

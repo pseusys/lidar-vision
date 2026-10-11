@@ -9,14 +9,21 @@ SHELL = /bin/bash
 # Microsoft Store's install stub, which `command -v` finds even though
 # running it does nothing useful — see memory/gotchas.md — so prefer bare
 # `python` there instead, and only fall back to `python3` if that's missing.
+# The environment is `.venv`, not `venv`: that is what was built by hand on this
+# machine and what AGENTS.md I5, memory/commands.md and every documented command
+# name. Building `venv` here created a second, different interpreter beside it,
+# so `make test` ran against an environment nobody else used (TODO.md A6).
 ifeq ($(OS),Windows_NT)
 PYTHON := $(shell command -v python 2>/dev/null || command -v python3 2>/dev/null)
-VENV_BIN := venv/Scripts
+VENV_BIN := .venv/Scripts
+# The `.exe` matters: it is what make has to stat to decide the environment
+# exists, and `.venv/Scripts/python` is not a file on Windows.
+VENV_PYTHON := $(VENV_BIN)/python.exe
 else
 PYTHON := $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
-VENV_BIN := venv/bin
-endif
+VENV_BIN := .venv/bin
 VENV_PYTHON := $(VENV_BIN)/python
+endif
 PATH := $(VENV_BIN):$(PATH)
 
 ROBAIR_IP=192.168.1.201
@@ -27,7 +34,7 @@ help:
 	@ # Display help information
 	echo "Welcome to the 'lidar-vision' project!"
 	echo "This is the available make command list:"
-	echo "    'make venv': create python virtual environment and install latest jupyter server libraries as well as takheliped library, enable required params."
+	echo "    'make venv': create the .venv python virtual environment and install latest jupyter server libraries as well as takheliped library, enable required params."
 	echo "    'make build-lib': build takheliped C++ lib, install the lib if run as superuser."
 	echo "    'make test': run project-internals unit tests (tests/, pytest, CPU-only)."
 	echo "    'make build-image': build required Docker image locally and test successful creation."
@@ -41,12 +48,17 @@ help:
 
 
 
-venv:
+# A file target, not a phony one: `test` depends on it, and a phony `venv` made
+# every `make test` reinstall pip, jupyter and the library before running.
+$(VENV_PYTHON):
 	@ # Create python virtual environment
-	$(PYTHON) -m venv venv
+	$(PYTHON) -m venv .venv
 	$(VENV_PYTHON) -m pip install --upgrade pip jupyter~=1.0
 	$(VENV_PYTHON) -m pip install -e library
 	$(VENV_PYTHON) -m pip install -r utils/requirements.txt
+
+venv: $(VENV_PYTHON)
+.PHONY: venv
 
 build-lib:
 	@ # Build and install `takheliped` library locally
@@ -59,7 +71,7 @@ build-lib:
 
 
 
-test: venv
+test: $(VENV_PYTHON)
 	@ # Run project-internals unit tests (algorithms/geometry, no GPU or dataset needed)
 	$(VENV_PYTHON) -m pytest tests -v
 .PHONY: test
@@ -100,7 +112,7 @@ clean-local:
 	if [ -f library/cpp_core/build/install_manifest.txt ]; then
 		xargs rm < library/cpp_core/build/install_manifest.txt
 	fi
-	rm -rf venv
+	rm -rf .venv
 	rm -rf library/cpp_core/build
 	rm -rf library/takheliped.egg-info
 	rm -rf library/takheliped/*.so
