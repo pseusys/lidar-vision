@@ -18,7 +18,7 @@ import torch
 from torch.nn.functional import conv1d
 
 from follow_the_drow.datasets.frog_dataset import frog_laser_angles
-from follow_the_drow.detectors.three_horizon import beam_features
+from follow_the_drow.detectors.takheliped import beam_features
 from train_three_horizon import NO_PEOPLE, calibration_network, load_frames, oracle_prior
 
 CHECKPOINTS = Path(__file__).resolve().parent.parent / "checkpoints_three_horizon"

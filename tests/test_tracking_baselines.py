@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
 from follow_the_drow.detectors.lfe_detector import _merge_nearby
-from follow_the_drow.detectors.three_horizon import SlotRules
+from follow_the_drow.detectors.takheliped import SlotRules
 from follow_the_drow.utils.tracking import ByteTracker
 from train_three_horizon import SequenceCandidates, pack, replay_sort, score_detections
 from tracking_baselines import (

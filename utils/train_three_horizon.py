@@ -46,7 +46,7 @@ sys.path.insert(0, str(_HERE))
 
 from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from follow_the_drow.detectors import LFEPeaksDetector
-from follow_the_drow.detectors.three_horizon import (
+from follow_the_drow.detectors.takheliped import (
     MAX_RANGE_M, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
     world_to_sensor,
 )

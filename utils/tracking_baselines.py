@@ -321,7 +321,7 @@ def replay_rule_scorer(split, device, streams: int, rules, unmatched_scale: floa
     other candidate keeps `unmatched_scale` times its own score; with `coast_floor`, a live unmatched slot at or above it reports
     itself at its faded value, as a tracker coasting a lost track. Frames are returned in packed order."""
     import torch
-    from follow_the_drow.detectors.three_horizon import initial_slots, manage_slots, sensor_to_world, world_to_sensor
+    from follow_the_drow.detectors.takheliped import initial_slots, manage_slots, sensor_to_world, world_to_sensor
     from train_three_horizon import evaluation_segments, gather
 
     out: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
@@ -576,7 +576,7 @@ def _merge_boot(job: Tuple[str, Tuple[str, Optional[float]], Tuple[str, Optional
 
 def run_rule(args) -> None:
     """E15: tune the rule scorer on val over the full grid, then score its best configuration on val and test once."""
-    from follow_the_drow.detectors.three_horizon import SlotRules
+    from follow_the_drow.detectors.takheliped import SlotRules
     from train_three_horizon import detect_device, load_split
 
     device, _ = detect_device()
@@ -857,7 +857,7 @@ def run_latency(args) -> None:
     """E22: stage 2 with candidate decoding, then the memory, one scan at a time on one stream, timed stage by stage."""
     import torch
     from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-    from follow_the_drow.detectors.three_horizon import free_range_profile
+    from follow_the_drow.detectors.takheliped import free_range_profile
     from train_three_horizon import MAX_RANGE_M, SECTOR_BEAMS, TOP_P, calibration_network, decode_candidates, detect_device, laser_angles, object_memory
 
     if args.threads:

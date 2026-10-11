@@ -15,7 +15,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from follow_the_drow.detectors.three_horizon import MAX_RANGE_M, CalibrationNetwork, ObjectMemory, SlotRules
+from follow_the_drow.detectors.takheliped import MAX_RANGE_M, CalibrationNetwork, ObjectMemory, SlotRules
 from follow_the_drow.utils.drow_utils import _win2global
 from train_three_horizon import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, coast_targets, decode_votes, evaluate, evaluation_segments,
@@ -104,7 +104,7 @@ class TestBuildCandidates:
 class TestNetworkCandidates:
 
     def test_every_scan_gets_candidates_with_one_feature_row_each(self):
-        from follow_the_drow.detectors.three_horizon import CalibrationNetwork
+        from follow_the_drow.detectors.takheliped import CalibrationNetwork
         torch.manual_seed(0)
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
         net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1).eval()
@@ -117,7 +117,7 @@ class TestNetworkCandidates:
     def test_decoding_anchors_votes_on_the_ranges_the_network_read(self):
         """Votes are offsets from a beam's endpoint, so decoding must use the sanitised range the network saw: a missing return and
         a reading at the range limit are the same scan to the whole detector, not only to its input layer."""
-        from follow_the_drow.detectors.three_horizon import CalibrationNetwork
+        from follow_the_drow.detectors.takheliped import CalibrationNetwork
         torch.manual_seed(0)
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
         net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1).eval()
@@ -130,7 +130,7 @@ class TestNetworkCandidates:
             assert np.allclose(want, got)
 
     def test_evaluation_scores_a_missing_return_like_a_reading_at_the_limit(self):
-        from follow_the_drow.detectors.three_horizon import CalibrationNetwork
+        from follow_the_drow.detectors.takheliped import CalibrationNetwork
         torch.manual_seed(0)
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
         net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1)
@@ -168,7 +168,7 @@ class TestNetworkCandidates:
         assert len(decode_candidates(at_limit, angles, prob, votes, TOP_P, 20.0)[0]) > 0      # the limit, not the value, decides
 
     def test_evaluation_applies_the_same_rule(self):
-        from follow_the_drow.detectors.three_horizon import CalibrationNetwork
+        from follow_the_drow.detectors.takheliped import CalibrationNetwork
         torch.manual_seed(0)
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
         net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1)
@@ -712,7 +712,7 @@ class TestJointStep:
     """Stage 2 and stage 3 run together on one frame, with the memory drawn back into stage 2 (`docs/PROPOSAL.md` §5.5, phase C)."""
 
     def _parts(self):
-        from follow_the_drow.detectors.three_horizon import CalibrationNetwork, ObjectMemory, SlotRules
+        from follow_the_drow.detectors.takheliped import CalibrationNetwork, ObjectMemory, SlotRules
         torch.manual_seed(0)
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
         net = CalibrationNetwork(torch.from_numpy(angles), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, prior_channels=2).eval()
@@ -1254,7 +1254,7 @@ class TestEvaluate:
         return pack([recording(23), recording(17)])
 
     def _model(self):
-        from follow_the_drow.detectors.three_horizon import ObjectMemory, SlotRules
+        from follow_the_drow.detectors.takheliped import ObjectMemory, SlotRules
         torch.manual_seed(0)
         return ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, feature_dim=8).eval()
 

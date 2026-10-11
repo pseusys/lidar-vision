@@ -22,7 +22,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
-from follow_the_drow.detectors.three_horizon import render_prior
+from follow_the_drow.detectors.takheliped import render_prior
 from train_three_horizon import NO_PEOPLE, load_frames, oracle_prior
 
 SECTOR_DIVISOR = 8      # stage 2's bottleneck is three halvings below the beam grid

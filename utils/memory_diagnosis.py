@@ -67,7 +67,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.detectors.three_horizon import ObjectMemory, SlotRules, initial_slots, manage_slots, sensor_to_world, world_to_sensor  # noqa: E402
+from follow_the_drow.detectors.takheliped import ObjectMemory, SlotRules, initial_slots, manage_slots, sensor_to_world, world_to_sensor  # noqa: E402
 from train_three_horizon import (  # noqa: E402
     MATCH_RADIUS_M, MAX_DT_S, MIN_DT_S, MIN_REPORTED_SCORE, OPERATING_THRESHOLD, PROBABILITY_EPS, SequenceCandidates, Split, detect_device, evaluation_segments, gather,
     laser_angles, load_split, mean_frame_period, object_memory, pack,
