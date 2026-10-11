@@ -57,8 +57,8 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.detectors.takheliped import ObjectMemory  # noqa: E402
-from follow_the_drow.utils.drow_utils import frame_period_s  # noqa: E402
+from takheliped.detectors.takheliped import ObjectMemory  # noqa: E402
+from takheliped.utils.drow_utils import frame_period_s  # noqa: E402
 from motion_analysis import build_tracks, to_world  # noqa: E402
 from train_takheliped import (  # noqa: E402
     MATCH_RADIUS_M, MIN_REPORTED_SCORE, OPERATING_THRESHOLD, Split, candidate_targets, detect_device, evaluation_segments, gather, load_split, object_memory,

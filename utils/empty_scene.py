@@ -37,7 +37,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.datasets.frog_dataset import FROG_Dataset  # noqa: E402
+from takheliped.datasets.frog_dataset import FROG_Dataset  # noqa: E402
 from train_takheliped import (  # noqa: E402
     OPERATING_THRESHOLD, Split, detect_device, evaluate, evaluation_segments, load_split, mean_frame_period, object_memory,
 )

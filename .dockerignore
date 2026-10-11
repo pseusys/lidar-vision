@@ -6,7 +6,7 @@
 venv
 
 deploy/out
-deploy/follow_the_drow/config
+deploy/takheliped/config
 
 library/cpp_core/build
 library/build

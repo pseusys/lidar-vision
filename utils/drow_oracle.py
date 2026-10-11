@@ -20,9 +20,9 @@ from scipy.optimize import linear_sum_assignment
 sys.path.insert(0, str(Path("library").resolve()))
 sys.path.insert(0, str(Path("utils").resolve()))
 
-from follow_the_drow.datasets import DROW_Dataset
-from follow_the_drow.detectors import DrowDetector
-from follow_the_drow.utils.drow_utils import (
+from takheliped.datasets import DROW_Dataset
+from takheliped.detectors import DrowDetector
+from takheliped.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
     frame_period_s, project_cartesian_from_polar,
 )

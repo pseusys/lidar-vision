@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
-from follow_the_drow.detectors.lfe_detector import _merge_nearby
+from takheliped.detectors.lfe_detector import _merge_nearby
 
 
 def _at(score, x, y):
@@ -127,13 +127,13 @@ class TestDetectorsExposeIt:
     """Both detectors must take the slope, and default to the old behaviour."""
 
     def test_peaks_defaults_to_zero_slope(self):
-        from follow_the_drow.detectors.lfe_detector import LFEPeaksDetector
+        from takheliped.detectors.lfe_detector import LFEPeaksDetector
         import inspect
         sig = inspect.signature(LFEPeaksDetector.__init__)
         assert sig.parameters["merge_radius_slope"].default == 0.0
 
     def test_ppn_defaults_to_zero_slope(self):
-        from follow_the_drow.detectors.lfe_detector import LFEPPNDetector
+        from takheliped.detectors.lfe_detector import LFEPPNDetector
         import inspect
         sig = inspect.signature(LFEPPNDetector.__init__)
         assert sig.parameters["nms_radius_slope"].default == 0.0

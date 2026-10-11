@@ -40,11 +40,11 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.datasets.frog_dataset import FROG_Dataset  # noqa: E402
+from takheliped.datasets.frog_dataset import FROG_Dataset  # noqa: E402
 from motion_analysis import build_tracks, to_world  # noqa: E402
 
 CACHE = _HERE / ".persist_cache" / "lfe-peaks_official_s1_0.3.pkl"
-ODOM = _HERE.parent / "library" / "follow_the_drow" / "include" / "FROG-data" / "frog_16-41_odom.npz"
+ODOM = _HERE.parent / "library" / "takheliped" / "include" / "FROG-data" / "frog_16-41_odom.npz"
 DISPLACEMENTS_M = (0.10, 0.20, 0.30, 0.50, 0.80, 1.20, 2.00, 3.00, 5.00)
 ASSOC_M = 0.5               # `horizon_sweep --assoc`
 GATE_M = 0.6                # `horizon_sweep --gate`

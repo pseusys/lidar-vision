@@ -15,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
-from follow_the_drow.utils.drow_utils import MAX_LINKED_INTERVAL_S, frame_period_s
+from takheliped.utils.drow_utils import MAX_LINKED_INTERVAL_S, frame_period_s
 
 FROG_NOMINAL_S = 0.025          # the sensor's 25 ms per scan, which the mean over linked intervals recovers
 FROG_BUNCHED = (0.038, 0.038, 0.00005)

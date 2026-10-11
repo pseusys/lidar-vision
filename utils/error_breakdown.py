@@ -37,7 +37,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
+from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
 from evaluate import (  # noqa: E402
     eval_nn_model, eval_lfe_model, _load_dataset, _subsample_dataset,
 )

@@ -212,18 +212,18 @@ def _make_optimizer(params, lr: float, weight_decay: float,
         return _DmlAdam(params, lr=lr, weight_decay=weight_decay)
     return Adam(params, lr=lr, weight_decay=weight_decay, foreach=True)
 
-from follow_the_drow.detectors import (
+from takheliped.detectors import (
     DrowDetector, DrSpaamDetector,
     SpaceTimeCNNDetector, FullScanTCNDetector, TemporalUNetDetector,
     Li2FormerDetector,
 )
-from follow_the_drow.utils.drow_utils import (
+from takheliped.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
     cutout, raw_scan, aligned_raw_scan,
     _win2global,
     votes_to_detections, _deep2flat, _process_detections,
 )
-from follow_the_drow.utils.tracking import SimpleTracker, odom_xya_delta_to_tracker_frame
+from takheliped.utils.tracking import SimpleTracker, odom_xya_delta_to_tracker_frame
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ def _setup_datasets(args):
     """Load train and validation datasets; return (train_ds, val_ds, cfg)."""
     _time_frame_size = getattr(args, "time_frame", 5)
     if args.dataset == "frog":
-        from follow_the_drow.datasets import FROG_Dataset, frog_laser_angles
+        from takheliped.datasets import FROG_Dataset, frog_laser_angles
         _mode = getattr(args, "frog_mode", "official")
         print(f"Loading FROG train split ('{_mode}/{args.train_split}') …")
         train_ds = FROG_Dataset(split=args.train_split, mode=_mode,
@@ -252,7 +252,7 @@ def _setup_datasets(args):
             laser_inc=FROG_Dataset.LASER_INCREMENT,
         )
     elif args.dataset == "jrdb":
-        from follow_the_drow.datasets import JRDB_Dataset, jrdb_laser_angles
+        from takheliped.datasets import JRDB_Dataset, jrdb_laser_angles
         print(f"Loading JRDB split ('{args.train_split}') …")
         print("  NOTE: JRDB requires manual download — see JRDB_Dataset docstring.")
         train_ds = JRDB_Dataset(split=args.train_split)
@@ -268,8 +268,8 @@ def _setup_datasets(args):
             laser_inc=JRDB_Dataset.LASER_INCREMENT,
         )
     else:
-        from follow_the_drow.datasets import DROW_Dataset
-        from follow_the_drow.utils.file_utils import DROW_TRAIN_SET, DROW_VALIDATION_SET
+        from takheliped.datasets import DROW_Dataset
+        from takheliped.utils.file_utils import DROW_TRAIN_SET, DROW_VALIDATION_SET
         print("Loading DROW train set …")
         train_ds = DROW_Dataset(dataset=DROW_TRAIN_SET, time_frame_size=_time_frame_size)
         val_ds = None
@@ -1253,7 +1253,7 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
         # frame order with the tracker reset at sequence boundaries. Only
         # the wp confidence column is tracked (FROG, the dataset this was
         # built for, has no wc/wa annotations anyway); other columns are
-        # zeroed. See library/follow_the_drow/utils/tracking.py.
+        # zeroed. See library/takheliped/utils/tracking.py.
         by_frame: dict = {}
         for i in range(len(det_f)):
             by_frame.setdefault(int(det_f[i]), []).append(

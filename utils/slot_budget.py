@@ -47,7 +47,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.utils.drow_utils import frame_period_s, project_cartesian_from_polar
+from takheliped.utils.drow_utils import frame_period_s, project_cartesian_from_polar
 
 from motion_analysis import to_world
 
@@ -222,7 +222,7 @@ def _assigned(det_xy, gt_xy, gate):
 
 def frog_sequences(cache_dir):
     """[(label, [(scan_index, world_xy)] per sequence, n_scans per sequence)]."""
-    from follow_the_drow.datasets.frog_dataset import FROG_Dataset
+    from takheliped.datasets.frog_dataset import FROG_Dataset
 
     ds = FROG_Dataset(split="test", mode="official", auto_download=False,
                       verbose=False)
@@ -244,7 +244,7 @@ def frog_sequences(cache_dir):
 
 
 def drow_sequences():
-    from follow_the_drow.datasets import DROW_Dataset
+    from takheliped.datasets import DROW_Dataset
 
     ds = DROW_Dataset(verbose=False)
     hz = 1.0 / frame_period_s(ds.scan_time)
@@ -274,8 +274,8 @@ def collect_candidates(name, cache_dir, floor, top_p):
         print("[cached] {}".format(f.name), flush=True)
         return pickle.loads(f.read_bytes())
 
-    from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-    from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector
+    from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+    from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector
 
     det = (LFEPeaksDetector(peak_height=floor) if name == "lfe-peaks"
            else LFEPPNDetector(score_thresh=floor))

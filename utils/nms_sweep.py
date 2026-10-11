@@ -62,9 +62,9 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
-from follow_the_drow.detectors.lfe_detector import _merge_nearby  # noqa: E402
-from follow_the_drow.utils.drow_utils import project_cartesian_from_polar  # noqa: E402
+from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
+from takheliped.detectors.lfe_detector import _merge_nearby  # noqa: E402
+from takheliped.utils.drow_utils import project_cartesian_from_polar  # noqa: E402
 from scipy.optimize import linear_sum_assignment  # noqa: E402
 from evaluate import eval_nn_model, eval_lfe_model, _load_dataset, _subsample_dataset  # noqa: E402
 from error_breakdown import _best_f1_point, _breakdown, _total_gt  # noqa: E402

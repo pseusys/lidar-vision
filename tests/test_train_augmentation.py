@@ -19,7 +19,7 @@ from train import (  # noqa: E402
     _shift_beams, _diff_encode, _global_normalize, _local_normalize,
     _jitter_range, _freeze_backbone, make_targets,
 )
-from follow_the_drow.detectors import SpaceTimeCNNDetector  # noqa: E402
+from takheliped.detectors import SpaceTimeCNNDetector  # noqa: E402
 
 
 class TestShiftBeams:

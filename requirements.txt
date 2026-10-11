@@ -33,7 +33,7 @@ torch @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.
 
 # --- this project's library (builds the pybind11 extension) -----------------
 # The first install downloads ~2 GB of datasets and weights only if
-# library/follow_the_drow/include/ is missing; it already exists in this checkout.
+# library/takheliped/include/ is missing; it already exists in this checkout.
 # Its pyproject.toml asks for torch~=2.0 and numpy~=1.24, which the pins here
 # satisfy, so it does not pull a CPU torch over the ROCm one.
 -e ./library

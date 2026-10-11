@@ -47,7 +47,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 
 PERSON_R = 0.4
 NEG_R = 1.0             # a negative beam must be this far from every person

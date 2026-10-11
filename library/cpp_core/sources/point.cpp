@@ -2,7 +2,7 @@
 
 #include "point.hpp"
 
-using namespace follow_the_drow;
+using namespace takheliped;
 
 
 Point::Point(): Point(0, 0, 0) {}

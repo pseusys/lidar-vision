@@ -46,7 +46,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.detectors import (
+from takheliped.detectors import (
     AlgorithmicDetector,
     DrowDetector,
     DrSpaamDetector,
@@ -57,12 +57,12 @@ from follow_the_drow.detectors import (
     LFEPeaksDetector,
     LFEPPNDetector,
 )
-from follow_the_drow.utils.drow_utils import (
+from takheliped.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
     project_cartesian_from_polar, standard_cartesian_to_project_cartesian, cutout, raw_scan,
     _prec_rec_2d, false_positive_rate, frame_period_s, FP_THRESHOLDS,
 )
-from follow_the_drow.utils.tracking import (
+from takheliped.utils.tracking import (
     SimpleTracker, odom_xya_delta_to_tracker_frame,
 )
 from train import (
@@ -111,7 +111,7 @@ def _load_dataset(args):
     # 5 matches every existing checkpoint, so omitting this flag is a no-op.
     time_frame_size = getattr(args, "eval_time_frame", 5)
     if args.dataset == "frog":
-        from follow_the_drow.datasets import FROG_Dataset, frog_laser_angles
+        from takheliped.datasets import FROG_Dataset, frog_laser_angles
         mode = getattr(args, "frog_mode", None) or "official"
         print(f"Loading FROG dataset (mode='{mode}', split='{args.split}') ...")
         ds = FROG_Dataset(split=args.split, mode=mode,
@@ -124,7 +124,7 @@ def _load_dataset(args):
             laser_inc=FROG_Dataset.LASER_INCREMENT,
         )
     elif args.dataset == "jrdb":
-        from follow_the_drow.datasets import JRDB_Dataset, jrdb_laser_angles
+        from takheliped.datasets import JRDB_Dataset, jrdb_laser_angles
         print(f"Loading JRDB dataset (split='{args.split}') ...")
         print("  NOTE: JRDB requires manual download — see JRDB_Dataset docstring.")
         ds = JRDB_Dataset(split=args.split)
@@ -136,7 +136,7 @@ def _load_dataset(args):
             laser_inc=JRDB_Dataset.LASER_INCREMENT,
         )
     else:
-        from follow_the_drow.datasets import DROW_Dataset
+        from takheliped.datasets import DROW_Dataset
         print("Loading DROW test set ...")
         ds = DROW_Dataset(time_frame_size=time_frame_size)
         cfg = SimpleNamespace(
@@ -1172,7 +1172,7 @@ def main():
                              "Hungarian-matched, predict/confirm/coast) instead of "
                              "--consensus-window's static-position averaging. Takes "
                              "precedence over --consensus-window if both are given. "
-                             "See library/follow_the_drow/utils/tracking.py.")
+                             "See library/takheliped/utils/tracking.py.")
     parser.add_argument("--tracker-radius", type=float, default=0.5,
                         help="SimpleTracker match gate in metres (default: 0.5).")
     parser.add_argument("--tracker-min-hits", type=int, default=3,

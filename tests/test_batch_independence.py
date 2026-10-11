@@ -18,7 +18,7 @@ bigger batch leaked more temporal context. `evaluate.py` defaults to 16,
 import numpy as np
 import pytest
 import torch
-from follow_the_drow.detectors.full_scan import (
+from takheliped.detectors.full_scan import (
     FullScanTCNDetector,
     SpaceTimeCNNDetector,
     TemporalUNetDetector,

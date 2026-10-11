@@ -17,7 +17,7 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
-from follow_the_drow.detectors.architectures import DrSpaamDetector
+from takheliped.detectors.architectures import DrSpaamDetector
 
 BEAMS = 6
 SAMPLES = 56

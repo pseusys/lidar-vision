@@ -14,16 +14,16 @@ LFE_PPN_WEIGHTS   = "https://robotics.upo.es/~famozur/onnx/LFE-PPN.onnx"
 
 ext_modules = [
     Pybind11Extension(
-        "follow_the_drow.cpp_binding",
+        "takheliped.cpp_binding",
         sources=[str(file) for file in Path("cpp_core/sources").glob("*.cpp")],
-        include_dirs=[str(Path("cpp_core/include/follow_the_drow"))],
+        include_dirs=[str(Path("cpp_core/include/takheliped"))],
         define_macros=[("VERSION_INFO", VERSION)],
     ),
 ]
 
 
 
-include_dir = Path("follow_the_drow/include")
+include_dir = Path("takheliped/include")
 if not include_dir.exists():
     include_dir.mkdir(parents=True)
     file, _ = urlretrieve(DROW_DATA)

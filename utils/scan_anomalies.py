@@ -38,12 +38,12 @@ from scipy.ndimage import median_filter
 _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 
-import follow_the_drow  # noqa: E402
-from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles  # noqa: E402
-from follow_the_drow.utils.drow_utils import laser_angles  # noqa: E402
-from follow_the_drow.utils.file_utils import DROW_DATA_PATH, FROG_DATA_PATH, JRDB_DATA_PATH  # noqa: E402
+import takheliped  # noqa: E402
+from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles  # noqa: E402
+from takheliped.utils.drow_utils import laser_angles  # noqa: E402
+from takheliped.utils.file_utils import DROW_DATA_PATH, FROG_DATA_PATH, JRDB_DATA_PATH  # noqa: E402
 
-_LIBRARY = Path(follow_the_drow.__file__).parent
+_LIBRARY = Path(takheliped.__file__).parent
 
 MATCH_RADIUS_M = 0.5
 SPIKE_JUMP_M = 0.3

@@ -30,8 +30,8 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-from follow_the_drow.utils.drow_utils import frame_period_s, project_cartesian_from_polar
+from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+from takheliped.utils.drow_utils import frame_period_s, project_cartesian_from_polar
 
 from motion_analysis import build_tracks, to_world
 from temporal_oracle import _detector, _detect_xy

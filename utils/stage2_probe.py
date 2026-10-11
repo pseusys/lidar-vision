@@ -45,9 +45,9 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.datasets.frog_dataset import frog_laser_angles  # noqa: E402
-from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
-from follow_the_drow.detectors.lfe_detector import _merge_nearby  # noqa: E402
+from takheliped.datasets.frog_dataset import frog_laser_angles  # noqa: E402
+from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
+from takheliped.detectors.lfe_detector import _merge_nearby  # noqa: E402
 from train_takheliped import (  # noqa: E402
     MATCH_RADIUS_M, NMS_DIST_M, OPERATING_THRESHOLD, FrameSplit, beam_votes, calibration_network, candidate_targets, decode_votes,
     detect_device, frame_batch, load_frames, nms_decode, score_detections, voting_beams,

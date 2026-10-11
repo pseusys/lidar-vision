@@ -21,7 +21,7 @@ deviations so the description cannot drift from the code.
 import numpy as np
 import pytest
 
-from follow_the_drow.utils.tracking import (
+from takheliped.utils.tracking import (
     SimpleTracker, odom_xya_delta_to_tracker_frame,
 )
 
@@ -216,7 +216,7 @@ class TestSortTrackerIsFaithfulToSort:
         """SORT starts `hits` and `hit_streak` at 0, so `min_hits` counts
         matches *after* creation. `SimpleTracker` starts at 1 and reports one
         frame sooner."""
-        from follow_the_drow.utils.tracking import SortTracker
+        from takheliped.utils.tracking import SortTracker
         tr = SortTracker(min_hits=3, max_age=1)
         for _ in range(3):
             tr.step([(0.9, 1.0, 2.0)])                 # creation + 2 matches
@@ -228,7 +228,7 @@ class TestSortTrackerIsFaithfulToSort:
         """The deviation that matters most for this paper. SORT zeroes
         `hit_streak` on any missed frame, so a phantom that flickers never
         confirms; `SimpleTracker`'s total-hit rule lets it confirm eventually."""
-        from follow_the_drow.utils.tracking import SortTracker
+        from takheliped.utils.tracking import SortTracker
         tr = SortTracker(min_hits=3, max_age=3)
         for _ in range(10):
             tr.step([(0.9, 1.0, 2.0)])                 # hit
@@ -241,7 +241,7 @@ class TestSortTrackerIsFaithfulToSort:
         assert len(out) == 1, "control: the same detector, seen every frame, confirms"
 
     def test_coasted_tracks_are_not_reported(self):
-        from follow_the_drow.utils.tracking import SortTracker
+        from takheliped.utils.tracking import SortTracker
         tr = SortTracker(min_hits=2, max_age=5)
         for _ in range(4):
             tr.step([(0.9, 1.0, 2.0)])
@@ -251,12 +251,12 @@ class TestSortTrackerIsFaithfulToSort:
     def test_the_early_frame_grace_period_is_preserved(self):
         """SORT reports unconfirmed tracks while `frame_count <= min_hits`, so a
         sequence does not open with `min_hits` frames of guaranteed silence."""
-        from follow_the_drow.utils.tracking import SortTracker
+        from takheliped.utils.tracking import SortTracker
         tr = SortTracker(min_hits=3, max_age=1)
         assert len(tr.step([(0.9, 1.0, 2.0)])) == 1
 
     def test_a_track_is_dropped_after_max_age_misses(self):
-        from follow_the_drow.utils.tracking import SortTracker
+        from takheliped.utils.tracking import SortTracker
         tr = SortTracker(min_hits=1, max_age=2)
         for _ in range(4):
             tr.step([(0.9, 1.0, 2.0)])
@@ -266,7 +266,7 @@ class TestSortTrackerIsFaithfulToSort:
         assert tr.tracks == []
 
     def test_the_kalman_filter_estimates_velocity(self):
-        from follow_the_drow.utils.tracking import SortTracker
+        from takheliped.utils.tracking import SortTracker
         tr = SortTracker(match_radius=1.0, min_hits=2, max_age=3)
         for i in range(12):
             tr.step([(0.9, 0.0, 2.0 + 0.3 * i)])
@@ -275,7 +275,7 @@ class TestSortTrackerIsFaithfulToSort:
             "vy should converge on the true 0.3 m/frame"
 
     def test_ego_rotation_is_compensated(self):
-        from follow_the_drow.utils.tracking import SortTracker
+        from takheliped.utils.tracking import SortTracker
         dtheta = np.deg2rad(5.0)
         r = 4.0
         tr = SortTracker(match_radius=0.2, min_hits=2, max_age=1)
@@ -285,7 +285,7 @@ class TestSortTrackerIsFaithfulToSort:
         assert len(tr.tracks) == 1
 
     def test_assignment_stays_one_to_one(self):
-        from follow_the_drow.utils.tracking import SortTracker
+        from takheliped.utils.tracking import SortTracker
         tr = SortTracker(match_radius=1.0, min_hits=1, max_age=3)
         tr.step([(0.9, 0.0, 2.0)])
         tr.step([(0.9, 0.0, 2.0), (0.9, 0.3, 2.0)])
@@ -297,7 +297,7 @@ class TestCbmotScoreUpdates:
     matched detection's score into the track's new confidence (`TODO.md` A56)."""
 
     def test_the_published_functions(self):
-        from follow_the_drow.utils.tracking import cbmot_update
+        from takheliped.utils.tracking import cbmot_update
         assert cbmot_update(0.6, 0.3, "addition") == pytest.approx(0.9)
         assert cbmot_update(0.6, 0.3, "maximum") == pytest.approx(0.6)
         assert cbmot_update(0.6, 0.3, "multiplication") == pytest.approx(1 - 0.4 * 0.7)
@@ -305,7 +305,7 @@ class TestCbmotScoreUpdates:
 
     def test_every_bounded_rule_is_at_least_both_inputs(self):
         """CBMOT's eq. 3: a match should leave the system at least as confident as either the track or the detection."""
-        from follow_the_drow.utils.tracking import cbmot_update
+        from takheliped.utils.tracking import cbmot_update
         grid = np.linspace(0.0, 1.0, 11)
         for rule in ("maximum", "multiplication", "parallel_addition"):
             for c in grid:
@@ -313,17 +313,17 @@ class TestCbmotScoreUpdates:
                     assert cbmot_update(c, s, rule) >= max(c, s) - 1e-12, (rule, c, s)
 
     def test_parallel_addition_is_defined_when_both_are_certain(self):
-        from follow_the_drow.utils.tracking import cbmot_update
+        from takheliped.utils.tracking import cbmot_update
         assert cbmot_update(1.0, 1.0, "parallel_addition") == 1.0
 
     def test_an_unknown_rule_is_refused(self):
-        from follow_the_drow.utils.tracking import cbmot_update
+        from takheliped.utils.tracking import cbmot_update
         with pytest.raises(ValueError):
             cbmot_update(0.5, 0.5, "average")
 
 
 def _byte(**kwargs):
-    from follow_the_drow.utils.tracking import ByteTracker
+    from takheliped.utils.tracking import ByteTracker
     defaults = dict(high_thresh=0.5, low_thresh=0.1, match_radius=0.5, max_age=5, min_hits=1)
     return ByteTracker(**{**defaults, **kwargs})
 
@@ -446,7 +446,7 @@ class TestByteTracker:
     def test_the_single_stage_setting_reproduces_sort_frame_for_frame(self, min_hits, max_age):
         """With one association over every detection, births from every unmatched one and SORT's confirmation, the tracker is
         `SortTracker` -- the anchor that lets E14's rows be read against the SORT rows already in the paper."""
-        from follow_the_drow.utils.tracking import ByteTracker, SortTracker
+        from takheliped.utils.tracking import ByteTracker, SortTracker
         rng = np.random.default_rng(min_hits * 10 + max_age)
         sort = SortTracker(match_radius=0.5, min_hits=min_hits, max_age=max_age)
         byte = ByteTracker(two_stage=False, high_thresh=0.0, low_thresh=0.0, new_track_thresh=0.0, match_radius=0.5,

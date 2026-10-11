@@ -30,7 +30,7 @@ if str(UTILS) not in sys.path:
 import train as train_mod  # noqa: E402
 from train import _default_args, save_checkpoint, train_model  # noqa: E402
 
-from follow_the_drow.datasets.frog_dataset import frog_laser_angles  # noqa: E402
+from takheliped.datasets.frog_dataset import frog_laser_angles  # noqa: E402
 
 
 N_BEAMS = 64
@@ -136,7 +136,7 @@ class TestDtimeReachesTheEvaluator:
         assert not offenders, f"evaluate_auc called without dtime at {offenders}"
 
     def test_checkpoint_roundtrips_dtime_and_time_frame(self, tmp_path):
-        from follow_the_drow.detectors.full_scan import SpaceTimeCNNDetector
+        from takheliped.detectors.full_scan import SpaceTimeCNNDetector
         net = SpaceTimeCNNDetector(n_time=5, channels=24, n_spatial_stages=1)
         opt = torch.optim.Adam(net.parameters())
         p = tmp_path / "c.pth"
@@ -173,7 +173,7 @@ class TestReportedAucMatchesSavedWeights:
         history = train_model(args)
 
         saved = torch.load(args.out, map_location="cpu", weights_only=False)
-        from follow_the_drow.detectors.full_scan import SpaceTimeCNNDetector
+        from takheliped.detectors.full_scan import SpaceTimeCNNDetector
         net = SpaceTimeCNNDetector(n_time=5, channels=24, n_spatial_stages=1)
         net.load_state_dict(saved["model"])
 
@@ -250,7 +250,7 @@ class TestCheckpointDurability:
     def test_checkpoint_write_is_atomic(self, tmp_path, monkeypatch):
         """A crash mid-write must leave the previous best intact, not a
         truncated file. torch.save() straight to the path cannot promise that."""
-        from follow_the_drow.detectors.full_scan import SpaceTimeCNNDetector
+        from takheliped.detectors.full_scan import SpaceTimeCNNDetector
         net = SpaceTimeCNNDetector(n_time=5, channels=24, n_spatial_stages=1)
         opt = torch.optim.Adam(net.parameters())
         p = tmp_path / "c.pth"
@@ -271,7 +271,7 @@ class TestCheckpointDurability:
         assert p.read_bytes() == good, "the previous best was clobbered by a failed write"
 
     def test_checkpoint_stores_the_auc_it_was_selected_on(self, tmp_path):
-        from follow_the_drow.detectors.full_scan import SpaceTimeCNNDetector
+        from takheliped.detectors.full_scan import SpaceTimeCNNDetector
         net = SpaceTimeCNNDetector(n_time=5, channels=24, n_spatial_stages=1)
         opt = torch.optim.Adam(net.parameters())
         p = tmp_path / "c.pth"
@@ -461,7 +461,7 @@ class TestHistoryAblationIsExposed:
     def test_each_mode_changes_the_input_but_keeps_the_current_frame(self, mode):
         """Guard the semantics, not just the plumbing."""
         from train import _extract_input
-        from follow_the_drow.detectors.full_scan import SpaceTimeCNNDetector
+        from takheliped.detectors.full_scan import SpaceTimeCNNDetector
         net = SpaceTimeCNNDetector(n_time=5, channels=24, n_spatial_stages=1)
         rng = np.random.RandomState(0)
         scan = rng.rand(N_BEAMS).astype(np.float32) * 4 + 1
@@ -642,13 +642,13 @@ class TestRunupScans:
     """
 
     def test_runup_is_a_fixed_width_not_a_function_of_dtime(self):
-        from follow_the_drow.datasets import frog_dataset as fd
+        from takheliped.datasets import frog_dataset as fd
         src = Path(fd.__file__).read_text(encoding="utf-8")
         assert "RUNUP_SCANS" in src
         assert "dtime" not in src.split("RUNUP_SCANS")[1].split("\n")[0]
 
     def test_train_and_val_drop_the_run_up_but_test_does_not(self):
-        from follow_the_drow.datasets.frog_dataset import _SPLIT_RUNUP, RUNUP_SCANS
+        from takheliped.datasets.frog_dataset import _SPLIT_RUNUP, RUNUP_SCANS
         assert _SPLIT_RUNUP["train"] == RUNUP_SCANS
         assert _SPLIT_RUNUP["val"] == RUNUP_SCANS
         assert _SPLIT_RUNUP["test"] == 0, (
@@ -697,7 +697,7 @@ class TestCheckpointCarriesItsFrogPartition:
         """A32b's premise: a `transferred` number must be the *official*
         checkpoint measured elsewhere. That only holds while the two modes'
         train and val entries are the same table rows."""
-        from follow_the_drow.datasets.frog_dataset import _MODES
+        from takheliped.datasets.frog_dataset import _MODES
         for split in ("train", "val"):
             assert _MODES["official"][split] == _MODES["transferred"][split], split
         assert _MODES["official"]["test"] != _MODES["transferred"]["test"]

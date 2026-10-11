@@ -64,12 +64,12 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector
-from follow_the_drow.utils.drow_utils import (
+from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector
+from takheliped.utils.drow_utils import (
     _prec_rec_2d, project_cartesian_from_polar, false_positive_rate,
 )
-from follow_the_drow.utils.tracking import ByteTracker, SimpleTracker, SortTracker
+from takheliped.utils.tracking import ByteTracker, SimpleTracker, SortTracker
 from evaluate import _subsample_dataset, _frame_period_s, _EgoMotion
 from train import _safe_auc
 

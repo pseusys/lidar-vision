@@ -7,7 +7,7 @@
 #define STRINGIFY(x) #x
 #define assertm(exp, msg) assert(((void)msg, exp))
 
-using namespace follow_the_drow;
+using namespace takheliped;
 
 
 PythonDetectorFactory::PythonDetectorFactory(float minAng, float incAng, int frequencyInit, int frequencyMax, float uncertaintyMax, float uncertaintyMin, float uncertaintyInc, float clusterThreshold, float distanceLevel, float legSizeMin, float legSizeMax, float chestSizeMin, float chestSizeMax, float legsDistanceMin, float legsDistanceMax, bool logging): minAngle(minAng), incAngle(incAng), detector(AlgorithmicDetector(logging, frequencyInit, frequencyMax, uncertaintyMax, uncertaintyMin, uncertaintyInc, clusterThreshold, distanceLevel, legSizeMin, legSizeMax, chestSizeMin, chestSizeMax, legsDistanceMin, legsDistanceMax)) {}

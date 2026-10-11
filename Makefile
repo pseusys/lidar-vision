@@ -27,15 +27,15 @@ help:
 	@ # Display help information
 	echo "Welcome to the 'lidar-vision' project!"
 	echo "This is the available make command list:"
-	echo "    'make venv': create python virtual environment and install latest jupyter server libraries as well as follow_the_drow library, enable required params."
-	echo "    'make build-lib': build follow_the_drow C++ lib, install the lib if run as superuser."
+	echo "    'make venv': create python virtual environment and install latest jupyter server libraries as well as takheliped library, enable required params."
+	echo "    'make build-lib': build takheliped C++ lib, install the lib if run as superuser."
 	echo "    'make test': run project-internals unit tests (tests/, pytest, CPU-only)."
 	echo "    'make build-image': build required Docker image locally and test successful creation."
 	echo "    'make launch-docker-local': launch ROS pipeline in docker on local device, don't even ty to connect to any robot."
 	echo "    'make launch-docker-robot': test RobAIR connection and run ROS pipeline on the RobAIR."
 	echo "        WARNING: the default RobAIR IP address is 192.168.1.201; to use another IP use the following syntax: 'make launch-docker-robot ROBAIR_IP=X.X.X.X'."
 	echo "    'make clean-docker': clean all Docker related artifacts, stop container and remove image, that is useful because Docker image caches are HUGE."
-	echo "    'make clean-local': remove all file artifacts in this repo (including installed follow_the_drow C++ library if any)."
+	echo "    'make clean-local': remove all file artifacts in this repo (including installed takheliped C++ library if any)."
 	echo "    'make clean': remove all project traces from the computer."
 .PHONY: help
 
@@ -49,7 +49,7 @@ venv:
 	$(VENV_PYTHON) -m pip install -r utils/requirements.txt
 
 build-lib:
-	@ # Build and install `follow_the_drow` library locally
+	@ # Build and install `takheliped` library locally
 	mkdir -p library/cpp_core/build
 	cd library/cpp_core/build
 	cmake ..
@@ -69,7 +69,7 @@ test: venv
 build-image:
 	@ # Build docker image - internet connection required!
 	docker compose -f deploy/docker/docker-compose.yml build
-	test -n "$$(docker images -q follow_the_drow 2> /dev/null)" || { echo "Image building error!"; exit 1; }
+	test -n "$$(docker images -q takheliped 2> /dev/null)" || { echo "Image building error!"; exit 1; }
 .PHONY: build-image
 
 launch-docker-local:
@@ -92,7 +92,7 @@ report:
 
 
 clean-docker:
-	docker rmi follow_the_drow
+	docker rmi takheliped
 	docker rm -f ros-desktop-follow-the-drow
 .PHONY: clean-docker
 
@@ -102,9 +102,9 @@ clean-local:
 	fi
 	rm -rf venv
 	rm -rf library/cpp_core/build
-	rm -rf library/follow_the_drow.egg-info
-	rm -rf library/follow_the_drow/*.so
-	rm -rf library/follow_the_drow/include
+	rm -rf library/takheliped.egg-info
+	rm -rf library/takheliped/*.so
+	rm -rf library/takheliped/include
 	rm -rf deploy/out
 	rm -rf **/__pycache__
 	rm -rf report/out

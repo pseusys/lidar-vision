@@ -94,7 +94,7 @@ def main() -> None:
 
 
 def _frog_angles() -> np.ndarray:
-    from follow_the_drow.datasets.frog_dataset import frog_laser_angles
+    from takheliped.datasets.frog_dataset import frog_laser_angles
     return frog_laser_angles(720)
 
 

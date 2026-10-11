@@ -8,7 +8,7 @@ it is downloaded by ``FROG_Dataset.download()``, and ``_load_odom()`` prefers
 it and raises rather than silently faking when it is absent (TODO.md A14).
 This script is the fallback for a recording that genuinely has none.
 -- no changes to frog_dataset.py are needed; this script only needs to
-produce that file. See library/follow_the_drow/utils/odometry_estimation.py
+produce that file. See library/takheliped/utils/odometry_estimation.py
 for the estimator itself and its verification tests
 (tests/test_odometry_estimation.py) -- run those first if this file has been
 touched.
@@ -27,8 +27,8 @@ from pathlib import Path
 import h5py
 import numpy as np
 
-from follow_the_drow.datasets.frog_dataset import frog_laser_angles, _DATASET_PATH
-from follow_the_drow.utils.odometry_estimation import integrate_trajectory
+from takheliped.datasets.frog_dataset import frog_laser_angles, _DATASET_PATH
+from takheliped.utils.odometry_estimation import integrate_trajectory
 
 
 def process_h5(h5_path: Path, inlier_thresh: float, min_inliers: int) -> None:

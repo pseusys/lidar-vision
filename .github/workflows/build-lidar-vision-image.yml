@@ -63,7 +63,7 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install follow_the_drow Python library locally 👇
+      - name: Install takheliped Python library locally 👇
         run: make venv
 
   build-cpp-static-library:
@@ -78,5 +78,5 @@ jobs:
         with:
           version: '11'
 
-      - name: Build and install follow_the_drow C++ static library 📚
+      - name: Build and install takheliped C++ static library 📚
         run: sudo make build-lib

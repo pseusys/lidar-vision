@@ -1,5 +1,5 @@
 """
-Unit tests for library/follow_the_drow/utils/odometry_estimation.py.
+Unit tests for library/takheliped/utils/odometry_estimation.py.
 
 The end-to-end trajectory test is the important one here, in the same spirit
 as tests/test_geometry.py: this module's derivation (relating an ICP-recovered
@@ -10,8 +10,8 @@ ground-truth trajectory comes back out correctly.
 """
 import numpy as np
 
-from follow_the_drow.datasets.frog_dataset import frog_laser_angles
-from follow_the_drow.utils.odometry_estimation import (
+from takheliped.datasets.frog_dataset import frog_laser_angles
+from takheliped.utils.odometry_estimation import (
     _kabsch_2d, icp_2d, icp_rotation_angle, estimate_pairwise_delta,
     integrate_trajectory, local_cartesian_points,
 )

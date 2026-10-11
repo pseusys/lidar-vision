@@ -18,12 +18,12 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
-from follow_the_drow.detectors.takheliped import (
+from takheliped.detectors.takheliped import (
     N_BEAM_FEATURES, CalibrationNetwork, ObjectMemory, SlotRules, beam_features, fold_legacy_calibration,
     free_range_profile, initial_slots, lfe_features, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
     sensor_to_world, visibility_feature, world_to_sensor,
 )
-from follow_the_drow.detectors.lfe_detector import _normalize_scan
+from takheliped.detectors.lfe_detector import _normalize_scan
 
 
 def _angles(n: int, fov_deg: float = 180.0) -> torch.Tensor:

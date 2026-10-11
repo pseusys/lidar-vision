@@ -11,7 +11,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
-from follow_the_drow.datasets.frog_dataset import LEGACY_MISSING_RETURN_M, encode_missing_returns
+from takheliped.datasets.frog_dataset import LEGACY_MISSING_RETURN_M, encode_missing_returns
 
 
 class TestEncodeMissingReturns:

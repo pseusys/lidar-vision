@@ -51,7 +51,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.utils.tracking import CBMOT_RULES, ByteTracker, odom_xya_delta_to_tracker_frame  # noqa: E402
+from takheliped.utils.tracking import CBMOT_RULES, ByteTracker, odom_xya_delta_to_tracker_frame  # noqa: E402
 
 CHECKPOINTS = _HERE.parent / "checkpoints_three_horizon"
 STAGE2 = CHECKPOINTS / "step2_static" / "step2_calibration.best.pth"
@@ -321,7 +321,7 @@ def replay_rule_scorer(split, device, streams: int, rules, unmatched_scale: floa
     other candidate keeps `unmatched_scale` times its own score; with `coast_floor`, a live unmatched slot at or above it reports
     itself at its faded value, as a tracker coasting a lost track. Frames are returned in packed order."""
     import torch
-    from follow_the_drow.detectors.takheliped import initial_slots, manage_slots, sensor_to_world, world_to_sensor
+    from takheliped.detectors.takheliped import initial_slots, manage_slots, sensor_to_world, world_to_sensor
     from train_takheliped import evaluation_segments, gather
 
     out: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
@@ -576,7 +576,7 @@ def _merge_boot(job: Tuple[str, Tuple[str, Optional[float]], Tuple[str, Optional
 
 def run_rule(args) -> None:
     """E15: tune the rule scorer on val over the full grid, then score its best configuration on val and test once."""
-    from follow_the_drow.detectors.takheliped import SlotRules
+    from takheliped.detectors.takheliped import SlotRules
     from train_takheliped import detect_device, load_split
 
     device, _ = detect_device()
@@ -663,8 +663,8 @@ def run_arms(args) -> None:
     """Every memory checkpoint's frames on test (every annotated frame) and val (the scored stride), and the published LFE
     detectors' on the same frames."""
     import torch
-    from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-    from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector
+    from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+    from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector
     from train_takheliped import LFE_MISSING_RETURN_M, detect_device, evaluate, evaluation_segments, load_split, object_memory
 
     device, _ = detect_device()
@@ -712,7 +712,7 @@ def run_arms(args) -> None:
 
 def run_report(args) -> None:
     """The A56 tables: AP with intervals, GOSPA, strata, latency."""
-    from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+    from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
     from motion_analysis import build_tracks, to_world
     from train_takheliped import candidate_targets, load_split
 
@@ -856,8 +856,8 @@ def run_report(args) -> None:
 def run_latency(args) -> None:
     """E22: stage 2 with candidate decoding, then the memory, one scan at a time on one stream, timed stage by stage."""
     import torch
-    from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-    from follow_the_drow.detectors.takheliped import free_range_profile
+    from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+    from takheliped.detectors.takheliped import free_range_profile
     from train_takheliped import MAX_RANGE_M, SECTOR_BEAMS, TOP_P, calibration_network, decode_candidates, detect_device, laser_angles, object_memory
 
     if args.threads:

@@ -61,8 +61,8 @@ from matplotlib.lines import Line2D
 plt.style.use("ggplot")
 
 sys.path.insert(0, str(Path(__file__).parent))
-from follow_the_drow.detectors import AlgorithmicDetector
-from follow_the_drow.utils.drow_utils import (
+from takheliped.detectors import AlgorithmicDetector
+from takheliped.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
     project_cartesian_from_polar, standard_cartesian_to_project_cartesian, votes_to_detections,
     cutout, raw_scan, _win2global,
@@ -98,7 +98,7 @@ _SCAN_S = 2
 
 def _setup(args):
     if args.dataset == "frog":
-        from follow_the_drow.datasets import FROG_Dataset, frog_laser_angles
+        from takheliped.datasets import FROG_Dataset, frog_laser_angles
         _mode = getattr(args, "frog_mode", "official")
         print(f"Loading FROG dataset (mode='{_mode}', split='{args.split}') …")
         dataset = FROG_Dataset(split=args.split, mode=_mode)
@@ -111,7 +111,7 @@ def _setup(args):
             scan_rate=40,
         )
     else:
-        from follow_the_drow.datasets import DROW_Dataset
+        from takheliped.datasets import DROW_Dataset
         _drow_splits = {"train", "val", "test"}
         if args.split not in _drow_splits:
             raise ValueError(f"DROW split must be train/val/test, got '{args.split}'")
@@ -186,7 +186,7 @@ def _load_nn_runner(det_name: str, weights_path: Path, cfg, device: str):
             r = raw_scan(scans_hist)
             x_in = torch.from_numpy(r.transpose(1, 0, 2)).to(device)
         else:
-            from follow_the_drow.detectors import DrowDetector
+            from takheliped.detectors import DrowDetector
             nsamp = getattr(net, "N_SAMP", DrowDetector.N_SAMP)
             cut   = cutout(scans_hist, odoms_hist, len(scan),
                            nsamp=nsamp, laserIncrement=cfg.laser_inc)

@@ -12,7 +12,7 @@ import h5py
 import numpy as np
 import pytest
 
-from follow_the_drow.datasets.frog_dataset import (
+from takheliped.datasets.frog_dataset import (
     FROG_Dataset, _split_at_gaps, _MODES, _recordings_per_file,
 )
 
@@ -319,18 +319,18 @@ class TestRecordingBoundaries:
 
 class TestSessionOdomFilenames:
     def test_two_session_filename_yields_two_odom_names_in_order(self):
-        from follow_the_drow.datasets.frog_dataset import _session_odom_filenames
+        from takheliped.datasets.frog_dataset import _session_odom_filenames
         assert _session_odom_filenames("frog_11-36_12-43_train_val.h5") == [
             "frog_11-36_odom.npz", "frog_12-43_odom.npz",
         ]
 
     def test_single_session_filename_yields_one_odom_name(self):
-        from follow_the_drow.datasets.frog_dataset import _session_odom_filenames
+        from takheliped.datasets.frog_dataset import _session_odom_filenames
         assert _session_odom_filenames("frog_16-41_test.h5") == ["frog_16-41_odom.npz"]
         assert _session_odom_filenames("frog_10-31.h5") == ["frog_10-31_odom.npz"]
 
     def test_no_token_yields_empty_list(self):
-        from follow_the_drow.datasets.frog_dataset import _session_odom_filenames
+        from takheliped.datasets.frog_dataset import _session_odom_filenames
         assert _session_odom_filenames("frog_notoken.h5") == []
 
 

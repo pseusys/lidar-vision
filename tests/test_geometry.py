@@ -14,8 +14,8 @@ CPU-only: no model loading, no dataset files on disk, no GPU.
 import numpy as np
 import pytest
 
-from follow_the_drow.utils.drow_utils import aligned_raw_scan, cutout
-from follow_the_drow.utils.tracking import SimpleTracker, odom_xya_delta_to_tracker_frame
+from takheliped.utils.drow_utils import aligned_raw_scan, cutout
+from takheliped.utils.tracking import SimpleTracker, odom_xya_delta_to_tracker_frame
 
 N = 181
 BEAM_SPACING = np.deg2rad(1.0)          # 1 deg/beam, symmetric FoV

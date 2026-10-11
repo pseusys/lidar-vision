@@ -85,8 +85,8 @@ from sklearn.feature_selection import mutual_info_classif
 sys.path.insert(0, "..")
 sys.path.insert(0, "../library")
 
-from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-from follow_the_drow.utils.drow_utils import aligned_raw_scan
+from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+from takheliped.utils.drow_utils import aligned_raw_scan
 
 N_BEAMS = 720
 PERSON_HALFWIDTH_BEAMS = 4     # +/- beams around a person's angular position

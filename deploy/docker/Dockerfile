@@ -26,6 +26,6 @@ RUN mkdir /opt/cmake-3.26.1 && bash /tmp/cmake-install.sh --skip-license --prefi
 
 ENV CMAKE_INSTALL_PREFIX /usr/local
 RUN mkdir /~/fillow_the_drow_library/build && cd /~/fillow_the_drow_library/build && source /opt/ros/noetic/setup.bash && cmake .. && make && make install
-ENV FollowTheDrow_INCLUDE_DIRS /~/fillow_the_drow_library/include
-ENV FollowTheDrow_LIBRARY_DIRS ${CMAKE_INSTALL_PREFIX}/lib
-ENV FollowTheDrow_DIR ${CMAKE_INSTALL_PREFIX}/cmake
+ENV Takheliped_INCLUDE_DIRS /~/fillow_the_drow_library/include
+ENV Takheliped_LIBRARY_DIRS ${CMAKE_INSTALL_PREFIX}/lib
+ENV Takheliped_DIR ${CMAKE_INSTALL_PREFIX}/cmake

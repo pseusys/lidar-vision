@@ -50,9 +50,9 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector
-from follow_the_drow.utils.drow_utils import frame_period_s, project_cartesian_from_polar
+from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector
+from takheliped.utils.drow_utils import frame_period_s, project_cartesian_from_polar
 from scipy.optimize import linear_sum_assignment
 
 HORIZONS_S = (1.0, 2.0, 5.0, 10.0, 30.0)
@@ -172,7 +172,7 @@ def displacement_stats(tracks, label, hz, tol=0.2):
 def _load(args):
     """Return (dataset, hz, gate, label) for the requested dataset."""
     if args.dataset == "drow":
-        from follow_the_drow.datasets import DROW_Dataset
+        from takheliped.datasets import DROW_Dataset
         ds = DROW_Dataset(verbose=False)
         hz = 1.0 / frame_period_s(ds.scan_time)
         # DROW labels every 5th scan, so consecutive annotations are ~0.5 s

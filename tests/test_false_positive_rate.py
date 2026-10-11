@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from follow_the_drow.utils.drow_utils import false_positive_rate, FP_THRESHOLDS
+from takheliped.utils.drow_utils import false_positive_rate, FP_THRESHOLDS
 
 
 FROG_PERIOD = 1.0 / 26.2

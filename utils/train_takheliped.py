@@ -44,14 +44,14 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-from follow_the_drow.detectors import LFEPeaksDetector
-from follow_the_drow.detectors.takheliped import (
+from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+from takheliped.detectors import LFEPeaksDetector
+from takheliped.detectors.takheliped import (
     MAX_RANGE_M, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
     world_to_sensor,
 )
-from follow_the_drow.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
-from follow_the_drow.utils.drow_utils import _prec_rec_2d, _win2global, frame_period_s, project_cartesian_from_polar, votes_to_detections
+from takheliped.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
+from takheliped.utils.drow_utils import _prec_rec_2d, _win2global, frame_period_s, project_cartesian_from_polar, votes_to_detections
 from train import _safe_auc, compute_loss, detect_device, make_targets
 
 VOTE_DECODING = dict(blur_sigma=2.0, blur_win=11, bin_size=0.1, vote_collect_radius=0.5, min_thresh=1e-3)

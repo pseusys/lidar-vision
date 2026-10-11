@@ -27,7 +27,7 @@ sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
 from duration_curve import checkpoints  # noqa: E402
-from follow_the_drow.datasets.frog_dataset import frog_laser_angles  # noqa: E402
+from takheliped.datasets.frog_dataset import frog_laser_angles  # noqa: E402
 from train_takheliped import calibration_network, detect_device, evaluate_calibration, load_frames  # noqa: E402
 
 WINDOWS: Tuple[Tuple[float, float], ...] = ((0.5, 1.0), (0.75, 1.25), (0.5, 1.5), (1.0, 2.0), (0.5, 2.0), (0.25, 2.25))

@@ -42,9 +42,9 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
-from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector
-from follow_the_drow.detectors.lfe_detector import _normalize_scan, _SCAN_FAR
+from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
+from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector
+from takheliped.detectors.lfe_detector import _normalize_scan, _SCAN_FAR
 
 PERSON_R = 0.4          # FROG's own annotation radius (151,611 of 153,655 circles)
 

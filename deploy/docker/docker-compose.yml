@@ -5,15 +5,15 @@ services:
     container_name: ros-desktop-follow-the-drow
     restart: "no"
     privileged: true
-    image: follow_the_drow
+    image: takheliped
     build:
       context: ../..
       dockerfile: deploy/docker/Dockerfile
       target: lidar-vision
     volumes:
       - ../out:/~/catkin_ws/out
-      - ../config:/~/catkin_ws/src/follow_the_drow/config
-      - ../follow_the_drow:/~/catkin_ws/src/follow_the_drow
+      - ../config:/~/catkin_ws/src/takheliped/config
+      - ../takheliped:/~/catkin_ws/src/takheliped
       # Some volumes required for RVIZ GUI
       - /tmp/.X11-unix:/tmp/.X11-unix
       - ~/.Xauthority:/root/.Xauthority:ro
@@ -33,4 +33,4 @@ services:
       ../conf.env
     network_mode:
       host
-    command: bash -c "roslaunch src/follow_the_drow/config/follow_the_drow.launch"
+    command: bash -c "roslaunch src/takheliped/config/takheliped.launch"

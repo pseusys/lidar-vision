@@ -9,7 +9,7 @@ snippets, extended to cover all three beam counts for a full §8.2 table.
 import time
 import numpy as np
 
-from follow_the_drow.detectors import AlgorithmicDetector, LFEPeaksDetector, LFEPPNDetector
+from takheliped.detectors import AlgorithmicDetector, LFEPeaksDetector, LFEPPNDetector
 
 N_WARMUP = 5
 N_ITERS  = 100

@@ -10,7 +10,7 @@ import torch
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE.parent.parent / "library"))
-from follow_the_drow.detectors.takheliped import CalibrationNetwork  # noqa: E402
+from takheliped.detectors.takheliped import CalibrationNetwork  # noqa: E402
 
 N_BEAMS, FRAMES, SECTORS = 48, 3, 6
 
