@@ -1,8 +1,19 @@
 # Gotchas
 
-*keywords:* encoding, unicode, cp1252, DirectML, venv, python3, ABI mismatch, pip install -e, JRDB, torch_utils
+*keywords:* encoding, unicode, cp1252, DirectML, venv, python3, ABI mismatch, pip install -e, JRDB, torch_utils, set_num_threads, OMP_NUM_THREADS, spin-wait, CPU time vs wall time
 
 Platform and environment traps that have cost real debugging time.
+
+- **A torch process draws far more CPU than `--threads` says, and it is not a bug.** At `torch.set_num_threads(4)` on this
+  host (Ryzen 7 5700X, 8 cores / 16 logical) the process accumulates about **9.7 CPU-seconds per wall-second**: four threads
+  are `Running` and doing the work, while **twelve more sit in a spin-wait pool at ~44% duty each** -- OpenMP sizes its pool
+  to the logical core count when the process starts, and `set_num_threads` afterwards cannot shrink it.
+  **It does not affect a latency measurement**, which is the reason not to chase it: DROW timed **319.55 ms** per frame with
+  the spinning pool and **322.09 ms** with `OMP_NUM_THREADS=4 MKL_NUM_THREADS=4 OMP_WAIT_POLICY=PASSIVE KMP_BLOCKTIME=0`,
+  a 0.8% difference inside run-to-run noise, because the spinners idle on cores the four workers are not using.
+  Verified 2026-10-11 (item 29) **after killing a 90-minute sweep to investigate it**, which is the cost this entry exists to
+  spare. If the question is which thread count is fastest, sweep `--threads` and read the latency; the CPU/wall ratio answers
+  a different question than it appears to.
 
 - **`UnicodeEncodeError` on any non-ASCII character printed to the console.**
   Windows' default console codepage is cp1252, not UTF-8; a `→`, `✓`, or similar in a `print()` crashes mid-run, sometimes after the expensive part of the operation already succeeded (see `AGENTS.md` I3) — use ASCII (`->`, plain words) in anything printed here.
