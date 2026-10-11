@@ -425,7 +425,7 @@ This discards all cross-beam information beyond the window, uses raw `r` values 
 
 **Raw scan representation.** See Section 4.2 — `(T, N_beams, 1)`, no Cartesian channels.
 
-**Rotating buffer for the `T`-frame window.** Because there's no realignment step required for correctness, maintaining the `T`-scan window at inference time reduces to a fixed-size circular buffer: evict the oldest scan, append the newest, O(1) per measurement. This is already implemented — `LiveDataset.push_measure()` (`library/follow_the_drow/datasets/live_dataset.py`) uses a `collections.deque(maxlen=time_frame)`, which evicts the oldest entry automatically on `append()`.
+**Rotating buffer for the `T`-frame window.** Because there's no realignment step required for correctness, maintaining the `T`-scan window at inference time reduces to a fixed-size circular buffer: evict the oldest scan, append the newest, O(1) per measurement. This is already implemented — `LiveDataset.push_measure()` (`library/takheliped/datasets/live_dataset.py`) uses a `collections.deque(maxlen=time_frame)`, which evicts the oldest entry automatically on `append()`.
 
 **What got dropped, and why.** This project previously had four full-scan detector classes; two were removed for violating the non-recursive constraint (Section 2, constraint 1) — see Section 6 for what they were and why they were tried. What's left, `SpaceTimeCNNDetector` and `FullScanTCNDetector`, were already non-recursive before that constraint was stated explicitly; `TemporalUNetDetector` (Architecture C) was added afterward as a controlled ablation against LFE (Section 5.3).
 
@@ -597,7 +597,7 @@ The most expressive beam-level architecture in the family (content-adaptive, glo
 
 \* `--align-scans` (default on) applies odometry rotation correction; see Section 4.3.
 
-All active detectors are accessible via `follow_the_drow.detectors.DETECTOR_REGISTRY`; the trainable ones (no published weights) via:
+All active detectors are accessible via `takheliped.detectors.DETECTOR_REGISTRY`; the trainable ones (no published weights) via:
 
 ```bash
 python train.py --detector drow|drspaam|spacetime_cnn|fullscan_tcn|temporal_unet|li2former

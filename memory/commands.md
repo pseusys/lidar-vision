@@ -22,7 +22,7 @@ Do not use bare `python3` or `make venv` — see `gotchas.md`.
 ```bash
 pip install ./library                                       # library + downloads (DROW, FROG, bundled DROW/DR-SPAAM/LFE weights)
 make build-lib                                               # cmake + make in library/cpp_core/build; installs system-wide only if run as root
-python -c "import follow_the_drow; from follow_the_drow.detectors import AlgorithmicDetector; print('OK')"   # confirms the C++ extension built
+python -c "import takheliped; from takheliped.detectors import AlgorithmicDetector; print('OK')"   # confirms the C++ extension built
 ```
 
 ## Training (`utils/train.py`, run from `utils/`)
@@ -37,10 +37,10 @@ python train.py --detector spacetime_cnn --dataset frog --init-weights ../checkp
 **TAKHeLiPeD**, the three-horizon detector (`TODO.md` A43, A51), trains with its own script, because it streams recordings rather than sampling frames:
 
 ```bash
-python train_three_horizon.py step2 --checkpoint-every 0.25   # stages 1-2 on single frames, A59's recipe by default (nms-mean, mirror, nearest labels, dropout 0.1); then average_checkpoints.py; --max-range-m sets the model range (default 10 m)
-python train_three_horizon.py step3a --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth     # stage 3 on stage 2's candidates (builds their cache first)
-python train_three_horizon.py step3b --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth   # whole detector with feedback
-python train_three_horizon.py step4 --stage2 ... --memory ... --joint ../checkpoints_three_horizon/step3b_joint.best.pth   # SORT and slot-count ablations, no training
+python train_takheliped.py step2 --checkpoint-every 0.25   # stages 1-2 on single frames, A59's recipe by default (nms-mean, mirror, nearest labels, dropout 0.1); then average_checkpoints.py; --max-range-m sets the model range (default 10 m)
+python train_takheliped.py step3a --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth     # stage 3 on stage 2's candidates (builds their cache first)
+python train_takheliped.py step3b --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth   # whole detector with feedback
+python train_takheliped.py step4 --stage2 ... --memory ... --joint ../checkpoints_three_horizon/step3b_joint.best.pth   # SORT and slot-count ablations, no training
 python scan_anomalies.py --dataset frog    # raw-scan noise report: no-return encodings, invalid runs, spikes, jitter, timestamps (also drow; A49)
 python slot_experiments.py horizon --memory <step3a ckpt> --stage2 <step2 ckpt>    # how long a memory the model uses: AP against how often it is emptied (A51 E1)
 python slot_experiments.py odometry --memory ... --stage2 ... --sensor-memory <D1 ckpt>  # AP against odometry drift, room frame vs sensor frame (A51 E2)
@@ -50,7 +50,7 @@ python slot_experiments.py odometry --memory ... --stage2 ... --out ../results/<
 python empty_scene.py --stage2 <step2 ckpt> --memory <step3a ckpt>               # detections per frame on FROG transferred's 72,533 person-free frames, where every one is a false positive (A50 phase 1 item 7)
 python score_memory.py --memory ... --stage2 ... --out <json>                    # score an interrupted run's best checkpoint (A51)
 python judge_arms.py                                                            # every A51 arm's deltas and verdicts against a control's three-sigma bars; stdlib only, safe beside a running job
-python train_three_horizon.py step3a --stage2 ... --visibility                   # give the coasting head the free space the laser saw past each slot (A51 S2); rebuilds the candidate cache once
+python train_takheliped.py step3a --stage2 ... --visibility                   # give the coasting head the free space the laser saw past each slot (A51 S2); rebuilds the candidate cache once
 python tracking_baselines.py rule                                               # A56 E15: the memory's bookkeeping with a rule score, 54-config grid on val, then test (~2.5 h)
 python tracking_baselines.py track --workers 6                                  # A56 E14: SORT, ByteTrack, ByteTrack + CBMOT by coordinate descent on val, then test (~35 min); never beside another torch job
 python tracking_baselines.py arms                                               # every memory checkpoint's frames, test (every annotated frame) and val, plus LFE (~1 h)
@@ -60,24 +60,24 @@ python tracking_baselines.py merge --workers 6                                  
 python tracking_baselines.py {rule,track,arms,report} --stage2 <step2 ckpt> --out <dir> --arms E13:<run>   # A61: the same replays on another stage 2 and memory; one --out per stage-2 seed, --arms on arms/report/merge
 python tracking_baselines.py summary --out ../checkpoints_three_horizon/a61    # A61: <out>/s*/report.json lined up by arm, with each bootstrap pair's intervals above zero counted -> <out>/summary.json
 python tracker_sweep.py --tracker byte | byte-cbmot                             # ByteTrack (with CBMOT confidence) on the published LFE detectors
-python train_three_horizon.py step3a --stage2 ... --train-drift-m-per-s 0.05    # train with odometry drifting at a rate drawn per stream, the repair for D1's conditional win (A51 S3/E11)
-python train_three_horizon.py step3b --stage2 ... --memory ... --oracle-prior    # feed stage 2 a ground-truth prior: the ceiling on what feedback could buy (A51 E12b)
-python train_three_horizon.py step3b --stage2 ... --memory ... --no-rescore      # drop the rescoring correction, leaving the prior as memory's only route to the loss (A51 E12a)
+python train_takheliped.py step3a --stage2 ... --train-drift-m-per-s 0.05    # train with odometry drifting at a rate drawn per stream, the repair for D1's conditional win (A51 S3/E11)
+python train_takheliped.py step3b --stage2 ... --memory ... --oracle-prior    # feed stage 2 a ground-truth prior: the ceiling on what feedback could buy (A51 E12b)
+python train_takheliped.py step3b --stage2 ... --memory ... --no-rescore      # drop the rescoring correction, leaving the prior as memory's only route to the loss (A51 E12a)
 python verify_oracle_prior.py --joint <step3b ckpt>                             # is E12's oracle prior real on recorded frames, and did the feedback weights move? needs the machine to itself (A51 E12)
 python measure_prior_share.py --runs a51_e12b_oracle a51_e12a_norescore        # what fraction of stage 2's bottleneck the feedback prior carries; explains E12's null (A51 E12)
 python judge_arms.py --control a51_b0_short --json ../results/a51_arms.json      # the same against the older control, written out as data
-python memory_diagnosis.py --slot-speed --cache .three_horizon_cache/<test cache>.pkl   # slot velocity against a >= 1 s displacement reference, stamped dt vs the trainer's running average; no model (A51 0a)
+python memory_diagnosis.py --slot-speed --cache .takheliped_cache/<test cache>.pkl   # slot velocity against a >= 1 s displacement reference, stamped dt vs the trainer's running average; no model (A51 0a)
 python memory_diagnosis.py --recovery --stage2 ... --memory ... --out <json>     # who stage 3 misses, whether a slot holds them, and whether a candidate exists at all (feedback's headroom; A51 E12)
-python three_horizon_oracle.py             # the interpolation bound on OUR candidates: recall headroom above stage 2, and how much of it stage 3 takes (A50 phase 1)
+python takheliped_oracle.py             # the interpolation bound on OUR candidates: recall headroom above stage 2, and how much of it stage 3 takes (A50 phase 1)
 python duration_curve.py --dir ../checkpoints_three_horizon/step2_control ../checkpoints_three_horizon/step2_dropout01   # test AP against training duration, from `step2 --checkpoint-every`'s checkpoints (A50 phase 1); pass --out, or it overwrites duration_curve.json; ~3.5 min per checkpoint
 python stage2_probe.py --stage2 <step2 ckpts> --stride 5                        # A59: the same stage-2 outputs through 7 decoders (vote grid, DR-SPAAM's NMS, LFE's peaks...), and recall by range and crowding against LFE at matched FP (~5 min per checkpoint)
 python stage2_probe.py --stage2 <step2 ckpts> --split val --stride 25 --out ../results/stage2_probe_val.json   # A59: the decoders' AP on val, where a decoder is chosen
-python train_three_horizon.py step2 --label-assign last --no-mirror --dropout 0   # A59 ablation: the recipe before 2026-10-06; the defaults are nearest-person labels, mirroring and dropout 0.1, decoded by nms-mean
-python train_three_horizon.py step2 --input-features lfe | --channels 8 16 32   # A59 ladder F1 / W: LFE's input alone, LFE's widths; the probe and averaging rebuild either from the checkpoint's args
-python train_three_horizon.py step2 --batch 8 --max-epochs 5 --min-epochs 5 --schedule exponential --lr 1e-3 --min-lr 1e-6 --weight-decay 0 --select last   # A59 ladder R: DR-SPAAM's protocol; tests the last weights, kept as step2_calibration.last.pth beside the best
+python train_takheliped.py step2 --label-assign last --no-mirror --dropout 0   # A59 ablation: the recipe before 2026-10-06; the defaults are nearest-person labels, mirroring and dropout 0.1, decoded by nms-mean
+python train_takheliped.py step2 --input-features lfe | --channels 8 16 32   # A59 ladder F1 / W: LFE's input alone, LFE's widths; the probe and averaging rebuild either from the checkpoint's args
+python train_takheliped.py step2 --batch 8 --max-epochs 5 --min-epochs 5 --schedule exponential --lr 1e-3 --min-lr 1e-6 --weight-decay 0 --select last   # A59 ladder R: DR-SPAAM's protocol; tests the last weights, kept as step2_calibration.last.pth beside the best
 python coarse_e2e.py                                                            # A60's verdict: the six E13 detectors' AP, AP@0.3, recall at a shared FP budget and first-second recall, and drop/keep for the coarse convolution; re-scores from its saved frames, since the coarse checkpoints no longer load (code at e76aa94)
 python average_checkpoints.py ../checkpoints_three_horizon/<run> [...]         # stage 2's weight averaging (recipe since 2026-10-06): val-chosen window of a `--checkpoint-every 0.25` run -> <run>/step2_calibration.averaged.pth (~2 min per run)
-python train_three_horizon.py step1        # stage 3 on cached LFE-Peaks candidates, the memory in isolation (dropped from the plan 2026-09-15)
+python train_takheliped.py step1        # stage 3 on cached LFE-Peaks candidates, the memory in isolation (dropped from the plan 2026-09-15)
 ```
 
 Every step takes `--resume`, **verified end to end on 2026-09-24** by killing a run at epoch 3 and relaunching it: it continued at epoch 4 with its validation curve and gate unbroken, then finished and wrote its results. It continues from `<step>_resume.pth` in `--out-dir` -- written after each evaluation, so a crash costs the time since it rather than the whole run. Relaunch the identical command with `--resume` added; it is off by default, so a fresh run never picks up an old state by accident.

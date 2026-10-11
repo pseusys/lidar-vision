@@ -175,7 +175,7 @@ The three partitions make this easy to get wrong in one direction in particular:
 FROG's recorder stamps scans in bunches — roughly 38 ms, 38 ms, then under 0.1 ms, with **20.2% of intervals under 1 ms** — so the median interval reads **26.2 Hz** where the sensor delivers a scan every 25 ms.
 `evaluate.py` took that median, and so every `FP/s` in this repository was 1.53x low, the "38.2 ms real-time budget" the cost claims were set against was really **25 ms**, and every duration converted from frames was 1.53x too long.
 
-One definition now serves every script: `follow_the_drow.utils.drow_utils.frame_period_s(times)`, the mean of the intervals inside each recording, dropping any longer than 0.5 s as a recording pause.
+One definition now serves every script: `takheliped.utils.drow_utils.frame_period_s(times)`, the mean of the intervals inside each recording, dropping any longer than 0.5 s as a recording pause.
 Measured on the real files: FROG **40.01 Hz** (`official` test) and **40.06 Hz** (`transferred`), against the sensor's 25 ms nameplate; DROW **12.70 Hz**, against the paper's 12.5 Hz and the median's 10.00 Hz.
 
 **What this changes when reading an older number.** Any figure per *second*, any duration in seconds converted from a frame count, and any "real-time budget" comparison written before 2026-10-10 is on the 26.2 Hz clock.

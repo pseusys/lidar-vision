@@ -79,7 +79,7 @@ Any dataset with irregular stamps needs the same treatment -- see `gotchas.md`.
 
 ## Where the remaining misses are, on the current model (2026-09-21)
 
-Measured on B0's best seed with `memory_diagnosis.py` and `three_horizon_oracle.py`. Both had last been run on the old chain,
+Measured on B0's best seed with `memory_diagnosis.py` and `takheliped_oracle.py`. Both had last been run on the old chain,
 whose stage 2 no longer loads, so the figures they replace are retired.
 
 **At the shared 0.3 threshold**, stage 3 covers 128,895 of 153,655 people against stage 2's 136,417 -- but at **1.092 false

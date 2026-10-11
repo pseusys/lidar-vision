@@ -13,7 +13,7 @@ Provided Docker image is aimed to solve the problem.
 ## Image
 
 The image configuration can be found in `deploy/docker` directory.
-You will be interested in `basic` target in Dockerfile; the rest is about `follow_the_drow` library, that is not universally needed.
+You will be interested in `basic` target in Dockerfile; the rest is about `takheliped` library, that is not universally needed.
 The image includes:
 
 - [`GDB`](https://www.sourceware.org/gdb/) for C++ based node debugging.
@@ -27,7 +27,7 @@ The image is available in GitHub image registry under name `ros_complete_env:mai
 Use the following command to do that:
 
 ```bash
-docker pull ghcr.io/pseusys/follow_the_drow/ros_complete_env:main
+docker pull ghcr.io/pseusys/takheliped/ros_complete_env:main
 ```
 
 It can be re-built using make `build-image` target, defined in `Makefile`:
@@ -46,13 +46,13 @@ Please, note the files, directories and environmental variables it depends on:
 
 1. `deploy/out` volume: the place for all **generated** files (e.g. ROS bags).
 2. `deploy/config` volume: the place for all **configuration** files (e.g. [`launch`](http://wiki.ros.org/roslaunch/XML) files, RVIZ configs, etc.).
-3. `deploy/follow_the_drow` volume: will be placed directly into `catkin_ws/src` - will be treated as ROS package.
+3. `deploy/takheliped` volume: will be placed directly into `catkin_ws/src` - will be treated as ROS package.
 4. `deploy/conf.env` file: environment variables that will be available in container.
 5. `ROBAIR_IP` environment variable: should match RobAIR physical IP or be `127.0.0.1` for running nodes locally.
 6. `CONTAINER_IP` environment variable:  should be equal to the host IP in robair network or be `127.0.0.1` for running nodes locally.
 7. `DISPLAY` environment variable: should be set by default, sets the display for ROS windows to appear on.
 
-> In order to run your own packages, include them the same way as `deploy/follow_the_drow` volume is included and set up environment and configurations for them in corresponding volumes.
+> In order to run your own packages, include them the same way as `deploy/takheliped` volume is included and set up environment and configurations for them in corresponding volumes.
 
 For running the nodes, take a look at make `launch-docker-*` targets, defined in `Makefile`.
 

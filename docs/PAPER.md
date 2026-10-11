@@ -253,7 +253,7 @@ Use `.venv/Scripts/python.exe` directly on Windows; `python3` resolves to a Stor
 | **False positives on person-free frames**, swept over operating thresholds | `python evaluate.py --dataset frog --frog-mode transferred --split test --lfe-peaks --lfe-ppn --no-bench` |
 | **AP at the tighter association distance** the benchmark also reports | add `--eval-r 0.3` to either `evaluate.py` command |
 | **The shuffled-history ablation** (temporal ordering is worth 0.5pp) | `python evaluate.py --dataset frog --split test --spacetime-cnn <ckpt> --eval-history-mode shuffle --no-bench` |
-| **Dataset composition** for every partition | `python -c "from follow_the_drow.datasets import FROG_Dataset; [FROG_Dataset(split=s, mode=m) for m in ('official','transferred','balanced') for s in ('train','val','test')]"` |
+| **Dataset composition** for every partition | `python -c "from takheliped.datasets import FROG_Dataset; [FROG_Dataset(split=s, mode=m) for m in ('official','transferred','balanced') for s in ('train','val','test')]"` |
 
 Three things worth knowing before running these.
 

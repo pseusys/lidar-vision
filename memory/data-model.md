@@ -259,7 +259,7 @@ By `dtime=20`, ~35 cm — close to half a walking stride.
 ## JRDB (`JRDB_Dataset`)
 
 DROW-compatible format, 541 beams, 270 deg FoV.
-Requires free manual registration at jrdb.erc.monash.edu and manual extraction into `library/follow_the_drow/include/JRDB-data/` — never auto-downloaded, so its absence is normal (`gotchas.md`).
+Requires free manual registration at jrdb.erc.monash.edu and manual extraction into `library/takheliped/include/JRDB-data/` — never auto-downloaded, so its absence is normal (`gotchas.md`).
 
 ## `LiveDataset` (ROS deployment only)
 

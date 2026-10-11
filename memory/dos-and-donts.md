@@ -36,10 +36,10 @@ A docstring says what the thing does and points at `memory/` for why.
 When you find yourself writing the third paragraph, it belongs in a doc file.
 
 **The ROS build does *not* duplicate `AlgorithmicDetector`'s C++ source — checked directly, not assumed.**
-`deploy/follow_the_drow/CMakeLists.txt` does `find_package(FollowTheDrow CONFIG REQUIRED)` and links `algorithmic_detector` against that compiled library; `deploy/follow_the_drow/src/algorithmic_detector.cpp` is a 54-line ROS-node wrapper that constructs and calls the shared `follow_the_drow::AlgorithmicDetector` class, not a second copy of it.
+`deploy/takheliped/CMakeLists.txt` does `find_package(Takheliped CONFIG REQUIRED)` and links `algorithmic_detector` against that compiled library; `deploy/takheliped/src/algorithmic_detector.cpp` is a 54-line ROS-node wrapper that constructs and calls the shared `takheliped::AlgorithmicDetector` class, not a second copy of it.
 A `library/cpp_core/sources/` change reaches the robot on the next `make build-lib` + catkin rebuild, with nothing to keep in sync by hand.
 
-**`deploy/follow_the_drow/nodes/drow_detector.py` does duplicate one thing: its vote-clustering hyperparameters.**
+**`deploy/takheliped/nodes/drow_detector.py` does duplicate one thing: its vote-clustering hyperparameters.**
 It imports the real shared functions (`cutout`, `prepare_prec_rec_softmax`, `votes_to_detections` from `drow_utils`), so the *logic* isn't forked — but its `RESULT_CONF` dict hardcodes its own `blur_sigma`/`bin_size`/`vote_collect_radius`/`min_thresh`/`class_weights` values, independent of whatever `evaluate_auc`'s own `v2d_conf` defaults are on the training/eval side.
 A hyperparameter re-tune landing in `utils/`/`library/` does not reach this node automatically; see `TODO.md`.
 See `deployment.md` for what is and isn't currently wired to the robot.
@@ -171,4 +171,4 @@ Ask for the approved list to be extended when something you need is missing.
 The rule and the conventions are in [`automation-scripts.md`](automation-scripts.md).
 
 **Never commit datasets, weights, checkpoints, logs, or downloaded scratch files.**
-`library/follow_the_drow/include/` (datasets + bundled weights, populated on install), `checkpoints*/`, `results/`, `runs/`, `utils/plots/`, `utils/*.pth`, and any ad hoc scratch directory for downloaded weights are all gitignored — there are no secrets in this project, the reason is size and reproducibility, not leakage.
+`library/takheliped/include/` (datasets + bundled weights, populated on install), `checkpoints*/`, `results/`, `runs/`, `utils/plots/`, `utils/*.pth`, and any ad hoc scratch directory for downloaded weights are all gitignored — there are no secrets in this project, the reason is size and reproducibility, not leakage.

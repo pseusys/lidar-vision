@@ -188,7 +188,7 @@ people a static detector fails on wholesale are mostly people who were briefly v
 
 ### The same bound above our own detector
 
-Produced by `utils/three_horizon_oracle.py` (`checkpoints_three_horizon/oracle_ours.json`) on the FROG **`official`** test split, so it is **not comparable with the LFE rows above**, which `utils/temporal_oracle.py` measures on `balanced`.
+Produced by `utils/takheliped_oracle.py` (`checkpoints_three_horizon/oracle_ours.json`) on the FROG **`official`** test split, so it is **not comparable with the LFE rows above**, which `utils/temporal_oracle.py` measures on `balanced`.
 
 | | current coverage | **interpolation bound** (2 s) | gain | never detected at all |
 | --- | --- | --- | --- | --- |

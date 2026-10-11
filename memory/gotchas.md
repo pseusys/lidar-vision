@@ -8,7 +8,7 @@ Platform and environment traps that have cost real debugging time.
   Windows' default console codepage is cp1252, not UTF-8; a `→`, `✓`, or similar in a `print()` crashes mid-run, sometimes after the expensive part of the operation already succeeded (see `AGENTS.md` I3) — use ASCII (`->`, plain words) in anything printed here.
 - **`python3` resolves to the Windows Store's "install Python" stub on this machine, not a real interpreter.**
   `make venv` / `make test` invoke it and will not create a usable environment here — use `.venv/Scripts/python.exe` directly (see `AGENTS.md` I5); fixing the Makefile is tracked in `TODO.md`.
-- **`ModuleNotFoundError: No module named 'follow_the_drow.cpp_binding'`.**
+- **`ModuleNotFoundError: No module named 'takheliped.cpp_binding'`.**
   The pybind11 C++ extension did not build — re-run `pip install -e ./library` (builds it via `Pybind11Extension` in `library/setup.py`) or `make build-lib` from the repo root.
 - **A Python version newer than 3.12 breaks the prebuilt C++ extension with an ABI mismatch.**
   The bundled `.pyd`/`.so` is built against CPython 3.12's ABI; a 3.13/3.14 interpreter loads it and fails confusingly rather than refusing cleanly — always use a 3.12 interpreter (`.venv`) for this project.
@@ -71,12 +71,12 @@ Platform and environment traps that have cost real debugging time.
 
 - **The machine can go to sleep in the middle of a training run, with the plugged-in sleep timeout set to "never".**
   2026-09-15: step 1 stopped at 10:28 with no error in its log; the System log shows "shutdown transition" and "system initiated reboot from Sleeping (Idle)" at 10:29:54, and no out-of-memory or bugcheck record.
-  `utils/train_three_horizon.py` now asks Windows to stay awake for as long as it runs (`SetThreadExecutionState`), which lasts only while the process lives and changes no power setting.
+  `utils/train_takheliped.py` now asks Windows to stay awake for as long as it runs (`SetThreadExecutionState`), which lasts only while the process lives and changes no power setting.
   **Re-read 2026-09-26: it was not sleep but a Windows Update restart.** Event 1074 at 10:29:09 shows `MoUsoCoreWorker.exe` initiating the restart on behalf of SYSTEM (update KB5129195 finished installing at 10:39); the "Sleeping (Idle)" wording in event 577 is misleading. `SetThreadExecutionState` does not stop that; the Windows Update active hours or a paused update do.
 - **A chain launched with `schtasks /it` runs in a console window on the desktop, and input there ends it.**
   Twice in two days (2026-10-05 18:14, 2026-10-06 21:49) a chain and its trainer died together, with no traceback and no driver event, the task's result `0xC000013A` (`STATUS_CONTROL_C_EXIT`: Ctrl+C or the console closed), in the same second as a Kernel-Power 566 session transition with `Reason InputHid` -- keyboard or mouse input. The likely mechanism is a keystroke into, or a close of, the chain's visible PowerShell window; whether either was meant is not recorded. Nothing was lost either time, since every step resumes. Launch chains with `powershell.exe -NoProfile -WindowStyle Hidden ...` so no window can receive the input, and when a chain stops with this code, ask the owner before relaunching.
 - **A finished ROCm process can hang at exit instead of terminating.**
-  Seen 2026-09-15: a step-1 smoke run wrote its results, then sat for 2.8 hours burning CPU and holding 3.4 GB of commit memory, which starved every later process. A crash hangs the same way (seen the same day: a step-3b smoke run's traceback, then a live process). `utils/train_three_horizon.py` now always leaves through `os._exit` -- 0 on success, 1 after printing the traceback -- so a launcher sees the exit code; still check for leftover `python.exe` before a long run. **`os._exit` does not always prevent it:** 2026-09-15, a test-only evaluation script that ends with `os._exit` wrote its results at 23:09:37 and was still alive at 23:12:55, when the chain launcher's watchdog stopped it. Keep launchers judging completion from the log, and stopping a process that lingers after it.
+  Seen 2026-09-15: a step-1 smoke run wrote its results, then sat for 2.8 hours burning CPU and holding 3.4 GB of commit memory, which starved every later process. A crash hangs the same way (seen the same day: a step-3b smoke run's traceback, then a live process). `utils/train_takheliped.py` now always leaves through `os._exit` -- 0 on success, 1 after printing the traceback -- so a launcher sees the exit code; still check for leftover `python.exe` before a long run. **`os._exit` does not always prevent it:** 2026-09-15, a test-only evaluation script that ends with `os._exit` wrote its results at 23:09:37 and was still alive at 23:12:55, when the chain launcher's watchdog stopped it. Keep launchers judging completion from the log, and stopping a process that lingers after it.
 - **A continued training run (`--init`) keeps its own best checkpoint, which starts empty.**
   `BestCheckpoint` saves the run's first defined validation as "best", even when it is worse than the weights the run started from. 2026-09-15: the step-2 continuation peaked at 73.0% val AP against the first run's 73.8% and would have handed step 3 worse weights.
   Compare the two runs' best validation before the next step starts, in the launcher, not in a script that polls alongside it: a guard that swapped the file raced step 3a, which had started loading the checkpoint 4 s earlier.
@@ -92,8 +92,8 @@ Platform and environment traps that have cost real debugging time.
   `torch-directml==0.2.5.dev240914` pins torch 2.4.1 and cannot share a venv with AMD's ROCm build (torch 2.9.1), so the one environment carries ROCm and its GPU appears as `torch.cuda`; `detect_device()` picks it up as CUDA/ROCm.
   Its CPU path is ~10x slower than torch 2.4.1's on stage 3's small per-step operations (`CHANGELOG.md` 2026-09-14), so CPU is no fallback for recurrent training.
 - **`pip install -e ../library` can silently point at an unrelated old checkout.**
-  If imports resolve to code that doesn't match what's on disk, `pip uninstall follow_the_drow` and reinstall from the current path.
-- **`library/follow_the_drow/utils/torch_utils.py` is not where `detect_device()` lives.**
+  If imports resolve to code that doesn't match what's on disk, `pip uninstall takheliped` and reinstall from the current path.
+- **`library/takheliped/utils/torch_utils.py` is not where `detect_device()` lives.**
   That file is an old CUDA-only helper (`move()`, `init_module()`, credited to Lucas Eyer's `lbtoolbox`) and does not do CUDA->DirectML->CPU detection — the real `detect_device()` is in `utils/train.py`.
 - **`LidarFrameDataset` caches every preprocessed frame, so a bigger split is a bigger RAM bill.**
   ~25 KB/frame in raw_scan mode: FROG's 108,356-frame training split is ~2.7 GB, and caching the 195,058-frame val split alongside it OOM'd a 17.1 GB machine outright (`CHANGELOG.md`, 2026-09-10).
@@ -102,7 +102,7 @@ Platform and environment traps that have cost real debugging time.
   `--no-frame-cache` trades the RAM back for recomputation on every access.
 
 - **`pip install onnx` silently upgrades numpy past this project's pin.**
-  It pulls `ml_dtypes`, which requires `numpy>=2.0.0`, over `follow_the_drow`'s `numpy~=1.24`.
+  It pulls `ml_dtypes`, which requires `numpy>=2.0.0`, over `takheliped`'s `numpy~=1.24`.
   pip reports the conflict as a warning and installs anyway.
   Reinstall the pin straight after (`pip install "numpy~=1.24"`) and re-run the tests; `ml_dtypes` then warns in the other direction and is harmless, because nothing here imports it.
 
@@ -112,7 +112,7 @@ Platform and environment traps that have cost real debugging time.
   Double it: `76.3%%`. `tests/test_train_eval_consistency.py::test_both_clis_can_print_help` now catches it.
 
 - **JRDB requires manual registration** (jrdb.erc.monash.edu) **and is never auto-downloaded.**
-  Absence of `library/follow_the_drow/include/JRDB-data/` is normal, not a broken install; every JRDB column in this project's own results is `n/a` for that reason, not a code limitation.
+  Absence of `library/takheliped/include/JRDB-data/` is normal, not a broken install; every JRDB column in this project's own results is `n/a` for that reason, not a code limitation.
 - **DirectML training crashes are not necessarily a code bug.**
   See `AGENTS.md` I4 for the three distinct crash modes hit training `Li2FormerDetector` — don't sink more than one workaround attempt into a DirectML-only crash before flagging it as an environment limitation.
 - **`.venv` is not a self-contained interpreter — its `pyvenv.cfg` points `home` at `C:\Users\...\AppData\Local\Programs\Python\Python312`.**

@@ -45,10 +45,10 @@ Workflow rules — what to edit, when to abstract, what to re-run — are in [`d
 
 ## C++
 
-- **C++17, single namespace `follow_the_drow`** for all library code (`library/cpp_core/`).
-- **pybind11 bindings (`binding.cpp`/`binding.hpp`) are excluded from the standalone C++ distribution** — `CMakeLists.txt` removes them from `SOURCES`/`HEADERS` before building the installable library, so the pure-C++ `FollowTheDrow` target never depends on pybind11 or Python.
+- **C++17, single namespace `takheliped`** for all library code (`library/cpp_core/`).
+- **pybind11 bindings (`binding.cpp`/`binding.hpp`) are excluded from the standalone C++ distribution** — `CMakeLists.txt` removes them from `SOURCES`/`HEADERS` before building the installable library, so the pure-C++ `Takheliped` target never depends on pybind11 or Python.
 - **The ROS build links against the compiled standalone library — it does not recompile a copy of it.**
-  `deploy/follow_the_drow/CMakeLists.txt` does `find_package(FollowTheDrow CONFIG REQUIRED)` and links every node against it; `AlgorithmicDetector`'s actual logic lives only in `library/cpp_core/sources/`, and a change there reaches the robot on the next `make build-lib` + catkin rebuild with nothing to keep in sync by hand.
+  `deploy/takheliped/CMakeLists.txt` does `find_package(Takheliped CONFIG REQUIRED)` and links every node against it; `AlgorithmicDetector`'s actual logic lives only in `library/cpp_core/sources/`, and a change there reaches the robot on the next `make build-lib` + catkin rebuild with nothing to keep in sync by hand.
 - **Intended linter: none chosen yet.** `clang-tidy` is the natural default if one is adopted — see `TODO.md`.
 
 ## Shell

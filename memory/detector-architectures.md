@@ -21,14 +21,14 @@ The research question this project started from: can a full-scan, non-recursive 
 3. **Extract input** — a `(N_beams, T, N_SAMP)` cutout tensor, or a `(N_beams, T, 1)` raw-range tensor.
 4. **Forward pass** — per-beam classification logits + a 2D vote offset (the DROW-style head), or a per-beam heatmap value (the LFE-style head, also available on Architectures A/B via `--head heatmap`).
 5. **Cluster** votes/heatmap peaks into `(x, y, class, confidence)` detections (`votes_to_detections()` / `find_peaks`).
-6. **(optional) Track** — `SimpleTracker` (training/eval side, `library/follow_the_drow/utils/tracking.py`) or `PersonTracker` (the ROS node) turns the per-frame detection list into one persistent, ID-stable position, predicting through missed frames up to `max_age` and requiring `min_hits` real matches before reporting a track at all.
+6. **(optional) Track** — `SimpleTracker` (training/eval side, `library/takheliped/utils/tracking.py`) or `PersonTracker` (the ROS node) turns the per-frame detection list into one persistent, ID-stable position, predicting through missed frames up to `max_age` and requiring `min_hits` real matches before reporting a track at all.
 
 Every stage after preprocessing is shared by every detector; only the extraction (step 3) and the head (step 4) differ by family.
 
 ## TAKHeLiPeD — the current detector
 
 **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector), named 2026-09-23 — *TA-KHé-Li-PeD*.
-Everything written before that date calls it **the three-horizon detector**, and the code still spells it `three_horizon`: `library/follow_the_drow/detectors/three_horizon.py`, `utils/train_three_horizon.py`, `checkpoints_three_horizon/`.
+Everything written before that date calls it **the three-horizon detector**, and the code still spells it `three_horizon`: `library/takheliped/detectors/takheliped.py`, `utils/train_takheliped.py`, `checkpoints_three_horizon/`.
 It is the only detector here that is **stateful across frames**, so it does not go through `DETECTOR_REGISTRY`, `train.py` or `evaluate.py` at all — it has its own trainer with its own steps (`commands.md`).
 
 It breaks the lifecycle above in two places: there is no `T`-scan window (one scan per call), and there is no post-hoc tracker (the memory replaces it, and beats it — `performance-log.md`).
@@ -86,14 +86,14 @@ Two earlier designs (`FullScanTransformerDetector`, `FullScanCNNDetector`) used 
 
 ## Source of truth
 
-`DETECTOR_REGISTRY` (`library/follow_the_drow/detectors/__init__.py`) is the authoritative list of what detectors exist and their canonical `--detector`/CLI key.
+`DETECTOR_REGISTRY` (`library/takheliped/detectors/__init__.py`) is the authoritative list of what detectors exist and their canonical `--detector`/CLI key.
 A detector class not in this dict cannot be trained or evaluated through `train.py`/`evaluate.py`, regardless of whether the class itself exists — absence from the registry means "not wired up," not "does not exist."
-**TAKHeLiPeD is the standing exception** and is deliberately absent: it is stateful across frames, so it does not fit the registry's stateless `(scan, T) -> detections` contract, and it is trained and scored by `utils/train_three_horizon.py` instead.
-`library/follow_the_drow/utils/torch_utils.py` looks like it should own device selection and does not — see `gotchas.md`.
+**TAKHeLiPeD is the standing exception** and is deliberately absent: it is stateful across frames, so it does not fit the registry's stateless `(scan, T) -> detections` contract, and it is trained and scored by `utils/train_takheliped.py` instead.
+`library/takheliped/utils/torch_utils.py` looks like it should own device selection and does not — see `gotchas.md`.
 
 ## Components
 
-- **`three_horizon.py`** — TAKHeLiPeD: `beam_features`/`sanitize_ranges`, `CalibrationNetwork` (single-frame; `fold_legacy_calibration` carries older checkpoints over; `input_features="lfe"` swaps the ten beam features for LFE's one `lfe_features` channel, A59's attribution arm F1 only), `ObjectMemory` + `Slots`/`SlotRules`/`manage_slots`, and `calibration_network()`/`object_memory()` (in the trainer), which rebuild either stage the way its checkpoint was trained -- stage 2's range limit, input and widths through `network_shape`. Not in `DETECTOR_REGISTRY` — it is stateful and has its own trainer.
+- **`takheliped.py`** — TAKHeLiPeD: `beam_features`/`sanitize_ranges`, `CalibrationNetwork` (single-frame; `fold_legacy_calibration` carries older checkpoints over; `input_features="lfe"` swaps the ten beam features for LFE's one `lfe_features` channel, A59's attribution arm F1 only), `ObjectMemory` + `Slots`/`SlotRules`/`manage_slots`, and `calibration_network()`/`object_memory()` (in the trainer), which rebuild either stage the way its checkpoint was trained -- stage 2's range limit, input and widths through `network_shape`. Not in `DETECTOR_REGISTRY` — it is stateful and has its own trainer.
 - **`architectures.py`** — `DrSpaamDetector` (cutout + auto-regressive spatial attention).
 - **`drow_detector.py`** — `DrowDetector` (cutout + fixed temporal sum); the only detector the ROS deployment currently runs (`deployment.md`).
 - **`full_scan.py`** — `SpaceTimeCNNDetector`, `FullScanTCNDetector`, `TemporalUNetDetector`; this project's own novel designs.

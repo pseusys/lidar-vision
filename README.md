@@ -10,7 +10,8 @@ The surrounding pipeline (detection, tracking, a follow-me behaviour) also runs 
 **TAKHeLiPeD** — **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector).
 Pronounced *TA-KHé-Li-PeD*.
 
-It names the detector that the older documents call "the three-horizon detector"; code identifiers (`three_horizon.py`, `train_three_horizon.py`, `checkpoints_three_horizon/`) keep the old spelling, so every checkpoint, cache and log path still matches.
+It names the detector that the older documents call "the three-horizon detector", and since 2026-10-11 the code says so too: the package is `takheliped`, the module `takheliped.py`, the trainer `train_takheliped.py`.
+**One path keeps the old word on purpose**: `checkpoints_three_horizon/`, because every checkpoint on disk stores the absolute path of the stage 2 it was trained on, and `coarse_e2e.py` resolves it — renaming the directory would dangle ~30 runs' provenance for a name nobody outside this repository sees.
 
 ## How it works, in one paragraph
 
@@ -85,8 +86,8 @@ GPU is auto-selected CUDA/ROCm -> DirectML -> CPU; read [`memory/gotchas.md`](me
 Run the training and evaluation scripts from `utils/` — their relative paths (`../checkpoints`, `../results`) assume it.
 
 ```bash
-python train_three_horizon.py step2                                  # TAKHeLiPeD stages 1-2, the calibration network
-python train_three_horizon.py step3a --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth   # the object memory on its candidates
+python train_takheliped.py step2                                  # TAKHeLiPeD stages 1-2, the calibration network
+python train_takheliped.py step3a --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth   # the object memory on its candidates
 python evaluate.py --dataset frog --lfe-peaks --lfe-ppn              # published baselines, no training
 python render_video.py --dataset frog                                # render a detection video
 ```

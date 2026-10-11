@@ -49,11 +49,11 @@ A research project on person detection from knee-height 2D LiDAR data, structure
 5. **(optional) Track**: a SORT-style tracker (`SimpleTracker`, training/eval side) or `PersonTracker` (the ROS node) turns per-frame detections into one persistent, ID-stable position.
 6. **(ROS deployment only)** the follow-me behaviour consumes the tracked position.
 
-**The project's own detector is `TAKHeLiPeD`** — **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector), *TA-KHé-Li-PeD*, named 2026-09-23 and called *the three-horizon detector* in everything written before that date; the code still spells it `three_horizon`.
+**The project's own detector is `TAKHeLiPeD`** — **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector), *TA-KHé-Li-PeD*, named 2026-09-23 and called *the three-horizon detector* in everything written before that date. **The code followed on 2026-10-11**: the package, the C++ namespace, the ROS package and every script now say `takheliped`. The one exception is the `checkpoints_three_horizon/` directory, kept deliberately because each checkpoint stores the absolute path of its own stage 2 and `coarse_e2e.py` resolves it.
 It does not fit the stage list above and is the standing exception to it: one scan per call, no `T`-scan window, no post-hoc tracker, and a learned object memory carried as state instead of stages 5-6.
-It is absent from `DETECTOR_REGISTRY` and is trained and scored by `utils/train_three_horizon.py`, not `train.py`/`evaluate.py` — see [`memory/detector-architectures.md`](memory/detector-architectures.md).
+It is absent from `DETECTOR_REGISTRY` and is trained and scored by `utils/train_takheliped.py`, not `train.py`/`evaluate.py` — see [`memory/detector-architectures.md`](memory/detector-architectures.md).
 
-**Storage** is files, not a database: datasets and published weights are downloaded into `library/follow_the_drow/include/` (gitignored, populated by `pip install ./library`); trained checkpoints go to `checkpoints*/` directories (gitignored); evaluation logs go to `results/` (gitignored).
+**Storage** is files, not a database: datasets and published weights are downloaded into `library/takheliped/include/` (gitignored, populated by `pip install ./library`); trained checkpoints go to `checkpoints*/` directories (gitignored); evaluation logs go to `results/` (gitignored).
 **Working directory** is the repo root for most commands, but `cd utils` first for `train.py` / `evaluate.py` / `render_video.py` — their relative paths (`../checkpoints`, `../results`) assume it.
 **Runtime**: Python 3.12, in the `.venv` virtualenv — activate with `.venv/Scripts/activate` (Windows) or call `.venv/Scripts/python.exe` directly.
 **Secrets**: none.
@@ -91,8 +91,8 @@ lidar-vision/
 ├── docs/RESEARCH.md            ← the research write-up: architecture design, citations, related work (mechanism only — results live in memory/, history in CHANGELOG.md)
 ├── deploy/conf.env             ← ROS runtime config, committed — no secrets in this project
 │
-├── library/                    ← the `follow_the_drow` Python/C++ package
-│   ├── follow_the_drow/
+├── library/                    ← the `takheliped` Python/C++ package
+│   ├── takheliped/
 │   │   ├── detectors/          ← nine detector implementations — memory/detector-architectures.md
 │   │   ├── datasets/           ← DROW_Dataset, FROG_Dataset, JRDB_Dataset, LiveDataset — memory/data-model.md
 │   │   ├── utils/              ← preprocessing, odometry estimation, tracking, torch device selection
@@ -103,7 +103,7 @@ lidar-vision/
 ├── utils/                       ← train.py, evaluate.py, render_video.py, one-off research scripts
 ├── tests/                       ← pytest, CPU-only, no GPU or dataset needed
 │
-└── deploy/follow_the_drow/      ← the ROS Noetic package that actually runs on the robot — memory/deployment.md
+└── deploy/takheliped/      ← the ROS Noetic package that actually runs on the robot — memory/deployment.md
     └── nodes/                    ← live_loader, file_loader, visualizer, algorithmic_detector, DROW_detector, data_annotator, tracker
 ```
 
