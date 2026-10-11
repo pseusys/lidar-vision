@@ -38,6 +38,57 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 29 done: one CPU latency protocol, and the budget line runs between our own two detectors (2026-10-11)
+
+*keywords: item 29, cpu_latency.py, one protocol, 4 threads, p99, 25 ms budget, 0.05 1.14 2.06 5.48 5.52 16.29 20.98 320.93 1195.88 1675.24, per beam, 3600 cutouts, five axes, _bench_manual.py, evaluate.py --bench, PAPER.md CPU column*
+
+Every detector re-timed together: the same 2,000 consecutive FROG test scans, in order, one at a time, batch 1, four CPU
+threads, after an untimed warm-up, timing **scan in to detections out** in three phases, each total being that frame's own
+phases added and percentiled afterwards.
+
+| detector | total ms | p99 | p99 vs 25 ms |
+| --- | ---: | ---: | ---: |
+| AlgorithmicDetector | 0.05 | 0.07 | 0% |
+| LFE-Peaks | 1.14 | 1.82 | 7% |
+| LFE-PPN | 2.06 | 3.65 | 15% |
+| TemporalUNet | 5.48 | 7.21 | 29% |
+| FullScanTCN | 5.52 | 7.91 | 32% |
+| SpaceTimeCNN | 16.29 | 25.93 | **104%** |
+| **TAKHeLiPeD** | 20.98 | 25.32 | **101%** |
+| DROW3 | 320.93 | 339.86 | 1359% |
+| DR-SPAAM | 1195.88 | 1316.46 | 5266% |
+| Li2Former | 1675.24 | 1758.21 | 7033% |
+
+**Five fit the sensor at the 99th percentile and five do not, and the line runs between our own two.** TAKHeLiPeD misses by
+0.32 ms on one frame in a hundred; `SpaceTimeCNN` misses by more, at 104% -- so the proposed detector, which additionally
+carries an object memory costing **9.27 ms** and a candidate decode, has the **better tail** of the two. Its median leaves
+4 ms of the period unspent, so what it lacks is tail headroom, which is item 30's subject.
+
+**The cutout detectors' 13x-70x is structural, not an implementation failing.** They run one forward pass **per beam**: 3,600
+cutouts per frame for DROW3 at `T=5`, **7,200** for DR-SPAAM at the `T=10` its released config specifies. DROW3 against
+Li2Former isolates it -- the same 3,600 cutouts, and Li2Former **5.2x** slower for putting a transformer behind them. And
+**building the cutouts alone costs 17-22x building a raw scan** (2.25-2.86 ms against 0.13), before a single multiply. That is
+the table's main lesson and the reason this project's detector reads whole scans.
+
+**The rows this replaces differed on five axes at once**, traced to their two source scripts rather than guessed:
+`utils/_bench_manual.py` timed 100 iterations of a single uniform-random scan for the three non-torch rows -- precisely the
+rows whose cost is most data-dependent -- and `utils/evaluate.py --bench` timed the forward pass alone on `torch.randn`, never
+called `torch.set_num_threads` (so it ran at this host's default **8**), reported a mean with no percentile, and passed one
+`--time-frame` to every detector, which is why DR-SPAAM's old row ran at half its own configured window. **They had twice the
+threads and did less work per frame, so they were bound to read lower**; a higher number now is not a regression. They are
+kept in a superseded block, because they are the only numbers we have for the DROW and JRDB beam counts.
+
+**One finding lands on the paper directly: `docs/PAPER.md`'s CPU column was headed "4 threads" while its three baseline rows
+had been measured at eight.** All four rows are now one protocol, and the header is true for the first time. Li2Former also
+moves from a cited 590.6 ms to a measured **1675.24**, which keeps its speed row honest while its accuracy row stays absent
+(item 31).
+
+**Two caveats the rows cannot carry.** DR-SPAAM's row is the windowed form, so **our tables overstate its cost and understate
+its accuracy by 1.24 pp at the same time** (item 6 / A47); timing `DrSpaamDetector.stream()` is the obvious follow-up.
+And `AlgorithmicDetector`'s row includes the two lines the C++ detector prints per call from inside the timed window -- 3,933
+over 2,000 frames, not suppressed by `verbose=False` -- which is cheap against a redirected file and reproduces exactly
+(0.05 ms on two independent runs) but would be far worse against a live console, a real fact about deploying it.
+
 ## Item 29's first sweep found two bugs in its own harness, one of them in a number that decides the budget (2026-10-11)
 
 *keywords: item 29, cpu_latency.py, per_frame_total, total_of, network_input, TENSOR_IN, p99 of sums, 27.90 vs 25.32, markdown emitter, 112% vs 101%*

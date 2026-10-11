@@ -13,7 +13,7 @@ Read [`interpreting-evaluation.md`](interpreting-evaluation.md) before quoting a
 This project evaluates a third-party model only to **fill a gap** — a model/dataset pair nobody published — never to re-derive a number that already exists.
 Re-deriving a published accuracy figure through this pipeline adds risk without adding information; this session's own audit is the case in point.
 
-**Speed is the exception.** `ms/frame` is only comparable when every row was measured on one machine, so every timing number here is ours by necessity.
+**Speed is the exception.** `ms/frame` is only comparable when every row was measured on one machine **and under one protocol**, so every timing number here is ours by necessity. The second half of that was only true from 2026-10-11 (item 29): before it, the table's rows came from two scripts at two thread counts on synthetic input.
 
 | notation | meaning |
 | --- | --- |
@@ -123,7 +123,7 @@ Much less than it looked.
 Under the policy above, the standing work is:
 
 - **our three architectures**, on DROW and FROG — nobody else can publish these;
-- **the speed table**, all of it, because one machine is the only way those rows compare;
+- **the speed table**, all of it, because one machine and one protocol are the only way those rows compare;
 - **genuine gaps**, and only if they are worth the GPU time: Li2Former on FROG, PeTra anywhere outside FROG, LFE outside FROG (and that one is degraded by construction, so probably not worth it).
 
 Everything marked `check paper` should be transcribed from the paper, not measured.
@@ -142,7 +142,7 @@ moves from −1.5 pp to **−0.52 pp** of the authors' 69.6%. **Every DR-SPAAM a
 understates the baseline by about that much**, on all three datasets.
 
 **Its cost is misreported in the opposite direction.** The windowed form runs the first two conv blocks five times per frame
-where the published one runs them once and attends to its carried template, so the 350.4 ms FROG row below *overstates* the
+where the published one runs them once and attends to its carried template, so the **1,195.88 ms** FROG row below *overstates* the
 published detector — we have been reporting DR-SPAAM as both less accurate and slower than it is. The corrected figure is part of
 the one-protocol timing sweep (`TODO.md` §A item 29), which now has `DrSpaamDetector.stream()` to time.
 
@@ -312,7 +312,97 @@ The phantom columns agree to **0.3%** (Peaks) and **7.6%** (PPN).
 
 The `gap` rows are ours to fill and are **not** fillable by pointing our current checkpoints at this split: they were selected against a different training set, and A32b holds training data constant before any such comparison counts.
 
-## Speed — ms/frame, single scan, CPU unless marked
+## Speed — ms/frame on this host, one protocol
+
+**Re-measured 2026-10-11 under one protocol** (`utils/cpu_latency.py`, `TODO.md` §A item 29). That is the point of this table
+rather than a detail of it: the rows below it were produced by **two different scripts**, on synthetic input, at an unstated
+thread count and with no percentile, so they could not be compared with each other — the one thing a speed table exists to
+allow. `AGENTS.md` rule 2b makes speed half of every accuracy answer, and half an answer cannot come from rows measured under
+conditions nobody wrote down.
+
+**The protocol.** Every detector sees the same **2,000 consecutive FROG test scans, in order, one at a time, batch 1, on four
+CPU threads**, after an untimed warm-up of five. What is timed is **scan in, detections out**, split into the phases a
+deployment pays for separately — building the input (cutouts, or the aligned raw scan), the forward pass, and decoding scores
+and votes into detections with `evaluate.py`'s own vote grid or peak rule, whichever that head uses. A detector whose released
+form does all three inside one call — the two LFE ONNX graphs, the C++ `AlgorithmicDetector` — is timed as one phase and its
+row leaves the rest blank. **Each total is that frame's own phases added, percentiled afterwards**, never the phases'
+percentiles added: the frame that is slow to preprocess is rarely the frame that is slow to decode, and adding their separate
+tails describes a frame that never happened (it read our own tail as 27.90 ms against a measured 25.32). The budget column is
+the **tail** against FROG's real **25 ms** period, which is the one item 1 settled — the stamped median said 26.2 Hz and made
+every budget 1.53x too generous.
+
+**CPU, 4 threads, batch 1, 2,000 consecutive FROG test scans, against FROG's 25 ms frame period.**
+
+| detector | pre | network | decode | memory | **total** | p99 | p99 vs budget |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| AlgorithmicDetector *(rule-based, C++)* | -- | 0.05 | -- | -- | **0.05 ms** | 0.07 | **0%** |
+| LFE-Peaks | -- | 1.14 | -- | -- | **1.14 ms** | 1.82 | **7%** |
+| LFE-PPN | -- | 2.06 | -- | -- | **2.06 ms** | 3.65 | **15%** |
+| TemporalUNet | 0.13 | 5.27 | 0.07 | -- | **5.48 ms** | 7.21 | **29%** |
+| FullScanTCN | 0.13 | 3.71 | 1.66 | -- | **5.52 ms** | 7.91 | **32%** |
+| SpaceTimeCNN | 0.13 | 14.36 | 1.75 | -- | **16.29 ms** | 25.93 | **104%** |
+| **TAKHeLiPeD**, whole detector | -- | 8.71 | 2.83 | 9.27 | **20.98 ms** | 25.32 | **101%** |
+| DrowDetector (DROW3) | 2.25 | 317.33 | 1.34 | -- | **320.93 ms** | 339.86 | **1359%** |
+| DrSpaamDetector (DR-SPAAM) | 2.52 | 1191.46 | 1.89 | -- | **1195.88 ms** | 1316.46 | **5266%** |
+| Li2FormerDetector | 2.86 | 1670.19 | 1.98 | -- | **1675.24 ms** | 1758.21 | **7033%** |
+
+**Five detectors fit the sensor and five do not, and the budget line runs between our two.** At the 99th percentile
+`AlgorithmicDetector`, both LFE graphs, `TemporalUNet` and `FullScanTCN` all finish inside 25 ms with room to spare.
+**TAKHeLiPeD misses it barely, at 101%** — 0.32 ms past, on one frame in a hundred — and
+**`SpaceTimeCNN` misses it by more, at 104%**, which is worth stating plainly: the proposed detector carries an object memory
+and a candidate decode that `SpaceTimeCNN` does not, pays **9.27 ms** for the memory alone, and still has the **better tail**
+of the two. Its median leaves 4 ms of the period unspent; what it lacks is tail headroom, which is what item 30 is for.
+
+**The cutout detectors are 13x to 70x over budget, and that is structural rather than an implementation failing.** They run one
+forward pass **per beam**: at FROG's 720 beams that is **3,600 cutouts per frame** for DROW3 at its `T=5`, **7,200** for
+DR-SPAAM at the `T=10` its released config specifies, and 3,600 for Li2Former. The formulation is what costs, not the code —
+and comparing DROW3 with Li2Former isolates it, since both encode the same 3,600 cutouts and Li2Former is **5.2x** slower for
+putting a transformer behind them. **Building the cutouts is itself 17-22x the cost of building a raw scan** (2.25-2.86 ms
+against 0.13), before a single multiply of the network. This is the table's most important lesson and the reason this project's
+detector reads whole scans.
+
+**Three caveats that the rows cannot carry themselves.**
+
+- **DR-SPAAM's row is its windowed form, and overstates what the published detector costs.** It encodes ten scans per frame
+  here; the released streaming detector encodes **one** and attends to a carried template, so a streaming row would be a
+  fraction of this. The same distinction runs the other way on accuracy — streaming is worth **+1.24 pp** to it (item 6 /
+  A47) — so **our tables understate its accuracy and overstate its cost at the same time**. `DrSpaamDetector.stream()` exists;
+  timing it was not in item 29's scope and is the obvious follow-up.
+- **`AlgorithmicDetector`'s row includes its own console output.** The C++ detector prints two lines per call ("N legs have
+  been detected", "N persons have been detected") from inside the timed window, and `verbose=False` does not suppress them —
+  3,933 lines over 2,000 frames. Against a redirected file that is cheap and the row reproduces exactly (0.05 ms across two
+  independent 2,000-frame runs); against a live console it would be far worse, which is a real fact about deploying it.
+- **Li2Former's row is inference only.** It is the one detector never trained here, so it has a speed row and no accuracy row
+  of ours (`TODO.md` item 31). Its **1,675 ms** is also 2.8x the 590.6 ms the superseded table carried, most plausibly the
+  thread count — that harness ran at torch's default 8 — which is one more reason those rows are not comparable with these.
+
+**The paper GPU figures below are not a ranking column.** They are kept to show the hardware gap, and no row here should be
+read against them.
+
+<details>
+<summary><strong>The superseded rows, kept: they are the only numbers for the DROW and JRDB beam counts, and their provenance
+is now known</strong></summary>
+
+**Why they are superseded rather than reconciled.** Traced 2026-10-11 to their two source scripts, they differ from the
+protocol above on **five axes at once**, so no per-detector difference can be attributed to any one of them:
+
+| axis | these rows | item 29 |
+| --- | --- | --- |
+| input | synthetic random (`np.random.uniform`, `torch.randn`), one scan repeated 100x | 2,000 consecutive real FROG test scans, in order |
+| scope | the forward pass only, for the six torch rows | scan in -> detections out, phases separated |
+| threads | torch's default, unstated — **8** on this host | **4**, stated |
+| statistic | a mean and a standard deviation, no percentile | median, p99, and the p99's share of the 25 ms period |
+| window | one `--time-frame`, default **5**, for every cutout detector | each detector's own (DROW 5, DR-SPAAM **10**, Li2Former 5) |
+
+The three non-torch rows came from **`utils/_bench_manual.py`**, which times 100 iterations of a single uniform-random scan —
+and those are the rows whose cost is most data-dependent, since the C++ detector's work scales with how many leg clusters a
+scan holds (real FROG frames hold 10-24) and LFE-PPN's with how many anchors survive to its greedy merge. The six torch rows
+came from **`utils/evaluate.py --bench`** (`_build_bench_models`, `bench_model`), which never calls `torch.set_num_threads`
+and passes one `T` to every detector — which is why DR-SPAAM's old row ran at **half the window its own configuration
+specifies**, and why the old footnote 10 below describes the measurement accurately and the detector wrongly.
+**Note the direction:** these rows had *twice* the threads and did *less* work per frame, so they were bound to read lower.
+A higher number above is not a regression.
+
 
 All of these are ours by necessity: `ms/frame` only compares when every row came off one machine.
 Unaffected by the 2026-09-10 accuracy fixes — timing does not depend on which frames were in which split.
@@ -353,6 +443,8 @@ It is quoted only against the sensor: FROG's measured mean frame period is 24.99
 ⁹ `TODO.md` A60 / A59 phase 3a, 2026-10-08: E13's stage 3 (no attention) on the no-temporal stage 2 trained with the adopted recipe -- `nms-mean` decoding, mirror augmentation, nearest-person labels, dropout 0.1, weight averaging (stage 2 alone 82.20%) -- three seeds, every 5th annotated test frame: **86.35 / 85.77 / 85.49%, mean 85.87**, AP@0.3 84.68%. Against E13 on the old recipe, 83.86%, +2.01. Stage 2 alone is the no-temporal network averaged over its val-chosen epochs, 82.28 / 82.08 / 82.22% (mean 82.20). Streamed one scan at a time on this machine's CPU at 4 threads (`tracking_baselines.py latency`, 2,000 frames, 2026-10-08): stage 2 8.75 ms, decoding 2.77 ms (`nms-mean`'s per-voter loop, ~1 ms more than the vote grid), memory 9.22 ms, **20.79 ms median, p99 24.08** -- inside FROG's 25 ms period with under a millisecond to spare at p99. The A56 tracking comparison above is on the old recipe's candidates and has not been repeated.
 
 ⁸ `TODO.md` A56 E22, 2026-10-03: `tracking_baselines.py latency`, one raw scan at a time through stage 2, DROW vote decoding and the E13 memory, 2,000 frames of FROG test, median (p99). CPU on this machine with 4 threads: **8.60 + 1.76 + 9.12 = 19.53 ms (22.38)**, 8 threads 19.47 ms (22.77); RX 9060 XT under ROCm: **5.76 + 2.27 + 4.82 = 12.92 ms (15.11)**. The CPU figure is the one comparable with this column, and it fits FROG's 25 ms scan period at the 99th percentile. The memory's share here includes moving each frame's tensors from numpy, which footnote 7 leaves out.
+
+</details>
 
 **Exact parameter counts**, counted from the ONNX initializers now that `onnx` is installed, replacing the file-size estimates this table used to carry (~65K / ~180K): **LFE-Peaks 53,258**, **LFE-PPN 170,903**.
 For scale, `SpaceTimeCNN` is 476,262 — **2.8x LFE-PPN, for +0.5pp on the benchmark and no use of temporal order at all.**

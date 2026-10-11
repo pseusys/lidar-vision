@@ -63,15 +63,20 @@ belongs to the memory.
 
 | | wp-AUC | phantoms per person-free frame | ms/frame, CPU (4 threads) | ms/frame, GPU |
 | --- | --- | --- | --- | --- |
-| LFE-Peaks, authors' weights | 65.1% | 1.39 | 1.08 | — |
-| LFE-PPN, authors' weights | 69.6% | 3.17 | 1.56 | — |
-| DR-SPAAM, **authors' published FROG figures** ¹ | 73.7% (`T=1`), 75.6% (`T=5`) | not reported | 350.4 ² | — |
+| LFE-Peaks, authors' weights | 65.1% | 1.39 | 1.14 | — |
+| LFE-PPN, authors' weights | 69.6% | 3.17 | 2.06 | — |
+| DR-SPAAM, **authors' published FROG figures** ¹ | 73.7% (`T=1`), 75.6% (`T=5`) | not reported | 1195.88 ² | — |
 | **stage 2 alone**, one scan per call | **82.20%** | 2.62 | 11.54 | 8.64 |
 | **stage 2 + object memory** | **85.87%** | **0.74** | 20.98 *(p99 25.32)* | 13.32 *(p99 15.32)* |
 
-*¹ Cited, not measured here: these are the authors' FROG numbers. ² Measured here, on this machine's CPU: DR-SPAAM runs one
-forward pass per beam, which is where the two orders of magnitude go. Our CPU column is the whole pipeline — network, candidate
-decoding and the memory — streamed one scan at a time.*
+*¹ Cited, not measured here: these are the authors' FROG numbers. ² Measured here, and **every row in this column was
+re-measured together on 2026-10-11 under one protocol** — the same 2,000 consecutive FROG test scans, in order, batch 1, at the
+four threads the header states. That had not been true before: the three baseline rows previously came from a harness that ran
+at torch's default eight threads on synthetic input and timed the forward pass alone, which is why they were lower. DR-SPAAM
+runs one forward pass **per beam** — 7,200 cutouts per frame at the `T=10` its released config specifies — and that is where
+the two orders of magnitude go; its released **streaming** form encodes one scan against a carried template, so this row
+overstates what the published detector costs while our accuracy rows understate it by 1.24 pp. Our CPU column is the whole
+pipeline — network, candidate decoding and the memory — streamed one scan at a time.*
 
 **Three results carry the argument.**
 
