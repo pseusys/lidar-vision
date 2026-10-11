@@ -148,6 +148,57 @@ with no percentile, so the table satisfies its own stated rule ("one machine") w
 
 **PeTra stays cited-only, and the reason is recorded so the question does not come back:** there is no PeTra implementation or weights in this repository -- only its published GPU figure (28.17 ms) -- so it has never run here and cannot be timed. It is not a failed attempt.
 
+**Items 32-33, owner's calls 2026-10-11.** One is a removal to carry out; the other is a proposal I would answer differently
+than it was put, and the reasons are below rather than in a commit message.
+
+| # | action | why | cost |
+| --- | --- | --- | --- |
+| 32 | **Retire `SpaceTimeCNNDetector`, `FullScanTCNDetector` and `TemporalUNetDetector`** -- the owner's call: legacy, unmaintained, and superseded by TAKHeLiPeD | They are the project's own first line of work and nothing has been trained on them since 2026-09. Keeping unmaintained architectures in a comparison invites a reader to think they are contenders | ~2 h, and it cascades -- see below |
+| 33 | **The ROS `leg_detector` as a baseline** (owner: "the official ROS person detector, better explored and maintained") | A reviewer's fair question is what a ROS user would actually reach for, and the answer is the `people` stack's leg detector rather than a detector written for one lab. **But see the three findings below: I would add it rather than swap it in** | days, not hours |
+
+**Item 32 cascades further than three classes, and the scope should be known before it starts.**
+
+- `library/takheliped/detectors/full_scan.py` goes whole: the three detectors and the blocks only they use
+  (`DilatedScanBackbone`, `_TemporalTCNBlock`, `_SEBlock`, `_JointConvBlock`, `_MultiScaleBlock`, the two U-Net blocks, `_gn`).
+- **They are the only users of `INPUT_MODE = "raw_scan"`.** Every surviving trainable detector in `train.py` is cutout-based, so
+  the old harness becomes cutout-only and its raw-scan path -- `aligned_raw_scan`, `raw_scan`, `--no-align-scans` and the beam
+  alignment behind them -- is dead code in that harness. TAKHeLiPeD reads raw scans through its own trainer, not this one. That
+  is a simplification worth having, but it is an architectural change rather than a tidy-up.
+- `utils/ablation_zero_history.py` exists only to run the history ablation on `SpaceTimeCNN` and goes with it.
+- `tests/test_batch_independence.py` is **about** `SpaceTimeCNNDetector`'s forward pass -- it locks down a batch-leakage bug in
+  that class -- so it goes too; a bug cannot recur in deleted code. But `tests/test_train_eval_consistency.py` merely *uses*
+  that detector as a stand-in while testing shared train/eval machinery, in 16 places, and must be **repointed rather than
+  deleted** -- which means repointing it to a cutout detector and checking that none of those tests was secretly about the
+  raw-scan path.
+- Ten scripts offer them as `--detector` choices or skip-lists and need updating: `train.py`, `train_all.py`, `evaluate.py`,
+  `nms_sweep.py`, `render_video.py`, `informational_capacity.py`, `error_breakdown.py`, `finetune_on_drow.py`, `cpu_latency.py`.
+
+**Every measurement they produced stays in the record, and must.** The project's whole direction turns on one of them: the
+2026-09-10 history ablation that reorganised §A found `SpaceTimeCNN` was a five-frame *averager* -- shuffling its window cost
+**0.5 pp** while freezing it cost 4.1 -- and its single-frame score of **63.0%** is what A35's acceptance criteria were written
+against and what `docs/PAPER.md` argues from. Those numbers were measured and remain true; after this they simply cannot be
+*reproduced* from this tree. The removal therefore records the commit where the code last existed, as A60 did for the coarse
+convolution (`LAST_TEMPORAL_COMMIT`), and `memory/performance-log.md` marks the rows removed rather than deleting them.
+
+**Item 33: three findings that change the proposal.**
+
+1. **It is not an algorithmic detector.** The `people` stack's `leg_detector` extracts hand-crafted features from laser clusters
+   -- point count, width, linearity, circularity, boundary regularity and so on -- and feeds them to a **trained OpenCV forest**
+   shipped with the package. It is a classical-ML baseline, not a rule-based one. Prof. Aycard's detector is the only
+   genuinely rule-based point in our comparison, and it is also the fastest at **0.20 ms** per frame. Swapping one for the other
+   does not replace like with like; it removes a category.
+2. **Its number here would be zero-shot, and this repository has a rule about that.** Its shipped classifier was trained on the
+   authors' own data at their own sensor height, so a FROG score would be transfer, not in-domain -- the exact mixing of regimes
+   `AGENTS.md` rule 3 exists to stop. Reporting it next to our in-domain numbers needs the caveat stated every time.
+3. **Getting a number costs days.** It is a ROS 1 catkin package, so either FROG is replayed as `LaserScan` messages inside the
+   Docker image and its output captured, or its feature extraction and forest are ported and verified against it. And
+   "maintained" is arguable in the other direction: ROS 1 is end-of-life and `leg_detector` has no ROS 2 successor in that stack.
+
+**So the recommendation is to add it, not to swap it.** Keeping Aycard's detector costs nothing, preserves the rule-based
+category and the credit A54 is pending on, and `leg_detector` then answers a different and also fair question -- what the
+standard ROS answer achieves on this data -- rather than overwriting one that is already measured. **If the owner still wants
+the swap, it is their call and the reasons above are the ones to overrule.**
+
 **Out of scope for the FROG pre-print, deliberately:**
 
 - **Every other partition and dataset: A62** (make the code dataset-agnostic) and **A63** (DROW, JRDB -- and **`balanced`**, moved
