@@ -16,7 +16,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from cpu_latency import FROG_PERIOD_MS, markdown, network_input, per_frame_total, summarise, total_of
+from cpu_latency import (FROG_PERIOD_MS, markdown, merge, network_input, pending, per_frame_total,
+                         summarise, total_of)
 
 
 class TestSummarise:
@@ -181,3 +182,43 @@ class TestTheMarkdownTable:
 
         assert "DR-SPAAM" not in table        # it was not among these rows
         assert "lfe_peaks" not in table and "LFE-Peaks" in table
+
+
+class TestARunThatCanBeResumed:
+    """A sweep of nine detectors takes ~110 minutes and used to write nothing until the last one finished.
+
+    Killing it at minute 90 therefore discarded seven completed rows -- which is exactly what happened on 2026-10-11,
+    to check a thread-pool anomaly that turned out not to matter. Rows are now written as each detector finishes, and a
+    relaunch times only what is missing.
+    """
+
+    DONE = {"drow": dict(phases={}, total=dict(median=321.84, p99=346.92)),
+            "li2former": dict(phases={}, total=dict(median=None, p99=None), failed="AttributeError")}
+
+    def test_an_empty_output_means_everything_is_pending(self):
+        assert pending(["drow", "drspaam"], {}) == ["drow", "drspaam"]
+
+    def test_a_finished_detector_is_not_timed_again(self):
+        assert pending(["drow", "drspaam"], self.DONE) == ["drspaam"]
+
+    def test_a_detector_that_failed_is_retried_rather_than_counted_as_done(self):
+        """Its row exists but holds no timing, and a harness bug fixed since is the likeliest reason it is there."""
+        assert "li2former" in pending(["li2former", "drow"], self.DONE)
+
+    def test_redo_times_everything_again(self):
+        assert pending(["drow"], self.DONE, redo=True) == ["drow"]
+
+    def test_the_requested_order_is_kept(self):
+        assert pending(["drspaam", "algorithmic", "drow"], self.DONE) == ["drspaam", "algorithmic"]
+
+    def test_rows_from_an_earlier_run_survive_a_narrower_one(self):
+        """Re-timing one detector must not delete the other eight: the output is the table, not this invocation's slice."""
+        merged = merge(self.DONE, {"drspaam": dict(phases={}, total=dict(median=1197.72))})
+
+        assert set(merged) == {"drow", "drspaam", "li2former"}
+        assert merged["drow"]["total"]["median"] == 321.84
+
+    def test_a_fresh_row_replaces_the_stale_one_it_re_times(self):
+        merged = merge(self.DONE, {"drow": dict(phases={}, total=dict(median=319.55))})
+
+        assert merged["drow"]["total"]["median"] == 319.55

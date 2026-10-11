@@ -182,6 +182,21 @@ def per_frame_total(timings: Dict[str, Sequence[float]]) -> Dict[str, Optional[f
     return summarise([sum(frame) for frame in zip(*columns)])
 
 
+def pending(requested: Sequence[str], done: Dict[str, Dict], redo: bool = False) -> List[str]:
+    """Which of the requested detectors still need timing, in the order asked.
+
+    A row that exists but holds no timing is **not** done: the only way to get one is a detector that could not be
+    timed, and the likeliest reason it is in the file is a harness fault since fixed.
+    """
+    return [name for name in requested
+            if redo or (done.get(name) or {}).get("total", {}).get("median") is None]
+
+
+def merge(done: Dict[str, Dict], fresh: Dict[str, Dict]) -> Dict[str, Dict]:
+    """The table after this run: every row it timed, over every row already there. The output is the table, not a slice."""
+    return {**done, **fresh}
+
+
 def total_of(row: Dict) -> Dict[str, Optional[float]]:
     """A row's total: the one it was measured with, or nothing -- never a total reconstructed from its phases."""
     return row.get("total") or summarise([])
@@ -231,25 +246,35 @@ def main() -> None:
     ap.add_argument("--threads", type=int, default=4, help="torch threads, stated in the output because it changes the answer")
     ap.add_argument("--detectors", nargs="+", default=list(ORDER))
     ap.add_argument("--out", type=Path, default=_HERE.parent / "results" / "cpu_latency.json")
+    ap.add_argument("--redo", action="store_true", help="re-time detectors the output already holds, instead of skipping them")
     args = ap.parse_args()
 
-    rows: Dict[str, Dict] = {}
-    for name in args.detectors:
+    rows: Dict[str, Dict] = json.loads(args.out.read_text())["rows"] if args.out.exists() else {}
+    queue = pending(args.detectors, rows, args.redo)
+    if skipped := [n for n in args.detectors if n not in queue]:
+        print(f"already timed, skipping: {', '.join(skipped)} (--redo to repeat them)", flush=True)
+
+    def persist():
+        """After every detector, because the slowest three take 40-55 minutes each and an interruption must not cost them."""
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(dict(threads=args.threads, frames=args.frames, period_ms=FROG_PERIOD_MS, rows=rows),
+                                       indent=1), encoding="utf-8")
+        args.out.with_suffix(".md").write_text(markdown(rows, args.threads) + "\n", encoding="utf-8")
+
+    for name in queue:
         print(f"timing {name} ...", flush=True)
         try:
-            rows[name] = time_detector(name, args.frames, args.threads)
+            rows = merge(rows, {name: time_detector(name, args.frames, args.threads)})
         except BaseException as failure:                            # one detector must not take the table with it
             print(f"  {name}: could not be timed -- {type(failure).__name__}: {failure}", flush=True)
-            rows[name] = dict(phases={}, total=summarise([]), failed=f"{type(failure).__name__}: {failure}")
+            rows = merge(rows, {name: dict(phases={}, total=summarise([]), failed=f"{type(failure).__name__}: {failure}")})
+        persist()
     takheliped = takheliped_row()
     if takheliped:
-        rows["takheliped"] = takheliped
+        rows = merge(rows, dict(takheliped=takheliped))
 
     report(rows, args.threads)
-    args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(dict(threads=args.threads, frames=args.frames, period_ms=FROG_PERIOD_MS, rows=rows),
-                                   indent=1), encoding="utf-8")
-    args.out.with_suffix(".md").write_text(markdown(rows, args.threads) + "\n", encoding="utf-8")
+    persist()
     print(f"\nwrote {args.out}", flush=True)
 
 
