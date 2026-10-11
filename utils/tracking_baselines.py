@@ -56,7 +56,7 @@ from follow_the_drow.utils.tracking import CBMOT_RULES, ByteTracker, odom_xya_de
 CHECKPOINTS = _HERE.parent / "checkpoints_three_horizon"
 STAGE2 = CHECKPOINTS / "step2_static" / "step2_calibration.best.pth"
 OUT_DIR = CHECKPOINTS / "a56"
-MATCH_RADIUS_M = 0.5                 # the benchmark's association distance, `train_three_horizon.MATCH_RADIUS_M`
+MATCH_RADIUS_M = 0.5                 # the benchmark's association distance, `train_takheliped.MATCH_RADIUS_M`
 OPERATING_THRESHOLD = 0.3
 SCORED_STRIDE = 5                     # every 5th annotated frame, as every published stage-3 number here
 BLOCK_S = 30.0                        # bootstrap block: long enough that people rarely cross one, short enough for ~100 per recording
@@ -178,7 +178,7 @@ def safe_auc(recs: np.ndarray, precs: np.ndarray) -> float:
 
 
 class PrecisionRecall:
-    """The precision-recall curve of `train_three_horizon.score_detections`, kept as per-detection true-positive increments.
+    """The precision-recall curve of `train_takheliped.score_detections`, kept as per-detection true-positive increments.
 
     `drow_utils._prec_rec_2d` accepts detections in descending score order and, at each one, re-solves the largest one-to-one
     matching within `radius` in that detection's frame. A frame's match count only ever depends on its own accepted detections, so
@@ -279,7 +279,7 @@ def paired_bootstrap(frames_a: Frames, frames_b: Frames, blocks: np.ndarray, res
 # ---------------------------------------------------------------- replays
 
 def stride_frames(split, stride: int = SCORED_STRIDE) -> np.ndarray:
-    """Packed indices of every `stride`-th annotated frame of each recording, the frames `train_three_horizon.evaluate` scores."""
+    """Packed indices of every `stride`-th annotated frame of each recording, the frames `train_takheliped.evaluate` scores."""
     picked = [np.nonzero(split.data.annotated[o:o + n])[0][::stride] + o for o, n in zip(split.offsets, split.lengths)]
     return np.concatenate(picked).astype(np.int64) if picked else np.zeros(0, np.int64)
 
@@ -290,7 +290,7 @@ def recording_of(split, index: np.ndarray) -> np.ndarray:
 
 def replay_tracker(split, factory: Callable[[], ByteTracker], output: str = "tracks", keep: Optional[set] = None) -> Tuple[Frames, List[int]]:
     """A tracker from `factory` over every frame of every recording of `split`'s candidates, with ego-motion from the poses exactly
-    as `train_three_horizon.replay_sort` applies it; on each annotated frame in `keep` (all when None), its reported tracks
+    as `train_takheliped.replay_sort` applies it; on each annotated frame in `keep` (all when None), its reported tracks
     (`output="tracks"`) or every candidate as the tracker rescored it (`"rescored"`). Returns the frames and their packed indices."""
     d = split.data
     frames, index = [], []
@@ -322,7 +322,7 @@ def replay_rule_scorer(split, device, streams: int, rules, unmatched_scale: floa
     itself at its faded value, as a tracker coasting a lost track. Frames are returned in packed order."""
     import torch
     from follow_the_drow.detectors.takheliped import initial_slots, manage_slots, sensor_to_world, world_to_sensor
-    from train_three_horizon import evaluation_segments, gather
+    from train_takheliped import evaluation_segments, gather
 
     out: Dict[int, Tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     d = split.data
@@ -577,7 +577,7 @@ def _merge_boot(job: Tuple[str, Tuple[str, Optional[float]], Tuple[str, Optional
 def run_rule(args) -> None:
     """E15: tune the rule scorer on val over the full grid, then score its best configuration on val and test once."""
     from follow_the_drow.detectors.takheliped import SlotRules
-    from train_three_horizon import detect_device, load_split
+    from train_takheliped import detect_device, load_split
 
     device, _ = detect_device()
     tuning_path = args.out / "rule_tuning.json"
@@ -611,7 +611,7 @@ def run_rule(args) -> None:
 
 def run_track(args) -> None:
     """E14: the fixed rows, then coordinate descent on val in parallel worker processes, then val and test for each row."""
-    from train_three_horizon import load_split
+    from train_takheliped import load_split
 
     tuning_path = args.out / "track_tuning.json"
     tuning = json.loads(tuning_path.read_text()) if tuning_path.exists() else {}
@@ -665,7 +665,7 @@ def run_arms(args) -> None:
     import torch
     from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
     from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector
-    from train_three_horizon import LFE_MISSING_RETURN_M, detect_device, evaluate, evaluation_segments, load_split, object_memory
+    from train_takheliped import LFE_MISSING_RETURN_M, detect_device, evaluate, evaluation_segments, load_split, object_memory
 
     device, _ = detect_device()
     for split_name, stride in (("test", 1), ("val", SCORED_STRIDE)):
@@ -714,7 +714,7 @@ def run_report(args) -> None:
     """The A56 tables: AP with intervals, GOSPA, strata, latency."""
     from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
     from motion_analysis import build_tracks, to_world
-    from train_three_horizon import candidate_targets, load_split
+    from train_takheliped import candidate_targets, load_split
 
     test = load_split("test", 0, args.stage2, "cpu")
     scored = stride_frames(test)
@@ -858,7 +858,7 @@ def run_latency(args) -> None:
     import torch
     from follow_the_drow.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
     from follow_the_drow.detectors.takheliped import free_range_profile
-    from train_three_horizon import MAX_RANGE_M, SECTOR_BEAMS, TOP_P, calibration_network, decode_candidates, detect_device, laser_angles, object_memory
+    from train_takheliped import MAX_RANGE_M, SECTOR_BEAMS, TOP_P, calibration_network, decode_candidates, detect_device, laser_angles, object_memory
 
     if args.threads:
         torch.set_num_threads(args.threads)
@@ -914,7 +914,7 @@ def run_latency(args) -> None:
 def run_merge(args) -> None:
     """A58: `lfe_detector._merge_nearby`'s merge on every output's saved frames, the radius chosen per output on val and test
     scored once; block bootstraps against the unmerged output and between outputs, on the official labels and without the copies."""
-    from train_three_horizon import load_split
+    from train_takheliped import load_split
 
     test = load_split("test", 0, args.stage2, "cpu")
     scored = stride_frames(test)

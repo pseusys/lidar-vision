@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
 from stage2_probe import nearest_other, peak_decode, unique_people
-from train_three_horizon import beam_votes, nms_decode
+from train_takheliped import beam_votes, nms_decode
 
 N_BEAMS = 720
 ANGLES = np.linspace(-np.pi / 2, np.pi / 2, N_BEAMS)

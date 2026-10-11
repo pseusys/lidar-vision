@@ -85,7 +85,7 @@ def verdict(ap_gain_pp: float, first_second_gain_pp: float) -> str:
 def run_split(run: Path, device):
     """A run's memory checkpoint and the test split of the stage-2 candidates it was trained on."""
     import torch
-    from train_three_horizon import load_split
+    from train_takheliped import load_split
 
     checkpoint = torch.load(run / "step3a_object_memory.best.pth", map_location=device, weights_only=False)
     return checkpoint, load_split("test", 0, Path(checkpoint["args"]["stage2"]), device)
@@ -93,7 +93,7 @@ def run_split(run: Path, device):
 
 def memory_frames(run: Path, device, streams: int):
     """A run's memory output on every annotated test frame, with its split."""
-    from train_three_horizon import evaluate, evaluation_segments, object_memory
+    from train_takheliped import evaluate, evaluation_segments, object_memory
 
     checkpoint, split = run_split(run, device)
     model = object_memory(checkpoint, split.data.features.shape[-1]).to(device)
@@ -116,7 +116,7 @@ def all_ages(split) -> Dict[Person, float]:
 
 
 def main() -> None:
-    from train_three_horizon import MATCH_RADIUS_M, candidate_targets, detect_device
+    from train_takheliped import MATCH_RADIUS_M, candidate_targets, detect_device
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--streams", type=int, default=STREAMS)

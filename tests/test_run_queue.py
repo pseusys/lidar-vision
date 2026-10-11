@@ -45,7 +45,7 @@ class FakeMachine:
 
 
 def _job(name: str, tmp_path: Path, **kwargs) -> Job:
-    return Job(name=name, cli=("train_three_horizon.py", "step2", "--out-dir", name), outputs=(tmp_path / f"{name}.json",), **kwargs)
+    return Job(name=name, cli=("train_takheliped.py", "step2", "--out-dir", name), outputs=(tmp_path / f"{name}.json",), **kwargs)
 
 
 def _run(jobs, tmp_path, machine, **kwargs):

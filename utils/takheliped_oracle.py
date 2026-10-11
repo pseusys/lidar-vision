@@ -38,8 +38,8 @@ stays visible.
 
 Usage
 -----
-    python three_horizon_oracle.py                      # whole test split
-    python three_horizon_oracle.py --limit-recordings 2 # a smoke run
+    python takheliped_oracle.py                      # whole test split
+    python takheliped_oracle.py --limit-recordings 2 # a smoke run
 """
 
 import argparse
@@ -60,7 +60,7 @@ sys.path.insert(0, str(_HERE))
 from follow_the_drow.detectors.takheliped import ObjectMemory, SlotRules  # noqa: E402
 from follow_the_drow.utils.drow_utils import frame_period_s  # noqa: E402
 from motion_analysis import build_tracks, to_world  # noqa: E402
-from train_three_horizon import (  # noqa: E402
+from train_takheliped import (  # noqa: E402
     MATCH_RADIUS_M, MIN_REPORTED_SCORE, OPERATING_THRESHOLD, Split, candidate_targets, detect_device, evaluation_segments, gather, load_split, object_memory,
 )
 
@@ -74,7 +74,7 @@ Track = Tuple[List[Tuple[int, bool, bool]], float]   # one trajectory's (frame, 
 def coverage(model: ObjectMemory, split: Split, device, streams: int, threshold: float, slice_frames: int = 512) -> Tuple[Coverage, Coverage]:
     """Which annotated people each detector covers, per annotated frame: `(recording, frame) -> bool array` over that frame's
     people, once for the candidates alone and once for the memory's report. Plays whole recordings from empty memory, `streams`
-    at a time in slices of `slice_frames`, exactly as `train_three_horizon.evaluate` does."""
+    at a time in slices of `slice_frames`, exactly as `train_takheliped.evaluate` does."""
     model.eval()
     cand_cov, mem_cov = {}, {}
     segments = sorted(evaluation_segments(split, 0, 0, 0), key=lambda seg: -seg[2])

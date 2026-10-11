@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
 from average_checkpoints import WINDOWS, average_window, window_members
 from follow_the_drow.detectors.takheliped import CalibrationNetwork
-from train_three_horizon import PeriodicCheckpoint, calibration_network
+from train_takheliped import PeriodicCheckpoint, calibration_network
 
 
 def _run(directory, epochs, args=None):

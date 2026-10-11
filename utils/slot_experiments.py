@@ -37,7 +37,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-from train_three_horizon import (  # noqa: E402
+from train_takheliped import (  # noqa: E402
     MATCH_RADIUS_M, MIN_REPORTED_SCORE, OPERATING_THRESHOLD, Split, detect_device, evaluate, evaluation_segments, gather,
     load_split, memory_ms_per_frame, object_memory, score_detections,
 )

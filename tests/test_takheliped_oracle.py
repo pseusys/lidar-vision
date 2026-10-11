@@ -1,6 +1,6 @@
 """The interpolation bound replayed on our own detector (TODO.md A50 phase 1, item 1).
 
-`three_horizon_oracle.bounds` answers two questions at once over trajectories
+`takheliped_oracle.bounds` answers two questions at once over trajectories
 whose points carry which of two detectors covered them:
 
     recoverable   stage-2 misses a perfect temporal model could fill, meaning
@@ -22,7 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from three_horizon_oracle import bounds
+from takheliped_oracle import bounds
 
 HZ = 10.0
 

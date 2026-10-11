@@ -12,7 +12,7 @@ import numpy as np
 
 from follow_the_drow.utils.drow_utils import votes_to_detections
 
-# `utils/train_three_horizon.py`'s VOTE_DECODING
+# `utils/train_takheliped.py`'s VOTE_DECODING
 SETTINGS = dict(blur_sigma=2.0, blur_win=11, bin_size=0.1, vote_collect_radius=0.5, min_thresh=1e-3)
 
 # Found by a random search: the blurred grid ties at bins (142, 105) and (143, 104), and the only vote near them is nearer the second.

@@ -8,7 +8,7 @@ it, the official DR-SPAAM code keeps each detection's single best beam (`nms_pre
 of the beam where its probability peaks. Decoding the *same* probabilities and votes each way separates the decoder from
 everything upstream of it (`memory/static-detector-diagnosis.md`).
 
-    vote-grid      this project's decoder until 2026-10-06, `train_three_horizon.decode_votes`, beams at the range limit silenced
+    vote-grid      this project's decoder until 2026-10-06, `train_takheliped.decode_votes`, beams at the range limit silenced
     vote-weighted  the same grid with each detection's voters weighted by probability, in position and in score
     nms            the official DR-SPAAM decoder: greedy over beams by probability, each keeping its own vote, 0.5 m apart
     nms-mean       the same, each detection at the probability-weighted mean of the votes it suppresses: stage 2's decoder since 2026-10-06
@@ -48,7 +48,7 @@ sys.path.insert(0, str(_HERE))
 from follow_the_drow.datasets.frog_dataset import frog_laser_angles  # noqa: E402
 from follow_the_drow.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
 from follow_the_drow.detectors.lfe_detector import _merge_nearby  # noqa: E402
-from train_three_horizon import (  # noqa: E402
+from train_takheliped import (  # noqa: E402
     MATCH_RADIUS_M, NMS_DIST_M, OPERATING_THRESHOLD, FrameSplit, beam_votes, calibration_network, candidate_targets, decode_votes,
     detect_device, frame_batch, load_frames, nms_decode, score_detections, voting_beams,
 )

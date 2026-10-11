@@ -11,13 +11,13 @@ annotated test frame. Stage 2 reads one frame; its coarse temporal convolution w
 
 Usage (from utils/)
 -----
-    python train_three_horizon.py step1
-    python train_three_horizon.py step2
-    python train_three_horizon.py step3a --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth
-    python train_three_horizon.py step4 --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth --joint ../checkpoints_three_horizon/step3b_joint.best.pth
-    python train_three_horizon.py step3b --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth
-    python train_three_horizon.py step1 --chunk-s 1 --max-epochs 1 --min-epochs 0 --limit-recordings 3 --val-windows 4   # smoke run
-    python train_three_horizon.py step2 --max-epochs 0.02 --eval-every 0.01 --min-epochs 0 --val-frames 64 --test-stride 500   # smoke run
+    python train_takheliped.py step1
+    python train_takheliped.py step2
+    python train_takheliped.py step3a --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth
+    python train_takheliped.py step4 --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth --joint ../checkpoints_three_horizon/step3b_joint.best.pth
+    python train_takheliped.py step3b --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth
+    python train_takheliped.py step1 --chunk-s 1 --max-epochs 1 --min-epochs 0 --limit-recordings 3 --val-windows 4   # smoke run
+    python train_takheliped.py step2 --max-epochs 0.02 --eval-every 0.01 --min-epochs 0 --val-frames 64 --test-stride 500   # smoke run
 """
 import argparse
 import ctypes
@@ -78,7 +78,7 @@ MAX_DT_S = 1.0
 GRAD_CLIP = 1.0
 EPOCH_TOLERANCE = 0.01
 TEST_STRIDES = (1, 5)
-CACHE_DIR = _HERE / ".three_horizon_cache"
+CACHE_DIR = _HERE / ".takheliped_cache"
 DEFAULT_MODE = "official"       # FROG's published partition; `transferred` is its person-free complement (TODO.md A50)
 SPLITS = ("train", "val", "test")
 PRIOR_CHANNELS = 2

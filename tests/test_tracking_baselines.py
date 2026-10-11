@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 from follow_the_drow.detectors.lfe_detector import _merge_nearby
 from follow_the_drow.detectors.takheliped import SlotRules
 from follow_the_drow.utils.tracking import ByteTracker
-from train_three_horizon import SequenceCandidates, pack, replay_sort, score_detections
+from train_takheliped import SequenceCandidates, pack, replay_sort, score_detections
 from tracking_baselines import (
     PrecisionRecall, block_ids, double_report_anatomy, drop_duplicate_annotations, first_detection_delays, gospa, gospa_frames,
     merge_detections, occlusion_share, paired_bootstrap, parse_arms, replay_rule_scorer, replay_tracker, stride_frames, summarise,

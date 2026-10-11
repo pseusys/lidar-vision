@@ -44,7 +44,7 @@ RESTATED = [
     Job(name="rate_slot_budget_memory", cli=("slot_budget.py", "--memory")),
     Job(name="rate_capacity", cli=("informational_capacity.py",)),
     Job(name="rate_oracle", outputs=(CHECKPOINTS / "oracle_ours.json",),
-        cli=("three_horizon_oracle.py", "--stage2", str(STAGE2), "--memory", str(MEMORY))),
+        cli=("takheliped_oracle.py", "--stage2", str(STAGE2), "--memory", str(MEMORY))),
 ]
 
 JOBS = [*COST, *RESTATED]

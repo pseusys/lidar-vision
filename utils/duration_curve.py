@@ -49,7 +49,7 @@ sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
 from follow_the_drow.datasets.frog_dataset import frog_laser_angles  # noqa: E402
-from train_three_horizon import SPLITS, calibration_network, detect_device, evaluate_calibration, load_frames  # noqa: E402
+from train_takheliped import SPLITS, calibration_network, detect_device, evaluate_calibration, load_frames  # noqa: E402
 
 EPOCH_IN_NAME = re.compile(r"\.epoch([0-9.]+)\.pth$")
 EVAL_BATCH = 64             # its --eval-batch

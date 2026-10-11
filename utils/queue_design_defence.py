@@ -31,7 +31,7 @@ JOBS = [
         cli=("slot_experiments.py", "horizon", "--stage2", str(STAGE2), "--memory", str(MEMORY), "--out", str(HORIZON))),
     # E13's own settings plus the one flag, so the only difference from the adopted model is what this measures.
     Job(name="d4_learn_value", outputs=(D4 / "step3a_results.json",),
-        cli=("train_three_horizon.py", "step3a", "--stage2", str(STAGE2), "--no-exchange", "--no-learned-match",
+        cli=("train_takheliped.py", "step3a", "--stage2", str(STAGE2), "--no-exchange", "--no-learned-match",
              "--learn-value", "--chunk-s", "1", "10", "--seed", "0", "--out-dir", str(D4), "--resume")),
 ]
 

@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
 from duration_curve import checkpoints
-from train_three_horizon import PeriodicCheckpoint
+from train_takheliped import PeriodicCheckpoint
 
 
 def _run(directory, epochs):

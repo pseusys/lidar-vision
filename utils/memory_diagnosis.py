@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Why does stage 3 lose people stage 2 had already found? (`TODO.md` A50 phase 1b.)
 
-`three_horizon_oracle.py` established the shape of the problem: over the FROG `official` test split the memory recovers 2,113
+`takheliped_oracle.py` established the shape of the problem: over the FROG `official` test split the memory recovers 2,113
 annotated people the candidates missed and **loses 6,076 it had**, for a net -3,963. So stage 3's weakness is not forgetting --
 something actively destroys good detections -- and its +3.2 points of AP are bought with precision, not recovered recall.
 
@@ -23,8 +23,8 @@ Usage
     python memory_diagnosis.py
     python memory_diagnosis.py --limit-recordings 2      # smoke run
     python memory_diagnosis.py --stage3-threshold 0.15   # does the loss survive a threshold recalibrated for stage 3?
-    python memory_diagnosis.py --slot-speed --cache .three_horizon_cache/<a test cache>.pkl   # is slot velocity corrupted by dt?
-    python memory_diagnosis.py --slot-rules --cache .three_horizon_cache/<a test cache>.pkl   # do the association gate and the fade time bind?
+    python memory_diagnosis.py --slot-speed --cache .takheliped_cache/<a test cache>.pkl   # is slot velocity corrupted by dt?
+    python memory_diagnosis.py --slot-rules --cache .takheliped_cache/<a test cache>.pkl   # do the association gate and the fade time bind?
     python memory_diagnosis.py --recovery                # of the people stage 2 misses, how many does the memory already hold?
 
 The last one is the test that separates the two readings of the loss. Stage 3's rescoring shifts the whole score distribution
@@ -68,7 +68,7 @@ sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
 from follow_the_drow.detectors.takheliped import ObjectMemory, SlotRules, initial_slots, manage_slots, sensor_to_world, world_to_sensor  # noqa: E402
-from train_three_horizon import (  # noqa: E402
+from train_takheliped import (  # noqa: E402
     MATCH_RADIUS_M, MAX_DT_S, MIN_DT_S, MIN_REPORTED_SCORE, OPERATING_THRESHOLD, PROBABILITY_EPS, SequenceCandidates, Split, detect_device, evaluation_segments, gather,
     laser_angles, load_split, mean_frame_period, object_memory, pack,
 )
@@ -107,7 +107,7 @@ def pairs(cand_xy: np.ndarray, usable: np.ndarray, gt_xy: np.ndarray, radius: fl
 @torch.no_grad()
 def diagnose(model: ObjectMemory, split: Split, device, streams: int, threshold: float, stage3_threshold: float, slice_frames: int = 512) -> Dict[str, Dict[str, np.ndarray]]:
     """Per annotated person, what the memory did to the candidate covering them; per candidate, the rescoring delta and whether
-    it covers anybody. Plays whole recordings from empty memory exactly as `train_three_horizon.evaluate` does."""
+    it covers anybody. Plays whole recordings from empty memory exactly as `train_takheliped.evaluate` does."""
     model.eval()
     people = {k: [] for k in ("stage2", "stage3", "raw", "rescored", "delta", "slot_distance", "slot_value", "slot_since_match", "slot_age")}
     candidates = {k: [] for k in ("delta", "raw", "covers_person")}

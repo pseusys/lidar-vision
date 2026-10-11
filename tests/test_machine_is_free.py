@@ -17,7 +17,7 @@ REPO = Path(__file__).parent.parent
 
 class TestIsProjectJob:
     def test_a_training_run_is_a_project_job(self):
-        assert is_project_job(r"C:\repo\.venv\Scripts\python.exe -u train_three_horizon.py step3a --stage2 x.pth")
+        assert is_project_job(r"C:\repo\.venv\Scripts\python.exe -u train_takheliped.py step3a --stage2 x.pth")
 
     def test_a_script_added_to_utils_after_this_test_was_written_is_recognised(self):
         """The list went stale once; every `.py` in `utils/` counts, so adding a script cannot silently defeat the guard."""
