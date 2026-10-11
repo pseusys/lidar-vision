@@ -339,7 +339,14 @@ Built (`BackgroundMap`), measured, and below every lever already priced: best **
 
 **The horizon argument survives**; what is rejected is reaching it through location rather than through objects.
 
-### A47. Evaluate DR-SPAAM in its official streaming form
+### A47. Evaluate DR-SPAAM in its official streaming form -- **DONE 2026-10-10 via §A item 6**
+
+**Closed.** `DrSpaamDetector.stream()` plus `evaluate_auc(stream=True)`, six tests pinning prefix equivalence exactly.
+On DROW test with the published weights: **windowed 67.84%, streaming 69.08%, +1.24 pp**, which moves our reproduction
+of the authors' 69.6% from -1.5 to **-0.52 pp**. So every DR-SPAAM accuracy figure in `memory/performance-log.md`
+understates the baseline by about that much, while its speed row *overstates* its cost -- the windowed form encodes ten
+scans per frame where the published one encodes one (item 29's table states both directions). **Timing the streaming
+form is the open remainder**, and was out of item 29's scope. The plan below is kept for the mechanism it records.
 
 **What.** The official DR-SPAAM detector is stateful: in inference mode `_SpatialAttentionMemory` keeps `self._memory` across calls (`memory = alpha * new + (1 - alpha) * attend(memory)`) and `reset()` clears it. Our `DrSpaamDetector.forward` instead re-encodes a `T`-scan window from scratch on every call (`architectures.py`, the template is initialised from `x[:, :, 0]` each time). Every DR-SPAAM number in this repository is therefore the windowed form.
 
