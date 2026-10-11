@@ -50,3 +50,7 @@ utils/.slot_cache/
 utils/.*.stale-heading-2026-09-14/
 utils/.takheliped_cache/
 checkpoints_three_horizon
+
+# Trained weights of the proposed model, kept at the root so they survive a lost
+# checkpoints_three_horizon/. Weights are data: archived deliberately, never committed.
+weights_archive/
