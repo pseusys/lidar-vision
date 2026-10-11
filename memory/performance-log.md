@@ -170,6 +170,24 @@ That signature is **mislocalisation**: the detections land near enough to pass a
 It points at the anchor-decode geometry calibrated on 2026-09-10, whose angular convention was explicitly recorded as weakly identified *because AP@0.5 could not distinguish it*. AP@0.3 can, and does.
 **Use `--eval-r 0.3` as the discriminator when calibrating anything positional.**
 
+## Why stage 2 beats LFE and DR-SPAAM: what it is *not*
+
+**A59's attribution ladder, completed 2026-10-11.** Each arm takes one thing from a published baseline and leaves everything else in the adopted recipe, three seeds, weights averaged, `nms-mean` decoding, every 5th annotated FROG test frame.
+
+| arm | what it borrows | wp-AUC | against C1 |
+| --- | --- | --- | --- |
+| **C1** | nothing: the adopted recipe | **82.20%** | — |
+| F1 | LFE's input: `1 - r/10` clipped to 0.2-10 m, as the only channel | 82.34% | **+0.14** |
+| W | LFE's widths, 8/16/32 (63,891 parameters) | 80.70% | **−1.50** |
+| **F1 + W** | both at once | **80.62%** | **−1.58** |
+| R | DR-SPAAM's training protocol, last weights | 80.11% | −1.84 (of which −1.24 is taking the last weights, not the best on val) |
+
+**The two costs do not add, because only one of them is real.** F1 + W lands within **0.08 pp** of W alone, against an additive prediction of 80.84: LFE's input contributes nothing on top of its width, exactly as it contributed nothing alone.
+**So the width is the whole cost — and it is small.** At LFE's own 64k parameters, with LFE's own input, our network still scores **80.62% against LFE-Peaks' 65.1%**: a 15.5 pp gap that no ingredient in this table explains.
+Width's 1.5 pp is also entirely on far people, which is what makes range anchors the best-motivated experiment left (`TODO.md` §A item 13).
+
+**What the ladder leaves.** With phase 1's decomposition — about half the lead over LFE-Peaks is the output head: centre votes, aggregation, NMS — what remains is **the network's form and the training recipe**, and those two have not been separated. Doing so needs LFE's architecture trained the way ours is, which was attempted and dropped (`TODO.md` §A item 7): 29 convolutions reproduce in order from the released graph, but two blocks' dataflow did not resolve without a shape-inference pass. **The pre-print states this as a limitation rather than a result.**
+
 ## TAKHeLiPeD's cost, end to end, one scan at a time
 
 **Measured 2026-10-10 on the adopted recipe** (`tracking_baselines.py latency`, E22; 2,000 consecutive test scans, batch 1, one stream, as on the robot; `checkpoints_three_horizon/a61/latency_*.json`).

@@ -38,6 +38,38 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Items 9, 11 and 12: the rename lands, the linter finds two crashes, and the ladder closes (2026-10-11)
+
+*keywords: A52, takheliped, follow_the_drow, rename, pybind11, cpp_binding, ruff.toml, Makefile, .venv, item 12, F1+W, a59_f1w_lfe_input_width, attribution ladder*
+
+**Item 12 completes A59's attribution ladder, and the answer is that the two costs do not add.** F1 (LFE's input alone) was
+worth nothing measurable and W (LFE's widths alone) cost 1.5 pp; taken together, three seeds give **80.68 / 80.66 / 80.51, mean
+80.62** -- which is W alone (80.70) to within **0.08 pp**, against an additive prediction of 80.84. **LFE's input contributes
+nothing on top of its width, exactly as it contributed nothing alone.** So the width is the whole cost, and the ladder's
+conclusion strengthens: with LFE's input *and* its width at once, our network still scores 80.62% against LFE-Peaks' 65.1% -- a
+15.5 pp gap that neither ingredient explains, nor their combination, nor DR-SPAAM's training protocol. What is left is the
+network's form and the training recipe, and item 7 was dropped before it could separate those.
+
+**The project has one name again (item 9, A52, widened by the owner mid-rename).** `follow_the_drow` was the last name from the
+superseded line of work, and it is gone from the Python package, the C++ namespace and header tree, the CMake target and config,
+the ROS package with its launch file and image name, every script and test, and the prose. The C++ half was **compiled** rather
+than assumed: MSVC 2022 builds and links the extension clean against the renamed namespace. `pybind11` was missing from the
+venv, which means nobody could have rebuilt that extension at all before today.
+
+**Two paths deliberately keep the old word.** `checkpoints_three_horizon/` stays, because every checkpoint stores the absolute
+path of the stage 2 it was trained on and `coarse_e2e.py` resolves it -- renaming it would dangle ~30 runs' provenance for a
+name nobody outside this repository sees. And `CHANGELOG.md` is left alone, because its entries describe what the names were
+when each thing happened.
+
+**Item 11's three gaps were each bigger than recorded.** `--help` exited 1 in **eleven** scripts, not one: the `os._exit`
+wrapper carrying the ROCm teardown workaround caught `BaseException`, which catches argparse's `SystemExit` too, so every one of
+them printed its help correctly and then reported failure. A project-level `ruff.toml` now selects the **bug-shaped** rules --
+the full set reports ~2,800 findings here, nearly all annotations and whitespace, and a config that fails on every run teaches
+people to ignore the linter -- and it found **two latent crashes**: `render_video.py` called `_win2global` without importing it,
+and `li2former.py` imported numpy inside a function so its return annotation had to be quoted to compensate. The `Makefile`
+built `venv/` while the working interpreter is `.venv/`, so `make test` ran against an environment nobody else used; its venv
+target is now a **file** target, which stops `make test` reinstalling pip, jupyter and the library before every run.
+
 ## Items 8 and 28: the value rule's constants defend themselves, and the horizon claim moves onto the adopted recipe (2026-10-11)
 
 *keywords: D4, learn_value, value_gain, value_fade, gain 0.085, fade_time_s 8.94, E1, horizon sweep, a51_horizon_adopted.json, a51_d4_learn_value_s0, A35 criterion, item 5*
