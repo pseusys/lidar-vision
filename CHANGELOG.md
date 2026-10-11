@@ -38,6 +38,41 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 23: 92% of the memory's recall gain is substitutable, and the rest is worth a third of a point (2026-10-11)
+
+*keywords: item 23, memory_headroom.py, shrinking gain, 90.6%, occlusion strata, static ceiling 99.04, substitutable, irreplaceable, identity, A61 strata*
+
+The owner asked the sharper version of a question already in the list: not only how fast the memory's advantage shrinks as
+stage 2 improves, but **whether there is anything only the memory can achieve, and where the extrapolation breaks.** It is
+answerable from runs already on disk, so `utils/memory_headroom.py` measures nothing itself.
+
+**The trend, three recipes at three seeds each:** the memory adds **+5.68 pp** of AP over candidates scoring 77.66%, **+3.69**
+over 82.19%, and **+2.76** over candidates of the same 82.25% whose stage 2 *also* reads time. The first two put zero gain at
+**90.6% candidate AP** on a straight line. The third says something the first two cannot: at equal candidate quality, a stage 2
+with temporal convolutions takes a further 0.93 pp from the memory, so **the memory is partly redundant with any temporal
+mechanism and not only with a better spatial one** -- A60's conclusion reached from a new direction.
+
+**The bound, which is what the owner was after.** A person whose own returns are blocked is not in the scan, so no single-frame
+detector finds them however good it gets; everyone else is in principle available. **A flawless single-frame detector would
+reach 99.04% recall on this data.** A61's occlusion strata then split the memory's recall gain:
+
+| stratum | people | share | candidates | memory | contributes |
+| --- | --- | --- | --- | --- | --- |
+| visible | 134,585 | 87.6% | 95.7% | 96.4% | +0.63 pp |
+| partly occluded | 17,589 | 11.4% | 84.3% | 89.5% | +0.59 pp |
+| mostly occluded | 1,481 | **1.0%** | 66.9% | 78.3% | **+0.11 pp** |
+
+**So 92% of the gain is on people a better static detector could also have found**, and the irreplaceable 8% is +0.11 pp. The
+entire occlusion-only prize is **0.32 pp of recall**; the memory already takes a third of it and 0.21 pp is left for a perfect
+one.
+
+**What this changes in the write-up.** The claim that the memory *finds people a detector cannot* has about a third of a
+percentage point behind it, and `docs/PAPER.md` now says so where the exposure is. What survives is **ranking** -- +3.69 pp of
+AP against +1.33 of recall, GOSPA 0.454 against 0.492 -- the phantom rate on empty scenes, and **identity**, which no
+single-frame detector provides at any quality and which the deployment consumes directly. The pragmatic framing stays honest
+too: nobody has a 99%-recall single-frame detector on this data, the best published is 69.6% and ours is 82.2%, so the memory
+delivers on top of the best stage 2 we can train -- while that margin has now shrunk twice as that stage 2 improved.
+
 ## Items 9, 11 and 12: the rename lands, the linter finds two crashes, and the ladder closes (2026-10-11)
 
 *keywords: A52, takheliped, follow_the_drow, rename, pybind11, cpp_binding, ruff.toml, Makefile, .venv, item 12, F1+W, a59_f1w_lfe_input_width, attribution ladder*

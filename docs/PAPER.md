@@ -108,9 +108,17 @@ period: **13.32 ms** on an RX 9060 XT, 53% of the budget and 61% at the 99th per
 of the budget but **101% at p99**, so a CPU-only deployment would drop occasional frames. The memory is the larger half of the
 CPU cost and the smaller half of the GPU's.
 
-**What the design still owes the reader.** The memory's advantage shrinks as stage 2 improves — **+5.68 pp** over candidates
-scoring 77.66%, **+3.68** over candidates scoring 82.2% — which is about 2 pp of gain per 4.5 pp of detector improvement, and a
-trend a reader is entitled to extrapolate. Room coordinates, the design's central claim, win only below roughly 0.015 m/s of
+**What the design still owes the reader, and the bound that answers it.** The memory's advantage shrinks as stage 2 improves —
+**+5.68 pp** over candidates scoring 77.66%, **+3.69** over candidates scoring 82.2%, and **+2.76** over candidates of the same
+82.25% whose stage 2 also reads time — about 2 pp of gain per 4.5 pp of detector improvement, with a straight line reaching zero
+near **90.6%**. Where that extrapolation stops being true is measurable, because a person whose own returns are blocked is not in
+the scan and no single-frame detector finds them however good it gets. **A flawless one would reach 99.04% recall here**, so the
+memory's irreplaceable territory is the 1.0% of people who are mostly occluded: of its +1.33 pp of recall at a matched
+false-positive rate, **+1.22 is on people a better detector could also have found and +0.11 is not**, and the entire
+occlusion-only prize is **0.32 pp**. The recall argument for memory is therefore nearly spent, and we do not rest the case on it.
+What survives is ranking — the +3.69 pp of AP against +1.33 of recall, and GOSPA at 0.454 against 0.492 — the phantom rate on
+empty scenes, and **identity**, which no single-frame detector provides at any quality and which a follow-me behaviour consumes
+directly. Room coordinates, the design's central claim, win only below roughly 0.015 m/s of
 odometry drift; training with jittered poses buys +1.75 pp at 0.05 m/s and +4.34 at 0.1 for nothing at zero drift, but does not
 move that crossover. And the coasting head, which reports a remembered person no candidate supports, fires **0.001 times per
 frame** on this recipe: it is described here because the architecture contains it, not because it acts.

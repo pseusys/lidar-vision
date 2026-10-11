@@ -433,6 +433,53 @@ the gain. 83% of it is reached by 5 s and 94% by 10 s, the same shape B0 showed.
 `SpaceTimeCNN`'s 0.5 pp shuffle penalty, where B0's backbone gave nine; the margin narrowed with the better stage 2, as
 everything about the memory has, and the claim stands on the model being proposed rather than on a superseded one.
 
+## What only the memory can do, and where the shrinking gain has to stop
+
+**Measured 2026-10-11 from runs already on disk (`utils/memory_headroom.py`, item 23). This is the design's biggest exposure
+and it needed a number rather than a hope.**
+
+**The gain falls as stage 2 improves, and a straight line puts zero at 90.6%.**
+
+| stage 3 trained on | candidates | memory | gain |
+| --- | --- | --- | --- |
+| B0, the no-temporal backbone A51 used (3 seeds) | 77.66 | 83.34 | **+5.68** |
+| the adopted recipe (3 seeds) | 82.19 | 85.87 | **+3.69** |
+| the adopted recipe *plus* stage 2's coarse convolution (3 seeds) | 82.25 | 85.01 | **+2.76** |
+
+Two readings, and the second is the one that matters. The first: 2 pp of gain per 4.5 pp of stage-2 improvement, reaching zero
+at candidates of **90.6% AP** -- which is not far away. The second: the third row has the *same* candidate quality as the second
+and a gain **0.93 pp lower**, because that stage 2 reads time itself. **The memory is partly redundant with any temporal
+mechanism, not only with a better spatial one**, which is A60's conclusion arrived at from a different direction.
+
+**A flawless single-frame detector would reach 99.04% recall.** A person whose own returns are blocked is not in the scan, so
+no static detector can find them however good it gets; everyone else is in principle available. A61's occlusion strata measure
+the split, pooled over three seeds, at each model's own matched false-positive rate:
+
+| stratum | people | share | candidates | memory | gain | contributes to the total |
+| --- | --- | --- | --- | --- | --- | --- |
+| visible | 134,585 | 87.6% | 95.7% | 96.4% | +0.7 | **+0.63 pp** |
+| partly occluded | 17,589 | 11.4% | 84.3% | 89.5% | +5.1 | **+0.59 pp** |
+| mostly occluded | 1,481 | **1.0%** | 66.9% | 78.3% | **+11.5** | **+0.11 pp** |
+
+**So 92% of the memory's recall gain is on people a better static detector could also have found**, and the irreplaceable 8%
+is worth **+0.11 pp**. The whole occlusion-only prize -- recovering *every* mostly-occluded person the candidates miss -- is
+**0.32 pp of recall**, of which the memory already takes a third and 0.21 pp is left for a perfect one.
+
+**What this does and does not say.**
+
+- **It does not say the memory is worth little.** Its AP gain is **+3.69 pp** against a recall gain of 1.33, so most of what it
+  buys is *ranking*, which this table does not measure: it moves the whole precision-recall curve, as GOSPA agrees (0.454
+  against the candidates' 0.492). The phantom cut on person-free frames, 2.62 to 0.74 per frame, is the same story at a fixed
+  operating point.
+- **It does say the recall argument is nearly spent.** A paper that claims the memory *finds people a detector cannot* has
+  about a third of a percentage point to claim, and should say so.
+- **What no single-frame detector provides at any quality is identity.** It cannot say that this detection is the same person as
+  the last frame's, which is what the tracking metrics score and what a follow-me behaviour consumes. That is a capability
+  rather than an accuracy delta, and it is the claim that does not erode as stage 2 improves.
+- **The comparison that matters is against achievable detectors, not perfect ones.** Nobody has a 99%-recall single-frame
+  detector on this data; the best published is 69.6% and ours is 82.2%. The honest framing is that the memory delivers its gain
+  on top of the best stage 2 we can train, and that the margin has shrunk twice already as that stage 2 improved.
+
 ## What is not established
 
 - **D2, D3, O1, O2, T1 and T2 each rest on one seed**, and none crosses the screening threshold; D1 has three. The memory as a
