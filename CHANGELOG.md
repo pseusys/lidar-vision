@@ -38,6 +38,33 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Items 8 and 28: the value rule's constants defend themselves, and the horizon claim moves onto the adopted recipe (2026-10-11)
+
+*keywords: D4, learn_value, value_gain, value_fade, gain 0.085, fade_time_s 8.94, E1, horizon sweep, a51_horizon_adopted.json, a51_d4_learn_value_s0, A35 criterion, item 5*
+
+**D4, the last unmeasured choice in A51 phase 3b.** `manage_slots` runs under `@no_grad`, so its constants were never trained:
+a matched slot's value climbs at `gain` = 0.1 and an unmatched one fades over `fade_time_s` = 10 s. `--learn-value` makes those
+two numbers parameters, leaving every discrete decision where it was, and trains them from the hand-set values. One seed on the
+adopted recipe, against E13's three-seed control: **AP 86.73 (+0.86, bar 1.32), AP at 0.3 m 85.65 (+0.97, bar 1.62), recall at
+matched false positives 95.99 (+0.52, bar 2.37)** -- every delta positive and every one inside its bar, so a null with a
+direction. 12.4 h over 51 epochs, 3.97 ms per frame.
+
+**The constants moved by about a tenth: `gain` 0.100 -> 0.085, `fade_time_s` 10.0 -> 8.94 s.** That is the result. Asked why 0.1
+and 10 seconds, the write-up can now answer that training them from those values moves them 15% and 11% and buys nothing
+outside the noise -- the hand-setting is defended by measurement instead of by assertion. **D4 is also the only A51 arm positive
+on all three bars at once**, so claiming the +0.86 would need two more seeds.
+
+**Three independent measurements now agree on the horizon**: the learned fade time at 8.94 s, D3's fixed 8 s decay costing only
+0.90 pp, and E1's sweep putting 94% of the gain inside 10 s. `SlotRules`' 10 s was never tuned, which is what makes the
+agreement worth stating.
+
+**E1's reset sweep on the adopted recipe (item 28)** closes the caveat item 5 was carrying. AP against how often the memory is
+emptied: **83.16 / 83.79 / 84.63 / 85.64 / 86.11 / 86.25 / 86.35** at 0.5 / 1 / 2 / 5 / 10 / 30 s / never, against candidates at
+82.22. So the memory is worth +4.13 pp and **+3.19 of it needs history older than half a second**, 77% of the gain; 83% is
+reached by 5 s and 94% by 10 s. **A35's "strictly benefits from ordered time" criterion passes by about six times**
+`SpaceTimeCNN`'s 0.5 pp shuffle penalty, where B0's backbone gave nine -- narrower with the better stage 2, and now measured on
+the model being proposed.
+
 ## Item 6 / A47: our DR-SPAAM was a windowed approximation, and that was most of its reproduction gap (2026-10-10)
 
 *keywords: A47, A48, DR-SPAAM, DrSpaamDetector, stream, _SpatialAttentionMemory, windowed, streaming, DROW test, 67.84, 69.08, 69.6, baseline fidelity, evaluate_auc stream*

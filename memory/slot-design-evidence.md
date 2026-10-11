@@ -396,6 +396,43 @@ radius large enough to catch them removes close neighbours too, and val picks no
 that even an oracle removing every redundant detection buys only +0.4-0.55 pp, about what it buys the tuned tracker
 (`rejected-ideas.md`).
 
+**The value rule's two hand-set constants are close to what the loss chooses (D4, one seed, 2026-10-11).** `manage_slots` runs
+under `@no_grad`, so its constants were never trained: a matched slot's value climbs at `gain` = 0.1 and an unmatched slot's
+fades to the floor over `fade_time_s` = 10 s, after which it retires. `step3a --learn-value` makes exactly those two numbers
+parameters -- the discrete decisions stay under `no_grad` and only the value the network *reads* is recomputed with gradient --
+and trains them from the hand-set values. Measured on the adopted recipe, against E13's three-seed control:
+
+| | control (3 seeds) | D4 (1 seed) | delta | bar | reading |
+| --- | --- | --- | --- | --- | --- |
+| test AP | 85.87 | **86.73** | +0.86 | 1.32 | inside |
+| AP at 0.3 m | 84.68 | **85.65** | +0.97 | 1.62 | inside |
+| recall at matched false positives | 95.47 | **95.99** | +0.52 | 2.37 | inside |
+
+**What the loss did with them:** `gain` **0.100 -> 0.085** and `fade_time_s` **10.0 -> 8.94 s**, a move of 15% and 11% from where
+they were set by hand. **That is the answer the write-up needs.** Asked "why 0.1 and 10 seconds?", it can now say that training
+those constants from those values moves them by about a tenth and buys nothing outside the noise bar -- the hand-setting is
+defended by measurement rather than by assertion. Two parameters, 3.97 ms per frame, unchanged.
+
+**It is also the only A51 arm whose deltas are positive on all three bars at once**, so if the +0.86 is ever to be claimed it
+needs a second and third seed; one seed inside the bar is not a result, and this one is reported as a null with a direction.
+
+**Three independent measurements now agree on the memory's horizon.** The learned fade time lands at **8.94 s**; D3's fixed
+decay was tried at **8 s** and cost only 0.90 pp; and E1's reset sweep puts 94% of the memory's gain inside **10 s**. The 10 s
+in `SlotRules` is not a tuned number and never was, which is why their agreement is worth stating.
+
+**E1's reset sweep, re-run on the adopted recipe (item 28, 2026-10-11).** Item 5's "strictly benefits from ordered time"
+criterion had borrowed its evidence from B0's superseded backbone, where the memory was worth +6.22 pp. On the adopted recipe:
+
+| memory emptied every | 0.5 s | 1 s | 2 s | 5 s | 10 s | 30 s | never |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| test AP | 83.16 | 83.79 | 84.63 | 85.64 | 86.11 | 86.25 | **86.35** |
+| recall at matched false positives | 94.02 | 94.48 | 94.93 | 95.35 | 95.71 | 95.93 | **96.00** |
+
+Candidates score 82.22, so the memory is worth +4.13 pp and **+3.19 of that needs history older than half a second** -- 77% of
+the gain. 83% of it is reached by 5 s and 94% by 10 s, the same shape B0 showed. **A35's criterion passes by about six times**
+`SpaceTimeCNN`'s 0.5 pp shuffle penalty, where B0's backbone gave nine; the margin narrowed with the better stage 2, as
+everything about the memory has, and the claim stands on the model being proposed rather than on a superseded one.
+
 ## What is not established
 
 - **D2, D3, O1, O2, T1 and T2 each rest on one seed**, and none crosses the screening threshold; D1 has three. The memory as a
