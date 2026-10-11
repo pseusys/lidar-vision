@@ -38,6 +38,33 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Items 32 and 33 decided: SpaceTimeCNN stays, the other two legacy architectures go, the ROS detector is cited (2026-10-11)
+
+*keywords: item 32, item 33, SpaceTimeCNNDetector, FullScanTCNDetector, TemporalUNetDetector, leg_detector, raw_scan, ablation_zero_history.py, reproducible, mention-only*
+
+Two proposals went to the owner yesterday; both came back narrower than they were put, and in both cases the narrowing is the
+better call.
+
+**Item 32 keeps `SpaceTimeCNNDetector`.** The proposal was to retire all three legacy full-scan architectures; the owner's
+reason for keeping this one is that it is the architecture the project's own decisions were made on, so retiring it would make
+those decisions unreproducible rather than merely historical. That is the 2026-09-10 history ablation which reorganised the
+whole task list -- shuffling the five-frame window cost **0.5 pp** while freezing it cost 4.1, so the detector was an averager
+rather than a temporal model -- and the **63.0%** single-frame score that A35's acceptance criteria and `docs/PAPER.md` argue
+from. Keeping it dissolves the cascade the proposal had to warn about: `utils/ablation_zero_history.py` stays, no test is
+deleted (`test_batch_independence.py` is about this class, `test_train_eval_consistency.py` uses it as a stand-in in 16
+places), and the harness keeps its raw-scan path, so `aligned_raw_scan` and `--no-align-scans` keep a user. What remains is
+**six definitions**: `FullScanTCNDetector`, `TemporalUNetDetector`, and the four blocks only they reach -- `DilatedScanBackbone`,
+`_TemporalTCNBlock`, `_UNetEncoderBlock`, `_UNetDecoderBlock`. `_gn`, `_SEBlock`, `_JointConvBlock` and `_MultiScaleBlock` stay,
+`_SEBlock` only because `_MultiScaleBlock` reaches it, which is why reachability was checked rather than assumed.
+
+**Item 33 cites the ROS `leg_detector` instead of measuring it.** The owner's view is that it cannot be reproduced in this
+setup, so no number for it would be either obtainable or fair -- which agrees with the finding that a score here would be
+zero-shot transfer from the authors' own sensor height, the regime mixing `AGENTS.md` rule 3 exists to stop, at a cost of days
+of ROS 1 replay work. It is named in `docs/RESEARCH.md`'s related work as the standard ROS answer, with the reason no row
+appears, and revisited only alongside a real-ROS deployment of TAKHeLiPeD. Prof. Aycard's detector therefore stays as the
+comparison's rule-based baseline -- still the only genuinely rule-based point in it, since `leg_detector` feeds hand-crafted
+cluster features to a trained forest, and still the fastest row in the speed table.
+
 ## Item 23: 92% of the memory's recall gain is substitutable, and the rest is worth a third of a point (2026-10-11)
 
 *keywords: item 23, memory_headroom.py, shrinking gain, 90.6%, occlusion strata, static ceiling 99.04, substitutable, irreplaceable, identity, A61 strata*

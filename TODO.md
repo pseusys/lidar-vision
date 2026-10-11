@@ -153,10 +153,21 @@ than it was put, and the reasons are below rather than in a commit message.
 
 | # | action | why | cost |
 | --- | --- | --- | --- |
-| 32 | **Retire `SpaceTimeCNNDetector`, `FullScanTCNDetector` and `TemporalUNetDetector`** -- the owner's call: legacy, unmaintained, and superseded by TAKHeLiPeD | They are the project's own first line of work and nothing has been trained on them since 2026-09. Keeping unmaintained architectures in a comparison invites a reader to think they are contenders | ~2 h, and it cascades -- see below |
-| 33 | **The ROS `leg_detector` as a baseline** (owner: "the official ROS person detector, better explored and maintained") | A reviewer's fair question is what a ROS user would actually reach for, and the answer is the `people` stack's leg detector rather than a detector written for one lab. **But see the three findings below: I would add it rather than swap it in** | days, not hours |
+| 32 | **Retire `FullScanTCNDetector` and `TemporalUNetDetector`**, and **keep `SpaceTimeCNNDetector`** -- the owner's refinement: the one architecture the project's decisions rest on stays, so those decisions stay reproducible | Nothing has been trained on any of the three since 2026-09, but SpaceTimeCNN is the one whose history ablation reorganised the whole project and whose 63.0% is what A35's acceptance criteria were written against. The other two influenced no decision | ~1 h, and the cascade below **disappears** |
+| ~~33~~ | ~~**The ROS `leg_detector` as a baseline**~~ **Closed 2026-10-11 by the owner: mention it, do not build it.** It cannot be reproduced in this setup, so a number would be unobtainable or unfair; revisited only if TAKHeLiPeD is taken to real ROS (§E). The findings below stay, because they are the reasons | -- | -- |
 
-**Item 32 cascades further than three classes, and the scope should be known before it starts.**
+**Item 32's scope, after the owner's refinement.** Keeping SpaceTimeCNN removes every consequence that made this risky:
+**exactly six definitions go** -- `FullScanTCNDetector`, `TemporalUNetDetector` and the four blocks only they use
+(`DilatedScanBackbone`, `_TemporalTCNBlock`, `_UNetEncoderBlock`, `_UNetDecoderBlock`), while **`_gn`, `_SEBlock`,
+`_JointConvBlock` and `_MultiScaleBlock` stay** because SpaceTimeCNN reaches them, `_SEBlock` only through `_MultiScaleBlock`,
+which is why that had to be checked rather than assumed. **The raw-scan path stays**, since SpaceTimeCNN is its user, so
+`aligned_raw_scan` and `--no-align-scans` keep their purpose and the old harness can still train a full-scan architecture.
+**No test is deleted and `utils/ablation_zero_history.py` stays** -- which is what makes the decision it produced reproducible
+rather than merely recorded, the owner's reason for keeping the architecture. Nine scripts list the two removed detectors as
+`--detector` choices or in skip-lists: `train.py`, `train_all.py`, `evaluate.py`, `nms_sweep.py`, `render_video.py`,
+`informational_capacity.py`, `error_breakdown.py`, `finetune_on_drow.py`, `cpu_latency.py`.
+
+**The superseded scope, for the record:**
 
 - `library/takheliped/detectors/full_scan.py` goes whole: the three detectors and the blocks only they use
   (`DilatedScanBackbone`, `_TemporalTCNBlock`, `_SEBlock`, `_JointConvBlock`, `_MultiScaleBlock`, the two U-Net blocks, `_gn`).
@@ -173,7 +184,9 @@ than it was put, and the reasons are below rather than in a commit message.
 - Ten scripts offer them as `--detector` choices or skip-lists and need updating: `train.py`, `train_all.py`, `evaluate.py`,
   `nms_sweep.py`, `render_video.py`, `informational_capacity.py`, `error_breakdown.py`, `finetune_on_drow.py`, `cpu_latency.py`.
 
-**Every measurement they produced stays in the record, and must.** The project's whole direction turns on one of them: the
+**The two removed detectors' measurements stay in the record** -- `memory/performance-log.md` marks their rows removed rather
+than deleting them, and the removal records the commit where the code last existed, as A60 did for the coarse convolution
+(`LAST_TEMPORAL_COMMIT`). **SpaceTimeCNN's stay reproducible**, which is the point of keeping it. For why that matters: the
 2026-09-10 history ablation that reorganised §A found `SpaceTimeCNN` was a five-frame *averager* -- shuffling its window cost
 **0.5 pp** while freezing it cost 4.1 -- and its single-frame score of **63.0%** is what A35's acceptance criteria were written
 against and what `docs/PAPER.md` argues from. Those numbers were measured and remain true; after this they simply cannot be
@@ -194,10 +207,11 @@ convolution (`LAST_TEMPORAL_COMMIT`), and `memory/performance-log.md` marks the 
    Docker image and its output captured, or its feature extraction and forest are ported and verified against it. And
    "maintained" is arguable in the other direction: ROS 1 is end-of-life and `leg_detector` has no ROS 2 successor in that stack.
 
-**So the recommendation is to add it, not to swap it.** Keeping Aycard's detector costs nothing, preserves the rule-based
-category and the credit A54 is pending on, and `leg_detector` then answers a different and also fair question -- what the
-standard ROS answer achieves on this data -- rather than overwriting one that is already measured. **If the owner still wants
-the swap, it is their call and the reasons above are the ones to overrule.**
+**Owner's resolution, 2026-10-11: mention it, do not build it.** It cannot be reproduced in this setup, so both the swap and
+the addition are off; `docs/RESEARCH.md`'s related work names it as the standard ROS answer and says why no number for it
+appears here. **Revisit only alongside real-ROS deployment** (§E), where its own stack is available and the comparison would sit
+in its natural setting rather than ported into ours. Aycard's detector therefore stays as the rule-based baseline, measured,
+credited, and the fastest row in the table.
 
 **Out of scope for the FROG pre-print, deliberately:**
 
