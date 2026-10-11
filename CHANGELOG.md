@@ -38,6 +38,32 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 29's first sweep found two bugs in its own harness, one of them in a number that decides the budget (2026-10-11)
+
+*keywords: item 29, cpu_latency.py, per_frame_total, total_of, network_input, TENSOR_IN, p99 of sums, 27.90 vs 25.32, markdown emitter, 112% vs 101%*
+
+The first full run of `utils/cpu_latency.py` timed eight of nine detectors and wrote a table that was wrong in one column, so
+the sweep was discarded and re-run rather than published. Both faults are now pinned by tests.
+
+**The totals' tail was the phases' tails added, which describes a frame that never happened.** `total_row` summed each phase's
+own 99th percentile, but a deployment pays all the phases on *one* frame, and the frame that is slow to preprocess is rarely
+the frame that is slow to decode. The replacement, `per_frame_total`, adds each frame's own phases and percentiles afterwards.
+The medians barely move; the tails do. **On our own detector the mistake read 27.90 ms where the measurement says 25.32 --
+112% of FROG's 25 ms period against 101%**, the difference between missing the budget badly and missing it barely. A second
+fault had the same root: `takheliped_row` rebuilt the merged row's total from its stages even though that run (`a61`) had
+measured the whole frame end to end, so `total_of` now takes a row's measured total and never reconstructs one.
+
+**Li2Former's whole row was lost to a types mismatch in the harness**, not to anything about Li2Former: its `forward_one` takes
+a tensor while every other detector's takes numpy, so `AttributeError: 'numpy.ndarray' object has no attribute 'unsqueeze'`
+ended its row 2,000 frames into the run. `network_input` now asks which the detector wants. This is the kind of failure item 29
+exists to remove -- the detector was there to be measured and the measurement equipment dropped it.
+
+**The table is emitted, not typed** (`markdown`): seventy cells go into `memory/performance-log.md` now and again after item
+30's thread sweep, and `memory/automation-scripts.md`'s rule is to automate before doing a thing by hand twice.
+
+**What the sweep costs, for the record:** ~110 minutes for nine detectors at 2,000 frames, of which Li2Former is ~55 and
+DR-SPAAM ~40 -- both at well over a second per frame, which is the finding rather than an inconvenience.
+
 ## Items 32 and 33 decided: SpaceTimeCNN stays, the other two legacy architectures go, the ROS detector is cited (2026-10-11)
 
 *keywords: item 32, item 33, SpaceTimeCNNDetector, FullScanTCNDetector, TemporalUNetDetector, leg_detector, raw_scan, ablation_zero_history.py, reproducible, mention-only*

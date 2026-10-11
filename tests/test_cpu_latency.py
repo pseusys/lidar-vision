@@ -16,7 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from cpu_latency import FROG_PERIOD_MS, summarise
+from cpu_latency import FROG_PERIOD_MS, markdown, network_input, per_frame_total, summarise, total_of
 
 
 class TestSummarise:
@@ -65,3 +65,119 @@ class TestTheBudgetItself:
     def test_the_period_is_frogs_real_one_not_the_stamped_median(self):
         """40 Hz, settled in item 1: the median stamped interval said 26.2 Hz and made every budget 1.53x too generous."""
         assert FROG_PERIOD_MS == pytest.approx(25.0, abs=0.1)
+
+
+class TestWhatTheNetworkIsHanded:
+    """Li2Former's `forward_one` is the one that takes a tensor; every other detector's takes numpy.
+
+    The first sweep lost Li2Former's whole row to this -- `AttributeError: 'numpy.ndarray' object has no attribute
+    'unsqueeze'`, 2,000 frames into the run and after the other eight had already been timed. The rule is small and the
+    failure is silent-ish (one row goes blank), so it is pinned here rather than left to the next person to rediscover.
+    """
+
+    def test_li2former_is_handed_the_tensor_it_asks_for(self):
+        import torch
+
+        x = torch.zeros(4, 5, 48)
+
+        assert network_input("li2former", x) is x
+
+    def test_every_other_detector_is_handed_numpy(self):
+        import numpy as np
+        import torch
+
+        handed = network_input("drow", torch.zeros(4, 5, 48))
+
+        assert isinstance(handed, np.ndarray)
+        assert handed.shape == (4, 5, 48)
+
+
+class TestTheTotalIsAFramesCost:
+    """A deployment pays all the phases on the *same* frame, so the total's tail is a percentile of per-frame sums.
+
+    Summing each phase's own p99 answers a different question -- how bad could a frame be if every phase had its worst
+    frame at once -- and overstates the tail, because the slow preprocess frame and the slow network frame are rarely
+    the same frame. On this host that mistake read TAKHeLiPeD's tail as 27.90 ms (112% of the 25 ms budget) where the
+    measurement says 25.32 (101%): the difference between 'misses the budget badly' and 'misses it barely'.
+    """
+
+    def test_the_tail_is_over_frames_not_over_phases(self):
+        # Two frames, and the phases take turns being the slow one: no frame ever costs 10 + 10.
+        phases = dict(network=[10.0, 1.0], decode=[1.0, 10.0])
+
+        row = per_frame_total(phases)
+
+        assert row["median"] == 11.0
+        assert row["p99"] == 11.0
+
+    def test_the_median_still_adds_when_the_phases_peak_together(self):
+        phases = dict(network=[4.0, 4.0, 4.0], decode=[1.0, 1.0, 1.0])
+
+        assert per_frame_total(phases)["median"] == 5.0
+
+    def test_the_budget_share_comes_along(self):
+        phases = dict(network=[FROG_PERIOD_MS] * 4)
+
+        assert per_frame_total(phases)["budget_median"] == pytest.approx(1.0)
+
+    def test_phases_of_unequal_length_are_refused_rather_than_zipped_short(self):
+        """Truncating would silently drop the frames one phase recorded and the other did not."""
+        with pytest.raises(ValueError):
+            per_frame_total(dict(network=[1.0, 2.0], decode=[1.0]))
+
+    def test_no_phases_is_an_empty_row(self):
+        assert per_frame_total({})["median"] is None
+
+
+class TestAMeasuredTotalIsNotRecomputed:
+    def test_a_row_that_carries_its_own_total_keeps_it(self):
+        """TAKHeLiPeD's stages are merged from a run that timed the whole frame end to end; that total is the real one."""
+        row = dict(phases=dict(network=dict(median=8.71, p99=11.0)), total=dict(median=20.98, p99=25.32))
+
+        assert total_of(row)["p99"] == 25.32
+
+
+class TestTheMarkdownTable:
+    """The table goes into `memory/performance-log.md` and will be regenerated after the thread sweep (item 30).
+
+    Transcribing seventy cells by hand once is tedious; twice is how a digit changes without anyone deciding it should.
+    """
+
+    @staticmethod
+    def rows():
+        return {
+            "drow": dict(phases=dict(preprocess=dict(median=2.26), network=dict(median=318.22), decode=dict(median=1.36)),
+                         total=dict(median=321.84, p99=346.92, budget_p99=13.88)),
+            "lfe_peaks": dict(phases=dict(network=dict(median=1.11)), total=dict(median=1.11, p99=1.67, budget_p99=0.067)),
+            "li2former": dict(phases={}, total=dict(median=None, p99=None, budget_p99=None), failed="AttributeError: no unsqueeze"),
+        }
+
+    def test_the_cheapest_detector_comes_first(self):
+        lines = [line for line in markdown(self.rows(), threads=4).splitlines() if line.startswith("| ")]
+
+        assert "LFE-Peaks" in lines[2]
+
+    def test_a_phase_a_detector_does_not_have_is_blank_not_zero(self):
+        peaks = next(line for line in markdown(self.rows(), threads=4).splitlines() if "LFE-Peaks" in line)
+
+        assert "0.00" not in peaks
+        assert peaks.count("--") >= 2        # no preprocess of its own, no separate decode
+
+    def test_a_detector_that_could_not_be_timed_says_so_in_its_row(self):
+        row = next(line for line in markdown(self.rows(), threads=4).splitlines() if "Li2Former" in line)
+
+        assert "AttributeError" in row
+
+    def test_the_budget_column_is_the_tails_share_of_the_frame_period(self):
+        drow = next(line for line in markdown(self.rows(), threads=4).splitlines() if "DROW" in line)
+
+        assert "1388%" in drow
+
+    def test_the_thread_count_is_stated_because_it_changes_the_answer(self):
+        assert "4 threads" in markdown(self.rows(), threads=4)
+
+    def test_rows_carry_the_published_names_not_the_command_line_keys(self):
+        table = markdown(self.rows(), threads=4)
+
+        assert "DR-SPAAM" not in table        # it was not among these rows
+        assert "lfe_peaks" not in table and "LFE-Peaks" in table

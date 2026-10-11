@@ -17,6 +17,10 @@ A detector whose released form does all three inside one call -- the two LFE ONN
 is timed as one phase and its row says so. Each row carries the median, the 99th percentile and the share of FROG's **25 ms**
 frame period, which is the real one (item 1; the stamped median said 26.2 Hz and made every budget 1.53x too generous).
 
+**The total is a per-frame sum, percentiled afterwards**, not the phases' percentiles added: the frame that is slow to
+preprocess is rarely the frame that is slow to decode, so adding each phase's own tail describes a frame that never happened.
+On this host that mistake read TAKHeLiPeD's tail as 27.90 ms against a measured 25.32 -- 112% of the budget against 101%.
+
 TAKHeLiPeD is not re-timed here: `tracking_baselines.py latency` already measures its three stages on this host at 4 threads,
 batch 1, over 2,000 frames, which is this protocol, and that result is merged in rather than reimplemented.
 
@@ -48,6 +52,7 @@ WARMUP = 5
 HEATMAP_HEIGHT, HEATMAP_DISTANCE = 0.3, 5      # `evaluate_auc`'s own peak rule for a heatmap head
 V2D = dict(blur_sigma=2.0, blur_win=11, bin_size=0.1, vote_collect_radius=0.5, min_thresh=1e-3)   # its vote-grid settings
 SELF_CONTAINED = ("algorithmic", "lfe_peaks", "lfe_ppn")    # released forms that preprocess, run and decode in one call
+TENSOR_IN = ("li2former",)      # the one detector whose `forward_one` takes a tensor; the rest take numpy and refuse one
 ORDER = ("algorithmic", "lfe_peaks", "lfe_ppn", "fullscan_tcn", "temporal_unet", "spacetime_cnn", "drow", "drspaam", "li2former")
 TAKHELIPED_LATENCY = _HERE.parent / "checkpoints_three_horizon" / "a61" / "latency_cpu_t4.json"
 
@@ -63,8 +68,8 @@ def summarise(durations: Sequence[float]) -> Dict[str, Optional[float]]:
                 budget_median=middle / FROG_PERIOD_MS, budget_p99=p99 / FROG_PERIOD_MS)
 
 
-def time_detector(name: str, frames: int, threads: int) -> Dict[str, Dict[str, Optional[float]]]:
-    """One detector over `frames` consecutive scans, phase by phase."""
+def time_detector(name: str, frames: int, threads: int) -> Dict[str, Dict]:
+    """One detector over `frames` consecutive scans: each phase, and what the whole frame cost."""
     import torch                                                    # noqa: PLC0415 -- only the timing path needs it
     from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles  # noqa: PLC0415
     from takheliped.detectors import DETECTOR_REGISTRY  # noqa: PLC0415
@@ -98,9 +103,9 @@ def time_detector(name: str, frames: int, threads: int) -> Dict[str, Dict[str, O
                 continue
             scans_hist, odoms_hist = ds.get_scan(sequence, index, window, dtime=1)
             start = time.perf_counter()
-            # `forward_one` is numpy in, numpy out on every trainable detector here, so the tensor `_extract_input` builds is
-            # handed back as an array rather than passed through -- pybind11 and `from_numpy` both refuse a Tensor.
-            x = _extract_input(net, scan, scans_hist, odoms_hist, angles, cfg, "cpu").cpu().numpy()
+            # `forward_one` is numpy in, numpy out on every trainable detector here *except* Li2Former, whose own takes the
+            # tensor -- `from_numpy` refuses a Tensor on one side and `unsqueeze` an array on the other, so ask which.
+            x = network_input(name, _extract_input(net, scan, scans_hist, odoms_hist, angles, cfg, "cpu"))
             built = time.perf_counter()
             confs, votes = net.forward_one(x)
             ran = time.perf_counter()
@@ -110,7 +115,13 @@ def time_detector(name: str, frames: int, threads: int) -> Dict[str, Dict[str, O
                 phases["preprocess"].append(1000 * (built - start))
                 phases["network"].append(1000 * (ran - built))
                 phases["decode"].append(1000 * (done - ran))
-    return {phase: summarise(values) for phase, values in phases.items() if values}
+    return dict(phases={phase: summarise(values) for phase, values in phases.items() if values},
+                total=per_frame_total(phases))
+
+
+def network_input(name: str, tensor):
+    """What this detector's `forward_one` accepts: Li2Former the tensor, everyone else an array of it."""
+    return tensor if name in TENSOR_IN else tensor.cpu().numpy()
 
 
 def decode(net, scan, angles, confs, votes) -> None:
@@ -136,38 +147,82 @@ def _config(angles):
                            fov_max=FROG_Dataset.LASER_MAX_ANGLE, laser_inc=FROG_Dataset.LASER_INCREMENT)
 
 
-def takheliped_row() -> Optional[Dict[str, Dict[str, Optional[float]]]]:
-    """TAKHeLiPeD's three stages, from the measurement that already took them under this protocol."""
+def takheliped_row() -> Optional[Dict[str, Dict]]:
+    """TAKHeLiPeD's three stages, from the measurement that already took them under this protocol.
+
+    That run timed the whole frame as well as its stages, so its own total travels with the row rather than being
+    rebuilt from the stages here -- it is the measured end-to-end tail, which no arithmetic on the stages recovers.
+    """
     if not TAKHELIPED_LATENCY.exists():
         return None
     d = json.loads(TAKHELIPED_LATENCY.read_text())
-    out = {}
-    for phase, key in (("preprocess", None), ("network", "stage2"), ("decode", "decode"), ("memory", "memory")):
-        if key and key in d:
-            out[phase] = dict(frames=d["frames"], median=d[key]["median"], p99=d[key]["p99"], mean=d[key]["mean"],
-                              budget_median=d[key]["median"] / FROG_PERIOD_MS, budget_p99=d[key]["p99"] / FROG_PERIOD_MS)
-    return out
+
+    def phase(key):
+        return dict(frames=d["frames"], median=d[key]["median"], p99=d[key]["p99"], mean=d[key]["mean"],
+                    budget_median=d[key]["median"] / FROG_PERIOD_MS, budget_p99=d[key]["p99"] / FROG_PERIOD_MS)
+
+    return dict(phases={name: phase(key) for name, key in
+                        (("network", "stage2"), ("decode", "decode"), ("memory", "memory")) if key in d},
+                total=phase("total"))
 
 
-def total_row(phases: Dict[str, Dict[str, Optional[float]]]) -> Dict[str, Optional[float]]:
-    """The phases added: what one frame costs end to end."""
-    present = [p for p in phases.values() if p.get("median") is not None]
-    if not present:
-        return dict(median=None, p99=None, budget_median=None, budget_p99=None)
-    total, tail = sum(p["median"] for p in present), sum(p["p99"] for p in present)
-    return dict(median=total, p99=tail, budget_median=total / FROG_PERIOD_MS, budget_p99=tail / FROG_PERIOD_MS)
+def per_frame_total(timings: Dict[str, Sequence[float]]) -> Dict[str, Optional[float]]:
+    """What a frame costs end to end: the phases added **per frame**, then summarised.
+
+    Not the phases' percentiles added. A deployment pays all the phases on one frame, and the frame that is slow to
+    preprocess is rarely the frame that is slow to decode, so adding each phase's own tail describes a frame that never
+    happened and overstates the budget. The medians come out nearly the same either way; the tails do not.
+    """
+    columns = [list(values) for values in timings.values() if len(values)]
+    if not columns:
+        return summarise([])
+    lengths = {len(column) for column in columns}
+    if len(lengths) > 1:
+        raise ValueError(f"phases recorded different frame counts: {sorted(lengths)}")
+    return summarise([sum(frame) for frame in zip(*columns)])
+
+
+def total_of(row: Dict) -> Dict[str, Optional[float]]:
+    """A row's total: the one it was measured with, or nothing -- never a total reconstructed from its phases."""
+    return row.get("total") or summarise([])
+
+
+DISPLAY = dict(algorithmic="AlgorithmicDetector *(rule-based, C++)*", lfe_peaks="LFE-Peaks", lfe_ppn="LFE-PPN",
+               fullscan_tcn="FullScanTCN", temporal_unet="TemporalUNet", spacetime_cnn="SpaceTimeCNN",
+               drow="DrowDetector (DROW3)", drspaam="DrSpaamDetector (DR-SPAAM)", li2former="Li2FormerDetector",
+               takheliped="**TAKHeLiPeD**, whole detector")
+
+
+def markdown(rows: Dict[str, Dict], threads: int) -> str:
+    """The same table as `report`, as `memory/performance-log.md` wants it -- cheapest first, and emitted rather than typed."""
+    def cost(item):
+        return total_of(item[1]).get("median") or float("inf")
+
+    out = [f"**CPU, {threads} threads, batch 1, 2,000 consecutive FROG test scans, against FROG's 25 ms frame period.**", "",
+           "| detector | pre | network | decode | memory | **total** | p99 | p99 vs budget |", "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]
+    for name, row in sorted(rows.items(), key=cost):
+        total, phases = total_of(row), row.get("phases", {})
+        cells = [f"{(phases.get(p) or {}).get('median'):.2f}" if (phases.get(p) or {}).get("median") is not None else "--"
+                 for p in ("preprocess", "network", "decode", "memory")]
+        if total.get("median") is None:
+            out.append(f"| {DISPLAY.get(name, name)} | " + " | ".join(cells) + f" | not timed | -- | {row.get('failed', '--')} |")
+            continue
+        out.append(f"| {DISPLAY.get(name, name)} | " + " | ".join(cells) +
+                   f" | **{total['median']:.2f} ms** | {total['p99']:.2f} | **{total['budget_p99']:.0%}** |")
+    return "\n".join(out)
 
 
 def report(rows: Dict[str, Dict], threads: int) -> None:
     print(f"\nCPU, {threads} threads, batch 1, FROG test scans in order, against a {FROG_PERIOD_MS:g} ms frame period\n")
     print(f"  {'detector':<16} {'pre':>7} {'network':>8} {'decode':>7} {'memory':>7} {'total':>8} {'p99':>8} {'budget':>8}")
-    for name, phases in rows.items():
-        total = total_row(phases)
+    for name, row in rows.items():
+        total, phases = total_of(row), row.get("phases", {})
         cells = {p: (phases.get(p, {}) or {}).get("median") for p in ("preprocess", "network", "decode", "memory")}
         line = f"  {name:<16}" + "".join(f"{v:>8.2f}" if v is not None else f"{'-':>8}" for v in cells.values())
-        print(f"{line}{total['median']:>8.2f}{total['p99']:>8.2f}{total['budget_median']:>7.0%}"
+        print(f"{line}{total['median']:>8.2f}{total['p99']:>8.2f}{total['budget_p99']:>7.0%}"
               if total["median"] is not None else f"{line}{'-':>8}{'-':>8}{'-':>8}", flush=True)
-    print("\n  'pre' is building the input; a detector whose released form does everything in one call reports it all as network.")
+    print("\n  'pre' is building the input; a detector whose released form does everything in one call reports it all as "
+          "network.\n  'total' and 'p99' are per-frame costs; 'budget' is the p99's share of the frame period.")
 
 
 def main() -> None:
@@ -185,16 +240,16 @@ def main() -> None:
             rows[name] = time_detector(name, args.frames, args.threads)
         except BaseException as failure:                            # one detector must not take the table with it
             print(f"  {name}: could not be timed -- {type(failure).__name__}: {failure}", flush=True)
-            rows[name] = {}
+            rows[name] = dict(phases={}, total=summarise([]), failed=f"{type(failure).__name__}: {failure}")
     takheliped = takheliped_row()
     if takheliped:
         rows["takheliped"] = takheliped
 
     report(rows, args.threads)
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(dict(threads=args.threads, frames=args.frames, period_ms=FROG_PERIOD_MS,
-                                        rows={k: dict(phases=v, total=total_row(v)) for k, v in rows.items()}), indent=1),
-                        encoding="utf-8")
+    args.out.write_text(json.dumps(dict(threads=args.threads, frames=args.frames, period_ms=FROG_PERIOD_MS, rows=rows),
+                                   indent=1), encoding="utf-8")
+    args.out.with_suffix(".md").write_text(markdown(rows, args.threads) + "\n", encoding="utf-8")
     print(f"\nwrote {args.out}", flush=True)
 
 
