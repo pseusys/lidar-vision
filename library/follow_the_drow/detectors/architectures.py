@@ -6,7 +6,6 @@ References:
   DR-SPAAM: Jia et al.,  IROS 2020 / RA-L 2022 — arXiv:2004.14079
 """
 
-import math
 from pathlib import Path
 from typing import Optional, Tuple
 

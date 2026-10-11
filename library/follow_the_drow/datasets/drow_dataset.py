@@ -10,7 +10,7 @@ from json import loads
 from pathlib import Path
 from typing import Union, List, Dict, Tuple
 
-from numpy import genfromtxt, fromregex, where, array, full, array_equal, vectorize, float32, uint32, arange, clip
+from numpy import genfromtxt, fromregex, where, array, array_equal, vectorize, float32, uint32, arange, clip
 from numpy.typing import NDArray
 
 from ..utils.file_utils import DROW_DATA_PATH, DROW_TEST_SET

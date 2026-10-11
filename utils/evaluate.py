@@ -67,7 +67,7 @@ from follow_the_drow.utils.tracking import (
 )
 from train import (
     _make_optimizer, _build_model, _default_args,
-    evaluate_auc, load_checkpoint, _safe_auc,
+    evaluate_auc, _safe_auc,
 )
 
 

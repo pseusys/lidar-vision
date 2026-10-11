@@ -213,15 +213,14 @@ def _make_optimizer(params, lr: float, weight_decay: float,
     return Adam(params, lr=lr, weight_decay=weight_decay, foreach=True)
 
 from follow_the_drow.detectors import (
-    AlgorithmicDetector, DrowDetector, DrSpaamDetector,
+    DrowDetector, DrSpaamDetector,
     SpaceTimeCNNDetector, FullScanTCNDetector, TemporalUNetDetector,
     Li2FormerDetector,
-    DETECTOR_REGISTRY,
 )
 from follow_the_drow.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
     cutout, raw_scan, aligned_raw_scan,
-    project_cartesian_from_polar, _win2global,
+    _win2global,
     votes_to_detections, _deep2flat, _process_detections,
 )
 from follow_the_drow.utils.tracking import SimpleTracker, odom_xya_delta_to_tracker_frame
@@ -1870,11 +1869,11 @@ def tune_model(args) -> dict:
     """
     try:
         import optuna
-    except ImportError:
+    except ImportError as missing:
         raise ImportError(
             "optuna is required for hyperparameter tuning.  "
             "Install it with: pip install optuna"
-        )
+        ) from missing
 
     import tempfile
 
@@ -1932,7 +1931,7 @@ def tune_model(args) -> dict:
     best = study.best_params
     print(f"\n{'='*60}")
     print(f"  Best val_loss : {study.best_value:.4f}")
-    print(f"  Best params   :")
+    print("  Best params   :")
     for k, v in best.items():
         print(f"    {k} = {v}")
     print(f"{'='*60}\n")

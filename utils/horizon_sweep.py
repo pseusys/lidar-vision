@@ -298,9 +298,9 @@ def report_recall(tracks, hz, args):
     report_durations("person trajectories",
                      [(s[-1][0] - s[0][0]) / hz for s in tracks])
 
-    print(f"\n  Interpolation bound as a function of the bridgeable gap.")
-    print(f"  A miss counts as recoverable only if the SAME trajectory was")
-    print(f"  detected both before and after it, within the horizon.")
+    print("\n  Interpolation bound as a function of the bridgeable gap.")
+    print("  A miss counts as recoverable only if the SAME trajectory was")
+    print("  detected both before and after it, within the horizon.")
     print(f"  {'horizon':>9} {'frames':>8} {'recoverable':>12} "
           f"{'recall ceiling':>15} {'gain':>8}")
     xs, gains = [], []
@@ -348,7 +348,7 @@ def report_precision(tracks, n_frames, hz, run_lens, args):
                      f"{longest_run_s:.0f}s,\n      so no trail longer than "
                      f"that can be observed."))
 
-    print(f"\n  A perfect acausal filter dropping every trail shorter than L.")
+    print("\n  A perfect acausal filter dropping every trail shorter than L.")
     print(f"  {'L':>9} {'frames':>8} {'removed':>9} {'remaining/frame':>16} "
           f"{'irreducible':>12}")
     xs, ys = [], []

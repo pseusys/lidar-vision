@@ -20,6 +20,7 @@ Input / output
 import math
 from typing import Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -206,7 +207,7 @@ class Li2FormerDetector(nn.Module):
 
     def forward_one(
         self, xb: torch.Tensor
-    ) -> Tuple["np.ndarray", "np.ndarray"]:  # type: ignore[name-defined]
+    ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Single-scan inference with 4-class output expansion.
 
@@ -219,7 +220,6 @@ class Li2FormerDetector(nn.Module):
         confs : (N_beams, 4) numpy — person probability in wp slot (index 3)
         votes : (N_beams, 2) numpy — vote offsets
         """
-        import numpy as np
         self.eval()
         with torch.no_grad():
             logits, votes = self(xb)     # (N, 1), (N, 2)

@@ -177,8 +177,10 @@ if __name__ == "__main__":
     try:
         main()
         code = 0
+    except SystemExit as leaving:        # argparse's --help and its usage errors: pass their status through
+        code = leaving.code if isinstance(leaving.code, int) else (0 if leaving.code is None else 1)
     except BaseException:
         traceback.print_exc()
         code = 1
     sys.stdout.flush()
-    os._exit(code)
+    os._exit(code)                          # a finished ROCm process can hang past a normal exit (memory/gotchas.md)

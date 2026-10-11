@@ -73,7 +73,7 @@ def persistence(args, angles):
         ends = np.concatenate((breaks + 1, [len(ids)]))
         best = int(np.argmax(ends - starts))
         runs.append((seq, ids[starts[best]:ends[best]][:args.run_frames]))
-    print(f"person-free runs: " + ", ".join(f"seq {s} x{len(r)}" for s, r in runs))
+    print("person-free runs: " + ", ".join(f"seq {s} x{len(r)}" for s, r in runs))
     print(f"association radius {args.radius} m, threshold {args.thresh}\n")
 
     for name, make in MODELS.items():
@@ -98,7 +98,7 @@ def persistence(args, angles):
     # The reference point that makes those numbers readable.
     ds_pop = FROG_Dataset(split="test", mode="official",
                           auto_download=False, verbose=False)
-    matched = total = 0
+    matched, total, prev_gt = 0, 0, np.empty((0, 2), dtype=np.float32)
     for k, i in enumerate(np.asarray(ds_pop.det_id[0], dtype=np.int64)[:args.run_frames]):
         xy = np.array([project_cartesian_from_polar(r, p)
                        for r, p in ds_pop.det_wp[0][k]], dtype=np.float32).reshape(-1, 2)

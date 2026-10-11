@@ -149,15 +149,15 @@ def recall_oracle(args):
             after = arr[arr > f]
             if len(before) and len(after) and (after[0] - before[-1]) <= bridge:
                 interp_rec += 1
-    print(f"\n  INTERPOLATION bound -- a miss counts only if the same trajectory was")
+    print("\n  INTERPOLATION bound -- a miss counts only if the same trajectory was")
     print(f"  detected both before and after it, within {args.max_bridge_s:.0f} s:")
     print(f"    recoverable misses      {interp_rec:>7} "
           f"({interp_rec / n_pts:>5.1%} of all observations)")
     print(f"    recall: {n_det / n_pts:.1%} -> {(n_det + interp_rec) / n_pts:.1%}"
           f"   (+{interp_rec / n_pts * 100:.1f} pp)")
 
-    print(f"\n  EXTRAPOLATION bound -- every point of any trajectory detected >= k")
-    print(f"  times, including beyond its last detection (loose; a real model cannot):")
+    print("\n  EXTRAPOLATION bound -- every point of any trajectory detected >= k")
+    print("  times, including beyond its last detection (loose; a real model cannot):")
     for k in (1, 2, 3, 5, 10):
         rec = sum(len(s) for s, _ in tracks_all if sum(d for _, d in s) >= k)
         print(f"    k={k:<3} recall ceiling {rec / n_pts:>6.1%}")
@@ -199,7 +199,7 @@ def precision_oracle(args):
     print(f"  trajectory length: median {np.median(lens):.0f} frames "
           f"({np.median(lens) / hz:.2f} s), p90 {np.percentile(lens, 90):.0f}, "
           f"max {lens.max()}\n")
-    print(f"  a perfect acausal filter that drops every trajectory shorter than L:")
+    print("  a perfect acausal filter that drops every trajectory shorter than L:")
     print(f"  {'L (frames)':>11} {'L (s)':>7} {'phantoms removed':>18} {'remaining/frame':>16}")
     for L in (2, 3, 5, 10, 26, 52, 131):
         removed = int(lens[lens < L].sum())

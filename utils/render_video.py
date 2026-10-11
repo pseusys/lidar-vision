@@ -65,7 +65,7 @@ from follow_the_drow.detectors import AlgorithmicDetector
 from follow_the_drow.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
     project_cartesian_from_polar, standard_cartesian_to_project_cartesian, votes_to_detections,
-    cutout, raw_scan,
+    cutout, raw_scan, _win2global,
 )
 import torch
 import torch.nn.functional as F
@@ -367,8 +367,8 @@ def _write_mp4_frame(writer, rgb_frame):
 def _open_gif_writer(path: Path, fps: int):
     try:
         import imageio
-    except ImportError:
-        raise ImportError("GIF output requires imageio: pip install imageio")
+    except ImportError as missing:
+        raise ImportError("GIF output requires imageio: pip install imageio") from missing
     return imageio.get_writer(str(path), mode="I",
                               duration=1.0 / fps, loop=0)
 
@@ -444,7 +444,7 @@ def main():
 
     # Device (CPU is fine for inference)
     try:
-        import torch_directml
+        import torch_directml                            # noqa: F401 -- imported to test availability, not to use
         _dml = True
     except ImportError:
         _dml = False

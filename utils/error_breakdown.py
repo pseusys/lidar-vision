@@ -156,7 +156,7 @@ def main():
         rows.append((det, aucs["wp"], r, prec, f1, tp, fp, fn, curve))
 
     print(f"\n{'='*100}")
-    print(f"  Error breakdown at each model's own best-F1 operating point (wp / person class)")
+    print("  Error breakdown at each model's own best-F1 operating point (wp / person class)")
     print(f"{'='*100}\n")
     print(f"  {'Model':<16} {'AUC':>7} {'Recall':>8} {'Prec':>8} {'F1':>7} "
           f"{'TP':>8} {'FP':>8} {'FN':>8}  {'dominant error'}")
@@ -169,8 +169,8 @@ def main():
     print()
 
     print(f"\n{'='*100}")
-    print(f"  Operating-point sweep: what does trading recall for precision cost, per model?")
-    print(f"  (moving to a stricter threshold than each model's own best-F1 point)")
+    print("  Operating-point sweep: what does trading recall for precision cost, per model?")
+    print("  (moving to a stricter threshold than each model's own best-F1 point)")
     print(f"{'='*100}\n")
     targets = [0.75, 0.80, 0.85, 0.90, 0.95]
     for det, auc, bf1_r, bf1_p, f1, bf1_tp, bf1_fp, bf1_fn, curve in rows:

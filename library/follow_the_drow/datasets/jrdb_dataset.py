@@ -48,14 +48,13 @@ are not available for local evaluation.  Only use the train split (possibly
 held out as val) for supervised training and evaluation.
 """
 
-import warnings
 from json import loads
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Tuple, Union
 
 import numpy as np
 from numpy import (
-    arange, array, array_equal, concatenate, float32, fromregex,
+    array, concatenate, float32, fromregex,
     genfromtxt, linspace, repeat, tile, uint32, vectorize, where,
 )
 from numpy.typing import NDArray
@@ -202,7 +201,7 @@ class JRDB_Dataset(Logging):
              for i, d in enumerate(did)}
             for sid, did in zip(self.scan_id, self.det_id)
         ]
-        self._print(f"  Odometry loaded\n")
+        self._print("  Odometry loaded\n")
 
     # ------------------------------------------------------------------
     # Private loaders (identical to DROW_Dataset implementations)

@@ -1471,7 +1471,7 @@ def train_joint(args) -> None:
             continue
         epoch, train_s = step / iterations, time.time() - t_block
         result = evaluate_joint(net, memory, val, val_segments, args.val_stride, device, args.val_windows, mode)
-        improved = stopper.update(result["memory"]["ap"])
+        stopper.update(result["memory"]["ap"])          # called for its side effect: it records the bar and the misses
         overall = best.offer(result["memory"]["ap"], dict(net=net.state_dict(), memory=memory.state_dict(), epoch=epoch, val=result,
                                                           args={k: str(v) for k, v in vars(args).items()}))
         hours = (time.time() - start) / 3600

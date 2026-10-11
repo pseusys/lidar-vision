@@ -151,10 +151,10 @@ for seq in range(len(ds.det_id)):
 
 lens = np.array([len(t) for t in ph_tracks]) if ph_tracks else np.array([0])
 n_ph = int(lens.sum())
-print(f"\n=== PRECISION ORACLE (DROW3) ===")
+print("\n=== PRECISION ORACLE (DROW3) ===")
 print(f"{len(ph_tracks)} phantom trajectories over {n_free} person-free annotated "
       f"frames, {n_ph} phantom detections ({n_ph / max(n_free,1):.2f}/frame)")
-print(f"  annotated frames are 0.5 s apart, so a trail of L frames is 0.5(L-1) s")
+print("  annotated frames are 0.5 s apart, so a trail of L frames is 0.5(L-1) s")
 print(f"  {'L (frames)':>11} {'L (s)':>7} {'removed':>9} {'remaining/frame':>16}")
 for L in (2, 3, 5, 10, 20):
     removed = int(lens[lens < L].sum())

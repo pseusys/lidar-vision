@@ -57,7 +57,6 @@ import json
 import pickle
 import sys
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -193,10 +192,6 @@ def main():
     args = ap.parse_args()
 
     angles = frog_laser_angles(720)
-    cfg = SimpleNamespace(name="frog", angles_fn=frog_laser_angles,
-                          fov_min=FROG_Dataset.LASER_MIN_ANGLE,
-                          fov_max=FROG_Dataset.LASER_MAX_ANGLE,
-                          laser_inc=FROG_Dataset.LASER_INCREMENT)
 
     ds_off = FROG_Dataset(split="test", mode="official",
                           auto_download=False, verbose=False)

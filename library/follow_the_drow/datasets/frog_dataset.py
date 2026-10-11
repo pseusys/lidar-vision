@@ -65,7 +65,6 @@ a split boundary.
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Optional, Tuple, Union
 import re
-import shutil
 import ssl
 import urllib.request
 

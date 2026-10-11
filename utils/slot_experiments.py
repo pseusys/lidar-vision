@@ -38,7 +38,7 @@ sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
 from train_takheliped import (  # noqa: E402
-    MATCH_RADIUS_M, MIN_REPORTED_SCORE, OPERATING_THRESHOLD, Split, detect_device, evaluate, evaluation_segments, gather,
+    MIN_REPORTED_SCORE, detect_device, evaluate, evaluation_segments, gather,
     load_split, memory_ms_per_frame, object_memory, score_detections,
 )
 
@@ -188,8 +188,10 @@ if __name__ == "__main__":
     try:
         main()
         code = 0
+    except SystemExit as leaving:        # argparse's --help and its usage errors: pass their status through
+        code = leaving.code if isinstance(leaving.code, int) else (0 if leaving.code is None else 1)
     except BaseException:
         traceback.print_exc()
         code = 1
     sys.stdout.flush()
-    os._exit(code)
+    os._exit(code)                          # a finished ROCm process can hang past a normal exit (memory/gotchas.md)

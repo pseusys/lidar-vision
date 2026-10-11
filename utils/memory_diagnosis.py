@@ -366,8 +366,6 @@ def replay_slot_rules(split: Split, device, streams: int, rules: SlotRules, slic
                 world = sensor_to_world(batch["xy"][:, i], batch["pose"][:, i])
                 slots, events = manage_slots(slots, world, batch["score"][:, i], batch["valid"][:, i], batch["dt"][:, i], rules)
                 alive, refill = slots.alive.cpu().numpy(), (events.source >= 0).cpu().numpy()
-                near = (torch.cdist(world_to_sensor(slots.position, batch["pose"][:, i]), batch["gt_xy"][:, i])
-                        .masked_fill(~batch["gt_valid"][:, i, None, :], float("inf")).min(dim=2).values <= MATCH_RADIUS_M).cpu().numpy()
                 slot_xy = world_to_sensor(slots.position, batch["pose"][:, i]).cpu().numpy()
                 gt_xy, gt_valid = batch["gt_xy"][:, i].cpu().numpy(), batch["gt_valid"][:, i].cpu().numpy()
                 matched = events.matched.cpu().numpy()
@@ -602,8 +600,10 @@ if __name__ == "__main__":
     try:
         main()
         code = 0
+    except SystemExit as leaving:        # argparse's --help and its usage errors: pass their status through
+        code = leaving.code if isinstance(leaving.code, int) else (0 if leaving.code is None else 1)
     except BaseException:
         traceback.print_exc()
         code = 1
     sys.stdout.flush()
-    os._exit(code)
+    os._exit(code)                          # a finished ROCm process can hang past a normal exit (memory/gotchas.md)

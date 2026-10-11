@@ -1005,4 +1005,4 @@ if __name__ == "__main__":
         traceback.print_exc()
         code = 1
     sys.stdout.flush()
-    os._exit(code)
+    os._exit(code)                          # a finished ROCm process can hang past a normal exit (memory/gotchas.md)
