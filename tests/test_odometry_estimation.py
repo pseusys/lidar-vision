@@ -12,8 +12,7 @@ import numpy as np
 
 from takheliped.datasets.frog_dataset import frog_laser_angles
 from takheliped.utils.odometry_estimation import (
-    _kabsch_2d, icp_2d, icp_rotation_angle, estimate_pairwise_delta,
-    integrate_trajectory, local_cartesian_points,
+    _kabsch_2d, icp_2d, icp_rotation_angle, integrate_trajectory, local_cartesian_points,
 )
 
 ANGLES = frog_laser_angles(720)
