@@ -267,6 +267,40 @@ Recall at LFE's own false positives per frame at its published 0.3 threshold, no
 The far-range gain matches Tier 0's reading -- the representation handles scale, and LFE's does not.
 Only 1.2% of test people have a neighbour under 0.3 m, so the close pairs are real people side by side, not one person annotated twice; test holds them at almost twice train's rate (9.3% against 4.9%).
 
+### One network, four decoders, at matched false positives -- what a different head could buy (item 13)
+
+**Measured 2026-10-12, no training run** (`stage2_probe.py --split test --stride 5`, the adopted recipe's three seeds,
+`results/item13_decoder_ceiling.json`). Item 13 proposes LFE-PPN's **depth anchors** to recover far people. The decodable
+half of that question is answerable from checkpoints already on disk: take one network's per-beam probabilities and votes and
+run every decoder in the repo over them, scored at each published detector's own false-positive rate.
+
+| recall at 8-10 m (13% of test) | vote-grid | nms | **nms-mean** (adopted) | LFE's own |
+| --- | ---: | ---: | ---: | ---: |
+| at **1.784** FP/frame (LFE-Peaks') | **85.3%** | 81.4% | 81.6% | 50.3% |
+| at **5.03** FP/frame (LFE-PPN's) | 95.3% | 95.3% | **95.4%** | 75.1% |
+
+**The decoders converge at far range once the threshold is loosened.** At 5.03 false positives per frame all three find
+95.3-95.4% of people at 8-10 m from the *same* map. So what loses far people at a tight operating point is the **score**, not
+the output parameterisation -- and an anchor head re-parameterises the output without changing that trade. **The spread that
+does exist at the tight operating point is 3.7 pp, and it is already available**: the vote grid reaches 85.3% at 8-10 m where
+`nms-mean` reaches 81.6%. That is a decoder sitting in this repo, not a head that needs a training run.
+
+**Where decoding actually decides something is crowding, and that win is already taken.** At LFE-Peaks' false-positive rate
+the 0-0.6 m close pairs run **66.8%** through the vote grid against **86.6%** through `nms-mean` -- a 19.8 pp swing, which is
+why `nms-mean` was adopted on 2026-10-06, and the 3.7 pp it gives back at 8-10 m is the price of it.
+
+**The premise of copying LFE-PPN does not survive its own row.** At LFE-PPN's own false-positive rate our 8-10 m recall is
+**95.4% against its 75.1%** -- the anchor head would be imported from the detector we beat by 20 pp on the exact axis it was
+meant to fix.
+
+**Consistency check**: this run puts `nms-mean` at AP **82.22%** against the published stage-2 figure of 82.20%, and the vote
+grid 2.1 pp behind it, both as recorded.
+
+**What is left of item 13**: a range-dependent *decoder* -- the vote grid far away, `nms-mean` in crowds -- worth at most the
+3.7 pp above and only on the far 13% of people. `TODO.md` A38 is the standing warning on that shape: a range-dependent merge
+radius lost to a well-chosen constant, and its +1.9 pp headline survived only until a control separated "range-aware helps"
+from "bigger helps".
+
 **A label rule that was first read as the close-pair cause, and is not.** `make_targets` lets the last-listed person within 0.6 m overwrite a beam's label and vote.
 On FROG train 6.9% of positive beams sit inside two people's radius and 3.3% vote for someone other than their nearest; the official DR-SPAAM code assigns each beam to the nearest person within 0.35 m (0.6 m is its wheelchair radius), where the share is 0.4%.
 `step2 --label-assign nearest` is still tested (A59 L1/L2), but the close-pair loss itself is the vote grid's.

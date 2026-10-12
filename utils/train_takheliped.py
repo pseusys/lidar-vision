@@ -796,7 +796,7 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
     `memory` lists of (scores, xy, annotated people), with each frame's packed index in `index` (A56); `compute_metrics=False` then skips
     the metrics, which on every annotated test frame cost far more than the replay."""
     model.eval()
-    raw, memory, index = [], [], []
+    raw, memory, index, rescored, slot_age = [], [], [], [], []
     shift_person, shift_other = [], []
     coast_reports, coast_hits = 0, 0
     segments = sorted(segments, key=lambda seg: -seg[2])
@@ -832,6 +832,8 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                 slot_p = torch.sigmoid(out.slot_logit)[rows].cpu().numpy()
                 valid, xy, coasting = batch["valid"][rows, i].cpu().numpy(), batch["xy"][rows, i].cpu().numpy(), out.coasting[rows].cpu().numpy()
                 slot_xy, score = out.slot_xy[rows].cpu().numpy(), batch["score"][rows, i].cpu().numpy()
+                match_index, matched_slot = out.events.match_index[rows].cpu().numpy(), out.events.matched[rows].cpu().numpy()
+                age_s = out.slots.age_s[rows].cpu().numpy()
                 shift = (out.candidate_logit - torch.logit(batch["score"][:, i].clamp(PROBABILITY_EPS, 1.0 - PROBABILITY_EPS)))[rows].cpu().numpy()
                 target = batch["target"][rows, i].cpu().numpy()
                 gt = [batch["gt_xy"][r, i][batch["gt_valid"][r, i]].cpu().numpy() for r in rows]
@@ -839,6 +841,15 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                     report = coasting[j] & (slot_p[j] >= MIN_REPORTED_SCORE)
                     index.append(int(split.offsets[recording[rows[j], 0]] + frame[rows[j], t]))
                     raw.append((score[j][valid[j]], xy[j][valid[j]], gt[j]))
+                    # Where the rescored candidates end and the coasting reports begin in the frame built below: the one
+                    # number that separates "the memory scored this wrong" from "the memory invented it" (`TODO.md` item 27).
+                    rescored.append(int(valid[j].sum()))
+                    # Each reported candidate's backing slot age, scattered from the slot that matched it: the quantity a
+                    # creation or confirmation rule acts on (`TODO.md` item 14). NaN where no slot matched the candidate.
+                    backing = np.full(len(valid[j]), np.nan)
+                    taken = matched_slot[j]
+                    backing[match_index[j][taken]] = age_s[j][taken]
+                    slot_age.append(backing[valid[j]])
                     memory.append((np.concatenate([cand_p[j][valid[j]], slot_p[j][report]]), np.concatenate([xy[j][valid[j]], slot_xy[j][report]]), gt[j]))
                     shift_person.append(shift[j][valid[j] & target[j]]), shift_other.append(shift[j][valid[j] & ~target[j]])
                     confident = coasting[j] & (slot_p[j] >= OPERATING_THRESHOLD)
@@ -846,7 +857,7 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                     coast_hits += coasting_hits(slot_xy[j][confident], xy[j][valid[j] & (cand_p[j] >= OPERATING_THRESHOLD)], gt[j], MATCH_RADIUS_M)
     model.train()
     if frames_out is not None:
-        frames_out.update(candidates=raw, memory=memory, index=index)
+        frames_out.update(candidates=raw, memory=memory, index=index, rescored=rescored, slot_age=slot_age)
     if not compute_metrics:
         return dict(candidates={}, memory={})
     base, new = score_detections(raw), score_detections(memory)

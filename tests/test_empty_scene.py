@@ -15,7 +15,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from empty_scene import frame_period, phantom_counts, since_person, time_since_person
+from empty_scene import coasting_share, frame_period, phantom_counts, since_person, time_since_person
 
 RADIUS_M = 0.3
 
@@ -191,3 +191,70 @@ class TestFramePeriod:
         split = SimpleNamespace(offsets=np.array([0, 3]), lengths=np.array([3, 3]), data=SimpleNamespace(time=time))
 
         assert frame_period(split) == pytest.approx(0.1)
+
+
+class TestWhereThePhantomsComeFrom:
+    """Item 27: a memory frame's detections are rescored candidates first, then coasting reports, and the two mean
+    different things.
+
+    The memory cuts person-free false positives 72%, and items 24, 25 and 26 all read the survivors as **rescored
+    candidates** -- a scoring question. If they are instead **coasting reports**, the memory is inventing detections with
+    no candidate under them, and the creation-rule work in item 14 is aimed at a population that is not there. Coasting
+    fires ~0.001 times per scored frame on the populated split, which is why that reading is plausible, but it has never
+    been measured where nobody is.
+    """
+
+    @staticmethod
+    def _frames_and_split(*frames):
+        """Each frame as (detections, n_rescored_candidates); detections are (x, y, score) with candidates listed first."""
+        rows, counts = [], []
+        for detections, n in frames:
+            points = np.asarray(detections, dtype=np.float64).reshape(-1, 3)
+            rows.append((points[:, 2], points[:, :2]))
+            counts.append(n)
+        return rows, np.asarray(counts)
+
+    def test_with_no_coasting_every_phantom_is_a_rescored_candidate(self):
+        rows, counts = self._frames_and_split(([[0, 1, 0.9], [0, 2, 0.9]], 2), ([[0, 1, 0.9]], 1))
+
+        share = coasting_share(rows, counts, threshold=0.3)
+
+        assert share["from_candidates"] == 3
+        assert share["from_coasting"] == 0
+        assert share["coasting_share"] == 0.0
+
+    def test_a_coasting_report_is_counted_as_one(self):
+        """The frame holds one rescored candidate and one slot the memory reported with nothing under it."""
+        rows, counts = self._frames_and_split(([[0, 1, 0.9], [5, 5, 0.8]], 1),)
+
+        share = coasting_share(rows, counts, threshold=0.3)
+
+        assert share["from_candidates"] == 1
+        assert share["from_coasting"] == 1
+        assert share["coasting_share"] == 0.5
+
+    def test_the_threshold_applies_to_each_population_separately(self):
+        rows, counts = self._frames_and_split(([[0, 1, 0.9], [5, 5, 0.1]], 1), ([[0, 1, 0.1], [5, 5, 0.9]], 1))
+
+        share = coasting_share(rows, counts, threshold=0.3)
+
+        assert share["from_candidates"] == 1        # the 0.9 candidate; the 0.1 one is under
+        assert share["from_coasting"] == 1          # the 0.9 coasting report; the 0.1 one is under
+
+    def test_the_split_is_exhaustive_so_it_can_be_trusted(self):
+        """Whatever the threshold, the two populations must add up to what `phantom_counts` counts in total."""
+        rows, counts = self._frames_and_split(([[0, 1, 0.9], [5, 5, 0.4], [2, 2, 0.2]], 2), ([], 0), ([[1, 1, 0.5]], 0))
+
+        for threshold in (0.1, 0.3, 0.45, 0.95):
+            share = coasting_share(rows, counts, threshold=threshold)
+            total = phantom_counts(rows, _adjacent(rows), threshold, RADIUS_M, 1.0)
+
+            assert share["from_candidates"] + share["from_coasting"] == total["detections"]
+
+    def test_a_frame_with_nothing_is_not_a_division_by_zero(self):
+        rows, counts = self._frames_and_split(([], 0), ([], 0))
+
+        share = coasting_share(rows, counts, threshold=0.3)
+
+        assert share["from_coasting"] == 0
+        assert share["coasting_share"] == 0.0

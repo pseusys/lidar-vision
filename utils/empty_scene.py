@@ -76,6 +76,22 @@ def phantom_counts(frames: Frames, index: np.ndarray, threshold: float, radius: 
                 recurs=recurring / considered if considered else float("nan"), recur_of=considered)
 
 
+def coasting_share(frames: Frames, candidates_per_frame: np.ndarray, threshold: float) -> Dict[str, float]:
+    """Which of a person-free split's phantoms the memory *rescored* and which it *coasted* (`TODO.md` §A item 27).
+
+    `evaluate` builds each memory frame as the rescored candidates followed by the coasting reports, so the count of the
+    first group is the boundary between them. The distinction decides what items 14, 24, 25 and 26 are about: a rescored
+    candidate is a scoring question, while a coasting report is the memory reporting a person with nothing under them.
+    """
+    kept = [(score >= threshold, int(n)) for (score, _), n in zip(frames, candidates_per_frame, strict=True)]
+    from_candidates = sum(int(above[:n].sum()) for above, n in kept)
+    from_coasting = sum(int(above[n:].sum()) for above, n in kept)
+    total = from_candidates + from_coasting
+    return dict(threshold=threshold, from_candidates=from_candidates, from_coasting=from_coasting,
+                coasting_share=from_coasting / total if total else 0.0,
+                coasting_per_frame=from_coasting / len(kept) if kept else 0.0)
+
+
 def since_person(populated: np.ndarray, time: np.ndarray) -> np.ndarray:
     """Seconds since a person was last in view, per frame of one recording; `inf` before the first populated frame."""
     return time - np.maximum.accumulate(np.where(populated, time, -np.inf))
@@ -151,6 +167,16 @@ def main() -> None:
                                          for t in THRESHOLDS]
         report(result[name], f"{name}: {len(rows)} person-free frames")
         report(result[f"{name}_beyond_fade"], f"{name}: the {len(beyond)} where nobody has been in view for {FADE_HORIZON_S:g} s")
+        if name == "memory":
+            counts = np.asarray(frames["rescored"])
+            result["split"] = [coasting_share(rows, counts, t) for t in THRESHOLDS]
+            result["split_beyond_fade"] = [coasting_share(beyond, counts[~stale], t) for t in THRESHOLDS]
+            print("\n  where the memory's phantoms come from (item 27)")
+            print(f"  {'threshold':>9}  {'rescored':>9}  {'coasted':>9}  {'coasted share':>14}  {'coasted/frame':>14}")
+            for row, far in zip(result["split"], result["split_beyond_fade"], strict=True):
+                print(f"  {row['threshold']:>9.2f}  {row['from_candidates']:>9d}  {row['from_coasting']:>9d}  "
+                      f"{row['coasting_share']:>13.1%}  {row['coasting_per_frame']:>14.4f}   "
+                      f"(beyond fade: {far['from_coasting']} coasted, {far['coasting_share']:.1%})", flush=True)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(dict(stage2=str(args.stage2), memory=str(args.memory), mode=PERSON_FREE_MODE, stride=args.stride,

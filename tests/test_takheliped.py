@@ -274,6 +274,32 @@ class TestObjectMemory:
             outs.append((out, score, valid))
         return outs
 
+    def test_a_step_says_which_slot_backs_each_candidate(self):
+        """`TODO.md` item 14 needs the association observable: a rescored candidate's score rests on the slot matched to
+        it, so diagnosing the memory's phantoms means reading that slot's age -- and item 27 established that 99.997% of
+        the person-free phantoms are rescored candidates rather than coasting reports, so every one of them has one."""
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
+
+        for out, _, valid in self._run(model, 8):
+            assert out.events.match_index.shape == out.slots.alive.shape
+            matched = out.events.matched
+            assert (out.events.match_index[matched] >= 0).all()
+            assert (out.events.match_index[matched] < valid.shape[1]).all()
+            assert not matched[~out.slots.alive].any()      # a dead slot matches nothing
+
+    def test_the_slot_backing_a_candidate_carries_its_age(self):
+        """Age is the quantity a creation or confirmation rule is written against."""
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
+
+        outs = self._run(model, 10)
+        out = outs[-1][0]
+        backed = out.events.matched & out.slots.alive
+
+        assert out.slots.age_s[backed].min() >= 0.0
+        assert out.slots.age_s[backed].max() > 0.0          # by frame 10 some slot has aged
+
     def test_untrained_rescoring_reproduces_the_detector_scores(self):
         torch.manual_seed(0)
         model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)

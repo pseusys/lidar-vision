@@ -246,12 +246,17 @@ class _BiasedAttention(nn.Module):
 @dataclass
 class MemoryOutput:
     """One object-memory step: rescored candidate logits `[B, P]`; person logits of slots `[B, K]` and their positions in the
-    current detection frame `[B, K, 2]`; which slots may report a person no candidate covers (`coasting`); the new memory."""
+    current detection frame `[B, K, 2]`; which slots may report a person no candidate covers (`coasting`); the new memory; and
+    what the bookkeeping did -- which slot matched or spawned from which candidate.
+
+    `events` carries no gradient and changes nothing about the step; it is here so a diagnostic can read **which slot backs a
+    rescored candidate**, which is what a creation or confirmation rule would act on (`TODO.md` §A item 14)."""
     candidate_logit: Tensor
     slot_logit: Tensor
     slot_xy: Tensor
     coasting: Tensor
     slots: Slots
+    events: SlotEvents
 
 
 def _logit(p: Tensor) -> Tensor:
@@ -403,7 +408,7 @@ class ObjectMemory(nn.Module):
             slot_logit = self.coast(cat([state, stats], dim=-1))[..., 0]
             coasting = slots.alive & ~events.matched & ~refill
             slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
-            return MemoryOutput(candidate_logit, slot_logit, slot_xy, coasting, slots)
+            return MemoryOutput(candidate_logit, slot_logit, slot_xy, coasting, slots, events)
 
         queried = state + self.statistics(stats)
         if self.match is None:                               # the slot reads only what the hand-coded association gave it
@@ -423,7 +428,7 @@ class ObjectMemory(nn.Module):
         slot_logit = self.coast(cat([state, stats], dim=-1))[..., 0]
         coasting = slots.alive & ~events.matched & ~refill
         slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
-        return MemoryOutput(candidate_logit, slot_logit, slot_xy, coasting, slots)
+        return MemoryOutput(candidate_logit, slot_logit, slot_xy, coasting, slots, events)
 
 
 class ConvNeXtBlock(nn.Module):
