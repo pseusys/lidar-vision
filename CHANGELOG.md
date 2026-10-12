@@ -38,6 +38,51 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Phase 0: items 13, 27 and 14 answered from checkpoints already on disk, and two of the three are "no" (2026-10-12)
+
+*keywords: phase 0, item 13, item 14, item 27, stage2_probe, slot_confirmation.py, coasting_share, backing-slot age, 180 frames, selectivity 1.39x, decoder convergence 95.3%, anchor head, confirmation rule, MemoryOutput.events*
+
+The owner's plan was to price items 13, 14 and 15 before spending training runs on them. Three measurements, no training, and
+they redirect the work: **13 and 14 are answered no, and the evidence moved to items 26 and 15.**
+
+**Item 13 -- range anchors as LFE-PPN: no.** Four decoders over one network at matched false positives (three seeds,
+`stage2_probe.py`). At 8-10 m they **converge at 95.3-95.4%** once the threshold is loosened to LFE-PPN's 5.03 FP/frame, so
+far people are lost to the **operating point**, not to the output parameterisation -- which is all an anchor head changes. At
+the tight operating point the whole decoder spread is **3.7 pp** (vote-grid 85.3% against the adopted nms-mean's 81.6%) and is
+already available from a decoder in this repo. Decoding decides **crowding**: close pairs swing **66.8% -> 86.6%** between
+those two, which is why nms-mean was adopted and why it pays 3.7 pp at far range to get it. And the premise inverts -- at
+LFE-PPN's own FP rate we score **95.4% at 8-10 m against its 75.1%**, so the head would be imported from the detector we beat
+by 20 pp on the axis it was meant to fix. One correction to the plan that proposed it: the 14.11 / 4.38 / 2.60 pp miss
+decomposition quoted as ours is **LFE-Peaks'** -- `range_probe.py` only runs LFE detectors -- so our decoder ceiling had never
+been measured at all, which is why this run was worth making.
+
+**Item 27 -- where the phantoms come from: rescored candidates, not coasting.** All three seeds, every one of the 72,533
+person-free frames. At the 0.3 operating threshold the coasting head contributes **2, 0 and 0** reports against **61,870 /
+57,188 / 42,043** rescored candidates, and **zero** at 0.5 and 0.9. The reading items 24, 25 and 26 rest on is confirmed, and
+item 24 gets most of its answer for free: the coasting head fires essentially nowhere on either split.
+
+**Item 14 -- confirmation over several frames: no, and the motivating number overpredicted it 28-fold.** The slots behind the
+surviving phantoms are **old** -- median **180 frames (4.5 s)**, quartiles 75/353, p95 728 -- and barely younger than those
+behind real people (median **221**). A confirmation rule filters *young* slots, so it is aimed at a population that is not
+there, and the curve shows it: **1.0% of phantoms removed for 0.8% of person frames at a 100 ms delay**, and **12.6% for
+8.0%** at a full second, with selectivity never leaving 1.3-1.6x. The 92.2% frame-to-frame recurrence that motivated the item
+predicts 0.922^4 = 28% of phantoms failing a 5-frame test against a measured **1.0%**: furniture's recurrence is strongly
+correlated across frames, not independent. Persistence is not a lever on this population precisely *because* the phantoms are
+the most persistent thing the detector sees. The creation-*threshold* half is untouched and is a different question -- a score
+at spawn, not an age.
+
+**What this leaves for phase 1.** Item 27's result strengthens **item 26** (person-free frames as training negatives) more than
+anything else: every person-free phantom now provably originates as a stage-2 candidate, and stage 2 has never seen a room with
+nobody in it. With 13 and 14 closed, the stage-2 arms are **item 15's adaptive gather and item 26**, and the stage-3 batch is
+A51's six arms plus items 16 and 24.
+
+**Instrumentation added, TDD, 23 tests.** `MemoryOutput` exposes the bookkeeping `events`, so a diagnostic can read which slot
+backs a rescored candidate; `evaluate` records that slot's age per reported detection; `empty_scene.coasting_share` splits the
+person-free count; `utils/slot_confirmation.py` turns the two into a curve. One rule earned twice over today: three concurrent
+torch jobs exhausted the host (each candidate cache is ~1 GB), and pointing a cache-backed script at `weights_archive/` instead
+of the original checkpoint silently regenerated a 1 GB cache, because the cache key includes the checkpoint's directory and
+mtime.
+
 ## Item 30 done: the detector now fits FROG's frame period on a CPU, and two cores are enough (2026-10-11)
 
 *keywords: item 30, nms_decode, 314 iterations 22 kept, bit-identical, p99 25.32 -> 22.07, 101% -> 88%, two threads 91%, thread saturation, memory latency-bound, 48% of CPU total, latency_cpu_t1 t2 t4 t8, pre-item30.json*

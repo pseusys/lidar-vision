@@ -100,6 +100,7 @@ def populations(frames, gt_radius_m: float, threshold: float):
 
 def main() -> None:
     import argparse                                                  # noqa: PLC0415 -- only the driver needs these
+    import gc
     import json
     import os
     import sys
@@ -109,9 +110,9 @@ def main() -> None:
     sys.path.insert(0, str(here.parent / "library"))
     sys.path.insert(0, str(here))
     import torch                                                      # noqa: PLC0415
+    from empty_scene import frame_period                             # noqa: PLC0415 -- the same unpacking, already written
     from train_takheliped import (  # noqa: PLC0415
-        MATCH_RADIUS_M, OPERATING_THRESHOLD, detect_device, evaluate, evaluation_segments, load_split, mean_frame_period,
-        object_memory,
+        MATCH_RADIUS_M, OPERATING_THRESHOLD, detect_device, evaluate, evaluation_segments, load_split, object_memory,
     )
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -138,10 +139,14 @@ def main() -> None:
         evaluate(model, split, device, args.stride, args.streams, evaluation_segments(split, 0, 0, 0),
                  frames_out=frames, compute_metrics=False)
         ages, labels = populations(frames, MATCH_RADIUS_M, args.threshold)
-        period = mean_frame_period(split)
+        period = frame_period(split)
         collected[label] = (slot_age_frames(ages, period), labels, period)
         print(f"{label}: {len(ages)} reported detections over {len(frames['memory'])} frames, {period * 1000:.1f} ms/frame",
               flush=True)
+        # Each split's candidates are about a gigabyte in RAM and only the small arrays above are wanted, so let the first
+        # one go before the second is read: holding both exhausted the host once (2026-10-12, `memory/gotchas.md`).
+        del split, model, frames
+        gc.collect()
 
     ages = np.concatenate([collected["phantoms"][0][collected["phantoms"][1] == PHANTOM],
                            collected["people"][0][collected["people"][1] == PERSON]])

@@ -4,6 +4,22 @@
 
 Platform and environment traps that have cost real debugging time.
 
+- **A finished ROCm process can hang unkillably, and `taskkill /F /T` will not clear it -- `Invoke-CimMethod` will.**
+  The teardown hang is already known (a finished process lingers past `os._exit`, which is why scripts here call it at all),
+  but 2026-10-12 produced the stubborn form: two completed runs sat in an uninterruptible driver wait, and `taskkill /F /T`
+  answered **"ERROR: ... could not be terminated. Reason: There is no running instance of the task"** while Windows still
+  listed them. `Stop-Process -Force` and `$p.Kill($true)` also failed. What worked:
+
+      Get-CimInstance Win32_Process -Filter "ProcessId=<pid>" | Invoke-CimMethod -MethodName Terminate
+
+  **Why it matters beyond tidiness:** each held **3.4 GB of commit** (982 MB resident), pushing the host to 24.5 GB of its
+  29.85 GB commit limit -- and the next `pytest` run failed with `ImportError: DLL load failed while importing cv2: The
+  paging file is too small for this operation to complete`, which looks like a broken OpenCV install and is not one. One
+  test failed; clearing the two processes dropped commit to 16.9 GB and the same suite passed 865/865. **Check committed
+  bytes before believing a resource-shaped test failure:**
+
+      (Get-Counter '\Memory\Committed Bytes').CounterSamples.CookedValue / 1MB
+
 - **A torch process draws far more CPU than `--threads` says, and it is not a bug.** At `torch.set_num_threads(4)` on this
   host (Ryzen 7 5700X, 8 cores / 16 logical) the process accumulates about **9.7 CPU-seconds per wall-second**: four threads
   are `Running` and doing the work, while **twelve more sit in a spin-wait pool at ~44% duty each** -- OpenMP sizes its pool

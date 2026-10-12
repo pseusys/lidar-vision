@@ -288,6 +288,34 @@ At 0.9 confidence the contrast is categorical: the published detectors still hal
 **It is not just remembering people who have left.** 42.4% of person-free frames sit within 10 s of someone in view, which is inside the slots' fade time, so a detection there can be a true memory of a real person rather than a phantom.
 Restricted to the 41,797 frames beyond that horizon the reduction is **larger**, not smaller (−76%), so the filtering is not an artefact of the stale-memory explanation.
 
+**Where those phantoms come from: the memory rescores them, it does not invent them** (item 27, 2026-10-12, all three
+seeds, `coasting_share` in `empty_scene.py`). At the 0.3 operating threshold the coasting head contributes **2, 0 and 0**
+reports against **61,870 / 57,188 / 42,043** rescored candidates, and exactly **zero** at 0.5 and 0.9; coasting appears at all
+only below 0.2 (0.3% of detections) and reaches 5.0% at 0.1. So every person-free phantom worth discussing is a candidate
+stage 2 emitted and the memory failed to suppress -- which is the reading items 24, 25 and 26 rest on, now measured rather
+than inferred from the populated split's ~0.001 coasting reports per frame.
+
+**And a creation or confirmation rule cannot reach them** (item 14, 2026-10-12, seed 0, `utils/slot_confirmation.py`,
+`results/slot_confirmation_s0.json`). Item 14 proposed confirming a slot over several frames before it may report. The slots
+behind the surviving phantoms are **old**: median **180 frames (4.5 s)**, quartiles 75/353, p95 728 -- and barely younger than
+the slots behind real people, median **221 frames**. A confirmation rule filters *young* slots, so it is aimed at a population
+that is not there:
+
+| a slot must be k frames old to report | delay | phantoms cut | person frames lost | selectivity |
+| ---: | ---: | ---: | ---: | ---: |
+| 2 | 25 ms | 0.2% | 0.1% | 1.39x |
+| 5 | 100 ms | 1.0% | 0.8% | 1.39x |
+| 13 | 300 ms | 3.2% | 2.4% | 1.34x |
+| 21 | 499 ms | 5.8% | 3.8% | 1.52x |
+| 40 | 973 ms | **12.6%** | **8.0%** | 1.57x |
+
+**It is barely selective at any delay.** A full second of confirmation removes 12.6% of phantoms -- 0.740 per frame to about
+0.65 -- while suppressing 8.0% of the frames on which a real person is reported, and at a deployable 100 ms it removes 1.0%.
+**The frame-to-frame recurrence rate badly overpredicts this**: 92.2% recurrence suggests 0.922^4 = 28% of phantoms would fail
+a 5-frame test, against a measured **1.0%**, because furniture's recurrence is strongly correlated across frames rather than
+independent. That gap is the finding -- persistence is not a lever on this population, because the phantoms are the *most*
+persistent thing the detector sees.
+
 **What the memory keeps is the furniture.** Its surviving phantoms recur next frame **92.2%** of the time against the candidates' 84.9% and real people's 99.8%: it removes the unstable ones and keeps the ones that look like a person in every frame, which is the failure mode A41 and A44 could not remove classically.
 That is a creation-rule question rather than a scoring one (`TODO.md` §A, Tier 2 item 13).
 
