@@ -1,4 +1,4 @@
-"""The decoders `utils/stage2_probe.py` swaps under one stage-2 network, and the per-person breakdown it reads at a matched
+﻿"""The decoders `utils/stage2_probe.py` swaps under one stage-2 network, and the per-person breakdown it reads at a matched
 false-positive rate (`TODO.md` A59).
 
 The decoders are ports, so what is pinned is the behaviour each source defines: the official DR-SPAAM repository's
@@ -7,6 +7,7 @@ person at the endpoint of the beam where the probability peaks and merges peaks 
 each annotated person once even where FROG's test file repeats a circle (`memory/data-model.md`), and must describe crowding by
 the distance to the nearest *other* person.
 """
+import math
 import sys
 from pathlib import Path
 
@@ -15,7 +16,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from stage2_probe import nearest_other, peak_decode, unique_people
+from stage2_probe import nearest_other, peak_decode, range_split_decode, unique_people, vote_grid_decode
 from train_takheliped import beam_votes, nms_decode
 
 N_BEAMS = 720
@@ -208,3 +209,70 @@ class TestGreedyOrderIsTheDefinition:
         dets = nms_decode(scan, ANGLES, prob, _votes_to(scan, ANGLES, np.array([0.0, 4.0]), beams), 0.5, average=True)
 
         assert len(dets) == 1
+
+
+class TestRangeSplitDecode:
+    """One decoder near the sensor and another far from it (`TODO.md` items 13 and 17, merged 2026-10-15).
+
+    The measurement that motivates it: at LFE-Peaks' false-positive rate the vote grid finds **85.3%** of people at
+    8-10 m where `nms-mean` finds 81.6%, because aggregating many weak votes helps when few beams are on target -- while
+    `nms-mean` finds **86.6%** of close pairs against the vote grid's 66.8%, which is why it was adopted. Each decoder is
+    better exactly where the other is worse, so the question is whether splitting them by range keeps both.
+
+    `TODO.md` A38 is the standing warning: a range-dependent *radius* already lost to a well-chosen constant, and its
+    headline survived only until a control separated "range-aware helps" from "bigger helps". The constants are swept
+    beside this for the same reason.
+    """
+
+    @staticmethod
+    def _near_and_far():
+        """Two clusters: one at 3 m, one at 9 m, each from its own beams."""
+        scan, prob = _scan(), np.zeros(N_BEAMS)
+        near_beams, far_beams = np.arange(330, 340), np.arange(420, 430)
+        prob[near_beams], prob[far_beams] = 0.9, 0.8
+        votes = (_votes_to(scan, ANGLES, np.array([0.0, 3.0]), near_beams)
+                 + _votes_to(scan, ANGLES, np.array([0.0, 9.0]), far_beams))
+        return scan, prob, votes
+
+    def test_a_split_at_zero_is_the_far_decoder_everywhere(self):
+        scan, prob, votes = self._near_and_far()
+
+        split = range_split_decode(scan, ANGLES, prob, votes, split_m=0.0)
+        far_only = vote_grid_decode(scan, ANGLES, prob, votes)
+
+        assert np.array_equal(np.sort(split, axis=0), np.sort(far_only, axis=0))
+
+    def test_a_split_at_infinity_is_the_near_decoder_everywhere(self):
+        scan, prob, votes = self._near_and_far()
+
+        split = range_split_decode(scan, ANGLES, prob, votes, split_m=math.inf)
+        near_only = nms_decode(scan, ANGLES, prob, votes, 0.5, average=True)
+
+        assert np.array_equal(np.sort(split, axis=0), np.sort(near_only, axis=0))
+
+    def test_each_detection_comes_from_the_decoder_that_owns_its_range(self):
+        scan, prob, votes = self._near_and_far()
+
+        split = range_split_decode(scan, ANGLES, prob, votes, split_m=6.0)
+        near = nms_decode(scan, ANGLES, prob, votes, 0.5, average=True)
+        far = vote_grid_decode(scan, ANGLES, prob, votes)
+        radius = np.hypot(split[:, 1], split[:, 2])
+
+        assert np.allclose(sorted(split[radius < 6.0][:, 1:].tolist()),
+                           sorted(near[np.hypot(near[:, 1], near[:, 2]) < 6.0][:, 1:].tolist()))
+        assert np.allclose(sorted(split[radius >= 6.0][:, 1:].tolist()),
+                           sorted(far[np.hypot(far[:, 1], far[:, 2]) >= 6.0][:, 1:].tolist()))
+
+    def test_no_person_is_reported_twice_across_the_boundary(self):
+        """Both decoders see the whole scan, so the split must partition their output, not concatenate it."""
+        scan, prob, votes = self._near_and_far()
+
+        split = range_split_decode(scan, ANGLES, prob, votes, split_m=6.0)
+
+        assert len(split) == 2
+        assert len(np.unique(np.round(split[:, 1:], 6), axis=0)) == 2
+
+    def test_an_empty_scan_decodes_to_nothing_rather_than_crashing(self):
+        empty = range_split_decode(_scan(), ANGLES, np.zeros(N_BEAMS), np.zeros((N_BEAMS, 2)), split_m=6.0)
+
+        assert empty.shape == (0, 3)

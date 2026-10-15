@@ -38,6 +38,33 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Step 1 opens: the candidate pool is never full, so item 17 was never about pool size (2026-10-15)
+
+*keywords: item 17, TOP_P, candidate pool, 245146 frames, never at the cap, median 17, decoding floor, NMS geometry, step 1, architecture settling*
+
+The owner's restructure puts every architectural question before the two GPU-days, so that the big ablation describes a model
+that is final. First of them, and the cheapest: item 17 proposed feeding **every beam** as a candidate instead of the 64 best,
+on the grounds that `TOP_P` was never swept. Its own note asked for a precondition to be measured first -- how often a frame
+fills all 64 slots -- and the answer is **never**.
+
+| split | frames | median | p99 | max | at the 64 cap |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `official` test | 50,088 | 17 | 36 | 45 | **0** |
+| person-free | 195,058 | 16 | 41 | 59 | **0** |
+
+**Not one frame of 245,146 reaches the cap**, and 0.001% of person-free frames come within 10% of it. So `TOP_P` is not
+binding anywhere, and the **4,068 missed people who have no candidate at all** -- 15.6% of misses, about 2.6 pp of recall --
+are missing because **the decoder never produced a candidate there**, not because the pool truncated one. Raising the pool
+cannot reach them.
+
+**What item 17 becomes.** The remaining lever is the decoder's suppression: `VOTE_FLOOR` is already 0.001, so what removes
+those candidates is the 0.5 m NMS, which is the same mechanism item 13's leftover names. The two merge into one question for
+step 1 -- **what should the candidate decoder's NMS geometry be, and should it vary with range?** -- answerable by decode-only
+replay with no training, and carrying `TODO.md` A38's warning that a range-dependent parameter has already lost to a
+well-chosen constant once.
+
+It costs nothing to reproduce: the cached candidates carry it, as `split.data.valid.sum(axis=-1)` against `TOP_P`.
+
 ## Phase 0: items 13, 27 and 14 answered from checkpoints already on disk, and two of the three are "no" (2026-10-12)
 
 *keywords: phase 0, item 13, item 14, item 27, stage2_probe, slot_confirmation.py, coasting_share, backing-slot age, 180 frames, selectivity 1.39x, decoder convergence 95.3%, anchor head, confirmation rule, MemoryOutput.events*

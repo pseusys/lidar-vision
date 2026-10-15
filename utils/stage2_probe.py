@@ -13,6 +13,8 @@ everything upstream of it (`memory/static-detector-diagnosis.md`).
     nms            the official DR-SPAAM decoder: greedy over beams by probability, each keeping its own vote, 0.5 m apart
     nms-mean       the same, each detection at the probability-weighted mean of the votes it suppresses: stage 2's decoder since 2026-10-06
     nms-0.3        `nms` at LFE's 0.30 m, which separates the suppression radius from single-beam scoring
+    nms-mean-R     `nms-mean` at 0.30 / 0.40 / 0.60 m: the constant controls for the range-split arms below (`TODO.md` A38)
+    split-Rm       `nms-mean` within R metres of the sensor, the vote grid beyond it -- items 13 and 17, merged
     peaks          LFE-Peaks' decoder: `find_peaks` on the per-beam probability, the peak beam's endpoint, merged at 0.30 m
     peaks-vote     the same peaks, each reported at its beam's vote rather than its endpoint: the centre regression alone
 
@@ -61,7 +63,9 @@ EVAL_BATCH = 64
 RANGE_EDGES_M = (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
 CROWD_EDGES_M = (0.0, 0.6, 1.0, 2.0, math.inf)
 BISECTION_STEPS = 12                # a threshold to 2.4e-4, far finer than the scores' own steps
-BREAKDOWN_DECODERS = ("vote-grid", "nms", "nms-mean")   # the breakdown is the slow part; these are the decoders a choice is between
+# The breakdown is the slow part; these are the decoders a choice is between. The constant radii sit beside the range-split
+# arms deliberately: A38's range-aware radius beat its control only until the control was widened to the same average size.
+BREAKDOWN_DECODERS = ("vote-grid", "nms-mean", "nms-mean-0.4", "nms-mean-0.6", "split-6m", "split-8m")
 
 Detections = np.ndarray            # `[K, 3]`: score, x, y in the detection frame
 Frame = Tuple[np.ndarray, np.ndarray, np.ndarray]
@@ -81,12 +85,36 @@ def vote_grid_decode(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, vot
     return np.array(decode_votes(scan, angles, prob, votes, weighted_avg), dtype=np.float64).reshape(-1, 3)
 
 
+def range_split_decode(scan, angles, prob, votes, split_m: float) -> Detections:
+    """`nms-mean` within `split_m` of the sensor, the vote grid beyond it (`TODO.md` items 13 and 17).
+
+    Each decoder is better exactly where the other is worse. At LFE-Peaks' false-positive rate the vote grid finds 85.3%
+    of people at 8-10 m against `nms-mean`'s 81.6%, because aggregating many weak votes helps where few beams are on
+    target; `nms-mean` finds 86.6% of close pairs against the grid's 66.8%, which is why it was adopted. Close pairs are
+    a near-range problem and sparse returns a far-range one, so the split asks whether both wins survive together.
+
+    The output is a **partition**, not a concatenation: both decoders see the whole scan, and each detection is kept only
+    by the one that owns the range it landed at.
+    """
+    near = nms_decode(scan, angles, prob, votes, NMS_DIST_M, average=True)
+    far = vote_grid_decode(scan, angles, prob, votes)
+    kept = [d[np.hypot(d[:, 1], d[:, 2]) < split_m] if len(d) else d for d in (near,)]
+    kept += [d[np.hypot(d[:, 1], d[:, 2]) >= split_m] if len(d) else d for d in (far,)]
+    return np.concatenate(kept).reshape(-1, 3)
+
+
 DECODERS: Dict[str, Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], Detections]] = {
     "vote-grid": vote_grid_decode,
     "vote-weighted": lambda scan, angles, prob, votes: vote_grid_decode(scan, angles, prob, votes, weighted_avg=True),
     "nms": lambda scan, angles, prob, votes: nms_decode(scan, angles, prob, votes, NMS_DIST_M),
     "nms-mean": lambda scan, angles, prob, votes: nms_decode(scan, angles, prob, votes, NMS_DIST_M, average=True),
     "nms-0.3": lambda scan, angles, prob, votes: nms_decode(scan, angles, prob, votes, LFE_MERGE_M),
+    "nms-mean-0.3": lambda scan, angles, prob, votes: nms_decode(scan, angles, prob, votes, 0.30, average=True),
+    "nms-mean-0.4": lambda scan, angles, prob, votes: nms_decode(scan, angles, prob, votes, 0.40, average=True),
+    "nms-mean-0.6": lambda scan, angles, prob, votes: nms_decode(scan, angles, prob, votes, 0.60, average=True),
+    "split-5m": lambda scan, angles, prob, votes: range_split_decode(scan, angles, prob, votes, 5.0),
+    "split-6m": lambda scan, angles, prob, votes: range_split_decode(scan, angles, prob, votes, 6.0),
+    "split-8m": lambda scan, angles, prob, votes: range_split_decode(scan, angles, prob, votes, 8.0),
     "peaks": lambda scan, angles, prob, votes: peak_decode(scan, angles, prob, votes, at_vote=False),
     "peaks-vote": lambda scan, angles, prob, votes: peak_decode(scan, angles, prob, votes, at_vote=True),
 }
