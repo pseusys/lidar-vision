@@ -38,6 +38,72 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The owner asks whether decoders can run in parallel, and unlike the split, this one has a prize in it (2026-10-15)
+
+*keywords: item 34, complementarity, parallel decoders, union, headroom 878 841 906, +2.9 pp, 92.0%, disjoint misses, vote-grid, peaks, fusion by stage 3*
+
+Asked while items 13 and 17 were closing: if each decoder is really better in its own field, why pick one -- why not run them
+in parallel and let them complement each other? It is a different idea from the range split just rejected. The split
+*partitions* detections by range under one global threshold, which is what broke it; running in parallel *unions* them.
+
+**What had to be true, and is.** No fusion scheme can report a person that neither decoder found, so the union of their
+coverage bounds the whole family at once. `stage2_probe.complementarity` measures it with every decoder held at **LFE-Peaks'
+own 1.784 false positives per frame**, so the extra people are not bought with extra errors:
+
+| of 30,283 people, three seeds | covered alone | union | headroom |
+| --- | ---: | ---: | ---: |
+| **`nms-mean` + vote-grid** | 26,997 / 27,168 / 26,907 | **27,875 / 28,009 / 27,813** | **878 / 841 / 906 = +2.90 / 2.78 / 2.99 pp** |
+| `nms-mean` + 0.6 m | 26,997 / 27,168 / 26,907 | 27,492 / 27,659 / 27,387 | 495 / 491 / 480 |
+| `nms-mean` + `peaks` | 26,997 / 27,168 / 26,907 | 27,242 / 27,429 / 27,179 | 245 / 261 / 272 |
+| `nms-mean` + 0.4 m | 26,997 / 27,168 / 26,907 | 27,128 / 27,323 / 27,131 | 131 / 155 / 224 |
+
+**The misses are disjoint, and substantially so.** Each of `nms-mean` and the vote grid finds roughly **900 people the other
+does not**, taking recall from 88.9-89.7% to **91.8-92.5%** at the ceiling, consistently on all three seeds. It also cuts the
+population **no** decoder reaches from 3,286 to 2,408 -- 27% of the "no candidate at all" class item 17 identified hours
+earlier. The structurally different decoder is *not* the best partner: LFE's peak-finder contributes only 245-272, while the
+vote grid, which shares the vote representation, contributes three times that.
+
+**Why it fits this architecture rather than needing new machinery.** The candidate pool never exceeds ~17 of its 64 slots on
+any of 245,146 frames, so a union of ~34 fits with margin; and stage 3 is already a fusion mechanism that takes candidates and
+rescores them, cutting person-free phantoms 72%. The honest limit: the 2.9 pp is a **ceiling under a doubled raw candidate
+error rate**, and whether stage 3 converts it is a training question. It becomes `TODO.md` item 34, in step 1, as an
+architecture candidate with a measured prize rather than an idea.
+
+## Items 13 and 17 close together: the candidate decoder's geometry has no free prize in it (2026-10-15)
+
+*keywords: item 13, item 17, range_split_decode, split-6m, split-8m, nms-mean-0.4, nms-mean-0.6, decoder geometry, matched false positives, score scale, A38 again, step 1*
+
+Item 17 merged into item 13's leftover once its pool-size framing died, and the merged question -- what should the candidate
+decoder's NMS geometry be, and should it vary with range? -- is now answered across three seeds with no training run.
+**The answer is that the geometry does not matter, and the one arm that promised to combine two wins is dominated by both.**
+
+At LFE-Peaks' own 1.784 false positives per frame, recall overall / at 8-10 m / on close pairs, three seeds:
+
+| | overall | 8-10 m | 0-0.6 m |
+| --- | ---: | ---: | ---: |
+| vote-grid | 89.1 / 89.4 / 88.5 | **85.6 / 85.4 / 85.3** | 70.5 / 69.4 / 66.8 |
+| **`nms-mean`, adopted** | 89.1 / 89.7 / 88.9 | 81.6 / 80.9 / 81.6 | 89.7 / 89.6 / 86.6 |
+| 0.4 m | 86.8 / 87.4 / 87.0 | 76.9 / 76.5 / 78.0 | **91.8 / 92.6 / 91.9** |
+| 0.6 m | 89.0 / 89.1 / 88.0 | 83.5 / 82.1 / 82.4 | 76.8 / 74.1 / 71.5 |
+| split at 6 m | 89.2 / 89.5 / 89.0 | 79.9 / 78.7 / 80.1 | 86.2 / 86.1 / 82.8 |
+| split at 8 m | 89.2 / 89.7 / 88.9 | 78.6 / 77.5 / 78.9 | 88.9 / 88.5 / 85.8 |
+
+**Overall recall is flat at 88.0-89.7% across every sane arm** -- inside the seed spread. Geometry *redistributes* recall
+between range and crowding rather than adding any: 0.4 m buys close pairs and loses far range, 0.6 m does the reverse, and
+the adopted 0.5 m sits in the middle of that trade.
+
+**The split is dominated, and the table says why.** It is worse at 8-10 m than plain `nms-mean` on every seed, in the stratum
+where it is running the vote grid that beats `nms-mean` there by 4 pp. At 6-8 m on seed 0 it runs the grid exactly and scores
+**83.8%** where the grid alone scores **88.1%** -- same decoder, same people. What differs is the threshold the
+false-positive match lands on: **0.670 against 0.476**. The two decoders score on different scales, so one global threshold
+cuts a mixed set unevenly and the far detections pay. Calibrating the two distributions onto each other would be the fix, and
+the flat overall column says there is nothing to buy with it.
+
+**A38's lesson held for a second time, on a different parameter of a different decoder**, which is why the three constant
+radii were swept beside the three split boundaries rather than after them. Both go to `memory/rejected-ideas.md`, with the
+reopening condition that matters: at 0.4 m `nms-mean` is the best close-pair decoder measured here by 2-5 pp on all three
+seeds, so a crowd-dominated dataset reverses the trade. FROG has 9% of people with a neighbour under 0.6 m.
+
 ## Step 1 opens: the candidate pool is never full, so item 17 was never about pool size (2026-10-15)
 
 *keywords: item 17, TOP_P, candidate pool, 245146 frames, never at the cap, median 17, decoding floor, NMS geometry, step 1, architecture settling*

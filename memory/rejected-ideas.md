@@ -201,6 +201,50 @@ The published case where place-keyed memory does pay is exactly that one: Luber,
 
 **What this does not reject.** The horizon argument itself. 786 frames is still the span over which the separating evidence exists; what is rejected is reaching it through location.
 
+## A range-split candidate decoder, and the NMS radius with it (TODO.md items 13 and 17)
+
+*keywords: item 13, item 17, range_split_decode, split-6m, split-8m, nms-mean-0.4, nms-mean-0.6, decoder geometry, score scale, matched false positives*
+
+**Idea.** Each candidate decoder is better exactly where the other is worse. At LFE-Peaks' false-positive rate the vote grid
+finds **85.3-85.6%** of people at 8-10 m where the adopted `nms-mean` finds **80.9-81.6%**, because aggregating many weak
+votes helps where few beams are on target; `nms-mean` finds **86.6-89.7%** of close pairs where the grid finds **66.8-70.5%**.
+Close pairs are a near-range problem and sparse returns a far-range one, so run `nms-mean` within R metres of the sensor and
+the vote grid beyond it, and keep both wins. The NMS radius was swept beside it as the control (`TODO.md` A38's lesson).
+
+**What was measured** (2026-10-15, `stage2_probe.py`, the adopted recipe's three seeds, `official` test every 5th annotated
+frame, every decoder scored at LFE-Peaks' own 1.784 false positives per frame):
+
+| recall at matched FP | overall | 8-10 m (13%) | close pairs 0-0.6 m (9%) |
+| --- | ---: | ---: | ---: |
+| vote-grid | 89.1 / 89.4 / 88.5 | **85.6 / 85.4 / 85.3** | 70.5 / 69.4 / 66.8 |
+| **`nms-mean` (adopted, 0.5 m)** | 89.1 / 89.7 / 88.9 | 81.6 / 80.9 / 81.6 | 89.7 / 89.6 / 86.6 |
+| `nms-mean` at 0.4 m | 86.8 / 87.4 / 87.0 | 76.9 / 76.5 / 78.0 | **91.8 / 92.6 / 91.9** |
+| `nms-mean` at 0.6 m | 89.0 / 89.1 / 88.0 | 83.5 / 82.1 / 82.4 | 76.8 / 74.1 / 71.5 |
+| split at 6 m | 89.2 / 89.5 / 89.0 | 79.9 / 78.7 / 80.1 | 86.2 / 86.1 / 82.8 |
+| split at 8 m | 89.2 / 89.7 / 88.9 | 78.6 / 77.5 / 78.9 | 88.9 / 88.5 / 85.8 |
+
+**Why rejected, and there are two separate reasons.**
+
+**1. The split is dominated: it is worse at far range than either parent.** Every seed puts split-6m at 78.7-80.1% at
+8-10 m, *below* plain `nms-mean`, in the stratum where it is running the vote grid that scores 85.3-85.6% there.
+**The table shows why.** At 6-8 m on seed 0, split-6m uses the vote grid exactly, and scores **83.8%** where the vote grid
+alone scores **88.1%** -- same decoder, same people, different answer. The only thing that differs is the threshold the
+false-positive match picks: **0.670 for the split against 0.476 for the grid**. The two decoders put their scores on
+different scales, so one global threshold cuts a mixed set unevenly, and the far-range detections pay for it. A split would
+need the two score distributions calibrated onto each other first -- machinery for a prize that reason 2 says is not there.
+
+**2. Overall recall at matched false positives does not move.** vote-grid, `nms-mean`, 0.6 m, split-6m and split-8m all land
+within **88.0-89.7%**, inside the seed spread. Decoder geometry **redistributes** recall between range and crowding without
+changing the total: 0.4 m buys 2-5 pp on close pairs and loses 4-5 pp at 8-10 m, 0.6 m does the reverse. There is no setting
+that is better, only settings that are differently wrong, and the adopted 0.5 m sits in the middle of the trade.
+
+**This also closes item 17**, which merged here once its own precondition showed the 64-candidate pool is never full
+(`CHANGELOG.md` 2026-10-15): the remaining lever was the decoder's suppression, and the suppression has no free prize in it.
+
+**Reopen if** a dataset is crowd-dominated rather than range-dominated. `nms-mean` at 0.4 m is the best close-pair decoder
+measured here, by 2-5 pp on all three seeds, and on data where most people have a neighbour under 0.6 m that trade reverses.
+FROG has 9%.
+
 ## Range-aware merge/NMS radius, `r(d) = a + b*d` (TODO.md A38)
 
 *keywords: A38, merge_radius_slope, nms_radius_slope, range-aware radius, close-pair, over-merging, tuning on test*

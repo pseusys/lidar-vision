@@ -86,7 +86,7 @@ them blocking a pre-print, ordered by how well a measurement already motivates t
 | --- | --- | --- | --- |
 | 15 | **A39's locally range-centred input channel**, and the metric-width first layer it generalises | the one Tier-0 candidate never run; §2.6 prices the adaptive window at ~1 point | A39, A50 phase 3 **Weakened 2026-10-10:** A59's F1 arm swapped our ten per-beam features for LFE's and found nothing measurable once weights are averaged, so the prior has shifted against input-side changes. The adaptive *gather* is still a different idea, but it is no longer a ~1-point bet |
 | 16 | **The recurrence family**: minGRU, GRU or LRU against the selective diagonal decay | E10 says the learned state is the mechanism, D3 says the learned *decay* is worth little | A50 phase 3 **Re-framed 2026-10-10 as a defence rather than an improvement:** "why a bespoke selective diagonal recurrence and not a GRU?" is what a reviewer asks about the paper's central mechanism, and we cannot answer it. That raises its priority above the rest of this block |
-| 17 | **Every beam as a candidate** -- **reframed 2026-10-15, and it is not a pool-size question.** Its own precondition is answered: over **245,146 frames** of `official` test and the person-free split, **not one reaches the 64-candidate cap** (median **17**, mean 17.5, p99 36, max 45 on `official`; max 59 person-free, 0.001% within 10% of the cap). `TOP_P` is therefore never binding, and the **4,068 missed people with no candidate (15.6% of misses, ~2.6 pp of recall)** are missing because the decoder never produced one, not because the pool truncated it. **So raising `TOP_P` cannot help, and the remaining lever is the decoder's suppression** -- which is the same lever item 13's leftover names, and the two are now one question: what should the candidate decoder's NMS geometry be, and should it vary with range? Reproduce in seconds from the cached candidates: `split.data.valid.sum(axis=-1)` against `TOP_P` | A50 phase 3 |
+| ~~17~~ | ~~**Every beam as a candidate**~~ **CLOSED 2026-10-15 with item 13's leftover, negative** (`memory/rejected-ideas.md`). Its precondition killed the pool-size framing first: over **245,146 frames not one reaches the 64-candidate cap** (median 17, max 59), so `TOP_P` never binds and the 4,068 people with no candidate are the decoder's doing, not the pool's. The decoder was then swept -- three NMS radii and three range-split boundaries, three seeds, at matched false positives -- and **overall recall does not move** (88.0-89.7% across every sane arm). The split is **dominated**, worse at far range than either parent, because the two decoders' scores are on different scales and one global threshold cuts the mixed set unevenly: at 6-8 m split-6m runs the vote grid and scores **83.8%** where the grid alone scores **88.1%**. Geometry redistributes recall between range and crowding; it does not add any. **The adopted `nms-mean` at 0.5 m stays** | A50 phase 3 |
 | 18 | **Sensor-frame vote targets** instead of beam-relative offsets | A59 puts about half the lead over LFE-Peaks in the output head | A50 phase 2 **Demoted 2026-10-10:** A59 puts about half our lead over LFE-Peaks in the output head, so the head is already the good part and a different target parameterisation is as likely to hurt. A defence item, last |
 | 19 | **A plain residual U-Net, and widening 2** | A59's W arm priced shrinking to LFE's widths; the block and the widening are untested | A50 phase 3 **Demoted 2026-10-10:** shrinking to LFE's widths costs 1.4 pp and buys no speed at batch 1, so capacity is not where the score is. A defence item, last |
 | 20 | **D5: a learned association width** | gated on 8 | A51 phase 3b |
@@ -114,6 +114,30 @@ with no percentile, so the table satisfies its own stated rule ("one machine") w
 | 31 | **Li2Former's accuracy on FROG, or its removal from the comparison.** It is the one detector whose numbers we cite but have never measured: its *inference* runs here (**1675.24 ms** per frame on CPU, p99 1758.21 -- 70x the frame period, item 29) and only its *training* failed, on DirectML, three separate ways (`AGENTS.md` I4) -- and that was before this machine had ROCm, so the premise of that rule no longer holds for it | A comparison table with a cited-but-unmeasured row invites exactly the cross-regime confusion `AGENTS.md` rule 3 exists to prevent. Either it trains here and gets a measured row, or it is dropped to a cited-published-only footnote like PeTra | one training chain, unknown until attempted |
 
 **PeTra stays cited-only, and the reason is recorded so the question does not come back:** there is no PeTra implementation or weights in this repository -- only its published GPU figure (28.17 ms) -- so it has never run here and cannot be timed. It is not a failed attempt.
+
+**Item 34, the owner's question of 2026-10-15, and the first positive result of step 1.** Measured before it was proposed,
+which is why it is here rather than in `rejected-ideas.md`.
+
+| # | action | why | cost |
+| --- | --- | --- | --- |
+| 34 | **Two candidate decoders in parallel, fused by stage 3** -- decode each scan with both `nms-mean` and the vote grid, hand the union to the object memory, and let the learned rescoring head decide which to trust | **Their misses are disjoint, and the ceiling is measured** (2026-10-15, `stage2_probe.complementarity`, three seeds, every decoder at LFE-Peaks' own 1.784 FP/frame): `nms-mean` covers 26,997 / 27,168 / 26,907 of 30,283 people, the vote grid covers 26,995 / 27,068 / 26,797, and **their union covers 27,875 / 28,009 / 27,813 -- 92.0 / 92.5 / 91.8%, a headroom of 878 / 841 / 906 people over the better decoder alone, or +2.90 / 2.78 / 2.99 pp**. Each decoder finds ~900 people the other does not. It also cuts the population **no** decoder reaches from 3,286 to 2,408, which is 27% of item 17's "no candidate at all" class | one cache regeneration per split, then one stage-3 run |
+
+**Why this is the right shape for this architecture, and what it is not.**
+
+- **There is room.** The 64-slot candidate pool never exceeds ~17 in use on any of 245,146 frames (item 17), so a union of
+  about 34 fits with margin. Nothing has to be dropped to make space.
+- **Stage 3 is already the fusion mechanism.** It takes candidates and rescores them, and it is measurably good at
+  suppressing false ones -- 2.62 to 0.74 phantoms per person-free frame, a 72% cut. Handing it two decoders' candidates asks
+  it to do the job it already does, on a larger pool, rather than adding a hand-written merge rule.
+- **The 2.9 pp is a ceiling, not a forecast.** Each decoder sits at its own 1.784 false positives per frame, so the union
+  carries up to twice the raw candidate error rate. At the *candidate* stage that is the normal regime -- candidates are not
+  detections -- but whether stage 3 exploits the extra true candidates faster than the extra false ones cost it is a
+  **training** question, and the only way to answer it is the run.
+- **One second-order risk to check in that run:** merging two candidate sets can *displace* a detection if a good one is
+  averaged with a bad one, which the union bound does not model. Compare against both parents, not only against `nms-mean`.
+- **It is not the range split**, which is rejected (`memory/rejected-ideas.md`): that partitioned detections by range under
+  one global threshold and was dominated by both parents. This unions them and lets a learned head weigh them, which is the
+  part the split could not do.
 
 **Items 32-33, owner's calls 2026-10-11.** One is a removal to carry out; the other is a proposal I would answer differently
 than it was put, and the reasons are below rather than in a commit message.

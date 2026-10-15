@@ -12,11 +12,13 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from stage2_probe import nearest_other, peak_decode, range_split_decode, unique_people, vote_grid_decode
+from stage2_probe import (complementarity, nearest_other, peak_decode, range_split_decode, unique_people,
+                          vote_grid_decode)
 from train_takheliped import beam_votes, nms_decode
 
 N_BEAMS = 720
@@ -276,3 +278,61 @@ class TestRangeSplitDecode:
         empty = range_split_decode(_scan(), ANGLES, np.zeros(N_BEAMS), np.zeros((N_BEAMS, 2)), split_m=6.0)
 
         assert empty.shape == (0, 3)
+
+
+class TestComplementarity:
+    """Do two decoders miss the *same* people, or different ones? (the owner's question, 2026-10-15)
+
+    Running decoders in parallel and fusing them can only pay if their misses are disjoint. This bounds every fusion
+    scheme at once -- union, agreement-weighting, or handing both sets to stage 3's learned rescoring head -- because no
+    scheme can report a person that neither decoder found. `coverage` already returns one boolean per annotated person in
+    a fixed order, so the bound is boolean algebra on two of those.
+    """
+
+    def test_identical_coverage_means_no_complementarity(self):
+        a = np.array([True, True, False, False])
+
+        c = complementarity(a, a.copy())
+
+        assert (c["a_only"], c["b_only"]) == (0, 0)
+        assert c["union"] == c["a_alone"] == c["b_alone"] == 2
+
+    def test_disjoint_coverage_adds_up(self):
+        a = np.array([True, True, False, False])
+        b = np.array([False, False, True, True])
+
+        c = complementarity(a, b)
+
+        assert (c["a_only"], c["b_only"], c["both"]) == (2, 2, 0)
+        assert c["union"] == 4
+
+    def test_a_person_neither_decoder_finds_is_out_of_reach_of_any_fusion(self):
+        a = np.array([True, False, False])
+        b = np.array([False, True, False])
+
+        c = complementarity(a, b)
+
+        assert c["neither"] == 1
+        assert c["union"] == 2
+        assert c["union_recall"] == pytest.approx(2 / 3)
+
+    def test_the_headroom_is_what_fusion_could_add_over_the_better_decoder(self):
+        """The number that decides whether to build anything: union minus the best single decoder."""
+        a = np.array([True, True, True, False])      # 3
+        b = np.array([True, False, False, True])     # 2, one of them new
+
+        c = complementarity(a, b)
+
+        assert c["a_alone"] == 3 and c["b_alone"] == 2
+        assert c["union"] == 4
+        assert c["headroom"] == 1                    # only the 4th person is new
+
+    def test_arrays_about_different_people_are_refused(self):
+        with pytest.raises(ValueError):
+            complementarity(np.array([True, False]), np.array([True]))
+
+    def test_no_people_is_zeros_rather_than_a_division_by_zero(self):
+        c = complementarity(np.zeros(0, bool), np.zeros(0, bool))
+
+        assert c["union"] == 0
+        assert c["union_recall"] == 0.0

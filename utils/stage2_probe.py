@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """What TAKHeLiPeD's stage-2 FROG score is made of (`TODO.md` A59): one network's per-beam outputs through four decoders, and
 where its recall lies against LFE's at a matched false-positive rate.
 
@@ -65,7 +65,11 @@ CROWD_EDGES_M = (0.0, 0.6, 1.0, 2.0, math.inf)
 BISECTION_STEPS = 12                # a threshold to 2.4e-4, far finer than the scores' own steps
 # The breakdown is the slow part; these are the decoders a choice is between. The constant radii sit beside the range-split
 # arms deliberately: A38's range-aware radius beat its control only until the control was widened to the same average size.
-BREAKDOWN_DECODERS = ("vote-grid", "nms-mean", "nms-mean-0.4", "nms-mean-0.6", "split-6m", "split-8m")
+BREAKDOWN_DECODERS = ("vote-grid", "nms-mean", "nms-mean-0.4", "nms-mean-0.6", "split-6m", "split-8m", "peaks")
+# Pairs whose misses are worth comparing: each is a decoder that beats `nms-mean` somewhere. Their union bounds every
+# parallel-decoder scheme at once, because nothing can report a person that neither of them found.
+COMPLEMENT_PAIRS = (("nms-mean", "vote-grid"), ("nms-mean", "nms-mean-0.4"), ("nms-mean", "nms-mean-0.6"),
+                    ("nms-mean", "peaks"))
 
 Detections = np.ndarray            # `[K, 3]`: score, x, y in the detection frame
 Frame = Tuple[np.ndarray, np.ndarray, np.ndarray]
@@ -172,6 +176,27 @@ def coverage(frames: List[Frame], threshold: float) -> Tuple[np.ndarray, np.ndar
     return np.concatenate(ranges), np.concatenate(crowd), np.concatenate(covered), fp / len(frames)
 
 
+def complementarity(covered_a: np.ndarray, covered_b: np.ndarray) -> Dict[str, float]:
+    """Do two decoders miss the same people or different ones -- the ceiling on running them in parallel.
+
+    No fusion scheme can report a person that neither decoder found, so the union of their coverage bounds all of them
+    at once: a union, an agreement weighting, or handing both candidate sets to stage 3's learned rescoring head. What
+    decides whether any of it is worth building is `headroom`, the union minus the better decoder alone.
+
+    `coverage` returns one boolean per annotated person in a fixed order, so both arrays must describe the same people.
+    """
+    covered_a, covered_b = np.asarray(covered_a, dtype=bool), np.asarray(covered_b, dtype=bool)
+    if covered_a.shape != covered_b.shape:
+        raise ValueError(f"these describe different people: {covered_a.shape} against {covered_b.shape}")
+    both = int((covered_a & covered_b).sum())
+    a_alone, b_alone = int(covered_a.sum()), int(covered_b.sum())
+    union = int((covered_a | covered_b).sum())
+    return dict(people=len(covered_a), both=both, a_only=a_alone - both, b_only=b_alone - both,
+                neither=len(covered_a) - union, a_alone=a_alone, b_alone=b_alone, union=union,
+                headroom=union - max(a_alone, b_alone),
+                union_recall=union / len(covered_a) if len(covered_a) else 0.0)
+
+
 def threshold_at(frames: List[Frame], fp_per_frame: float) -> float:
     """The lowest score threshold whose false positives per frame (`coverage`'s counting) stay within `fp_per_frame`: bisection,
     since adding a detection can only add an unmatched one."""
@@ -210,6 +235,15 @@ def print_breakdowns(title: str, named: Dict[str, Dict[str, object]]) -> None:
             print("  " + f"{label:<14}" + "".join(f"{named[n][key][i]['recall']:>16.1%}" for n in names))
 
 
+def print_complementarity(title: str, pairs: Dict[str, Dict[str, float]]) -> None:
+    print(f"\n{title}")
+    print(f"  {'pair':<28} {'A alone':>8} {'B alone':>8} {'A only':>7} {'B only':>7} {'union':>7} {'headroom':>9}")
+    for name, c in pairs.items():
+        print(f"  {name:<28} {c['a_alone']:>8} {c['b_alone']:>8} {c['a_only']:>7} {c['b_only']:>7} {c['union']:>7} "
+              f"{c['headroom']:>9}", flush=True)
+    print("  headroom is the union minus the better decoder alone: what any fusion of the two could add, at best.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stage2", type=Path, nargs="+", required=True, help="stage 1-2 checkpoints to decode")
@@ -239,11 +273,19 @@ def main() -> None:
         print(f"\n=== {path.parent.name}/{path.name} ({sum(p.numel() for p in net.parameters()):,} parameters) ===", flush=True)
         for name, row in run["decoders"].items():
             print(f"  {name:<11} AP {row['ap']:.2%}  AP@0.3 {row['ap_03']:.2%}  at {OPERATING_THRESHOLD}: recall {row['recall_03']:.1%}  FP/frame {row['fp_per_frame_03']:.3f}", flush=True)
-        run["matched"] = {}
+        run["matched"], run["complementarity"] = {}, {}
         for reference, frames in lfe.items():
             own = breakdown(frames, OPERATING_THRESHOLD)
-            run["matched"][reference] = {reference: own, **{name: breakdown(decoded[name], threshold_at(decoded[name], own["fp_per_frame"])) for name in BREAKDOWN_DECODERS}}
+            at = {name: threshold_at(decoded[name], own["fp_per_frame"]) for name in BREAKDOWN_DECODERS}
+            run["matched"][reference] = {reference: own, **{name: breakdown(decoded[name], at[name]) for name in BREAKDOWN_DECODERS}}
             print_breakdowns(f"at {reference}'s false positives per frame at its {OPERATING_THRESHOLD} threshold:", run["matched"][reference])
+            # Every decoder here is held at the same false-positive rate, so a union's extra people are not bought with
+            # extra errors -- which is what makes `headroom` a fair ceiling rather than a threshold artefact.
+            covered = {name: coverage(decoded[name], at[name])[2] for name in at}
+            run["complementarity"][reference] = {f"{a} + {b}": complementarity(covered[a], covered[b])
+                                                 for a, b in COMPLEMENT_PAIRS if a in covered and b in covered}
+            print_complementarity(f"what each pair finds that the other misses, at {reference}'s false positives:",
+                                  run["complementarity"][reference])
         results["stage2"][f"{path.parent.name}/{path.name}"] = run
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
