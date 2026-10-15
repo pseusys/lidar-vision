@@ -115,29 +115,12 @@ with no percentile, so the table satisfies its own stated rule ("one machine") w
 
 **PeTra stays cited-only, and the reason is recorded so the question does not come back:** there is no PeTra implementation or weights in this repository -- only its published GPU figure (28.17 ms) -- so it has never run here and cannot be timed. It is not a failed attempt.
 
-**Item 34, the owner's question of 2026-10-15, and the first positive result of step 1.** Measured before it was proposed,
-which is why it is here rather than in `rejected-ideas.md`.
+**Item 34 (the owner's parallel-decoders question) closed 2026-10-15, negative** -- and the reason it failed is the more
+useful half (`memory/rejected-ideas.md`).
 
-| # | action | why | cost |
-| --- | --- | --- | --- |
-| 34 | **Two candidate decoders in parallel, fused by stage 3** -- decode each scan with both `nms-mean` and the vote grid, hand the union to the object memory, and let the learned rescoring head decide which to trust | **Their misses are disjoint, and the ceiling is measured** (2026-10-15, `stage2_probe.complementarity`, three seeds, every decoder at LFE-Peaks' own 1.784 FP/frame): `nms-mean` covers 26,997 / 27,168 / 26,907 of 30,283 people, the vote grid covers 26,995 / 27,068 / 26,797, and **their union covers 27,875 / 28,009 / 27,813 -- 92.0 / 92.5 / 91.8%, a headroom of 878 / 841 / 906 people over the better decoder alone, or +2.90 / 2.78 / 2.99 pp**. Each decoder finds ~900 people the other does not. It also cuts the population **no** decoder reaches from 3,286 to 2,408, which is 27% of item 17's "no candidate at all" class | one cache regeneration per split, then one stage-3 run |
-
-**Why this is the right shape for this architecture, and what it is not.**
-
-- **There is room.** The 64-slot candidate pool never exceeds ~17 in use on any of 245,146 frames (item 17), so a union of
-  about 34 fits with margin. Nothing has to be dropped to make space.
-- **Stage 3 is already the fusion mechanism.** It takes candidates and rescores them, and it is measurably good at
-  suppressing false ones -- 2.62 to 0.74 phantoms per person-free frame, a 72% cut. Handing it two decoders' candidates asks
-  it to do the job it already does, on a larger pool, rather than adding a hand-written merge rule.
-- **The 2.9 pp is a ceiling, not a forecast.** Each decoder sits at its own 1.784 false positives per frame, so the union
-  carries up to twice the raw candidate error rate. At the *candidate* stage that is the normal regime -- candidates are not
-  detections -- but whether stage 3 exploits the extra true candidates faster than the extra false ones cost it is a
-  **training** question, and the only way to answer it is the run.
-- **One second-order risk to check in that run:** merging two candidate sets can *displace* a detection if a good one is
-  averaged with a bad one, which the union bound does not model. Compare against both parents, not only against `nms-mean`.
-- **It is not the range split**, which is rejected (`memory/rejected-ideas.md`): that partitioned detections by range under
-  one global threshold and was dominated by both parents. This unions them and lets a learned head weigh them, which is the
-  part the split could not do.
+| # | action | outcome |
+| --- | --- | --- |
+| ~~34~~ | ~~**Two candidate decoders in parallel, fused by stage 3**~~ | **The ceiling was real and unreachable.** At LFE-Peaks' 1.784 FP/frame each decoder covered ~900 people of 30,283 the other missed (+2.90 / 2.78 / 2.99 pp) -- but at matched FP the union realises **+35 / +30 / +18**, and **at the 0.01 candidate floor the pipeline actually uses, +2 / -9 / -9**: `nms-mean` alone already puts **98.1-98.5%** of people in the pool, and the vote grid reaches 4 pp fewer there. **A complementarity ceiling measured at one operating point does not transfer to a pipeline running at another** |
 
 **Items 32-33, owner's calls 2026-10-11.** One is a removal to carry out; the other is a proposal I would answer differently
 than it was put, and the reasons are below rather than in a commit message.

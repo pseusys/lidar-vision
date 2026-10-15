@@ -545,6 +545,35 @@ def decode_frame(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: 
     return nms_decode(scan, angles, prob, votes, NMS_DIST_M, average=True)
 
 
+CANDIDATE_MERGE_M = 0.30        # below the 0.5 m match radius, so collapsing a coincident pair cannot swallow a second person
+
+
+def union_decode(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np.ndarray,
+                 merge_m: float = CANDIDATE_MERGE_M) -> np.ndarray:
+    """Both candidate decoders at once -- `nms-mean` and DROW's vote grid -- deduplicated, strongest first (`TODO.md` item 34).
+
+    **Why both.** Measured 2026-10-15 at matched false positives over three seeds: each decoder covers about **900 people of
+    30,283 that the other misses**, so their union reaches 91.8-92.5% where the better alone reaches 88.9-89.7%. Neither is
+    better everywhere -- the grid aggregates weak votes and wins at 8-10 m, `nms-mean` separates close pairs -- and the union
+    is the only way to put both sets of people in front of the memory, whose rescoring head then weighs them.
+
+    **Why deduplicated.** Both decoders usually fire on the same person. Two candidates for one person break the memory's
+    one-to-one slot matching: the second spawns a duplicate slot. Coincident pairs therefore collapse to the higher-scoring
+    one, at a radius **below** the 0.5 m match radius, so a collapse can never swallow a genuinely separate person and give
+    back the headroom this exists for.
+    """
+    grid = np.asarray(decode_votes(scan, angles, prob, votes), dtype=np.float64).reshape(-1, 3)
+    pooled = np.concatenate([decode_frame(scan, angles, prob, votes), grid]).reshape(-1, 3)
+    if not len(pooled):
+        return pooled
+    pooled = pooled[np.argsort(-pooled[:, 0], kind="stable")]
+    kept = []
+    for row in pooled:
+        if not kept or np.min(np.linalg.norm(np.asarray(kept)[:, 1:] - row[1:], axis=1)) > merge_m:
+            kept.append(row)
+    return np.asarray(kept).reshape(-1, 3)
+
+
 def decode_candidates(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np.ndarray, top_p: int, max_range_m: float) -> Tuple[np.ndarray, np.ndarray]:
     """One frame's best `top_p` candidates `(score, x, y)` `[K, 3]` from raw ranges `[N]`, per-beam probabilities and votes `[N, 2]`,
     through `decode_frame`, with each candidate's pooling weights over the beams `[K, N]`; beams at the range limit cast no votes."""

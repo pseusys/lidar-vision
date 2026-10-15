@@ -52,7 +52,8 @@ from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
 from takheliped.detectors.lfe_detector import _merge_nearby  # noqa: E402
 from train_takheliped import (  # noqa: E402
     MATCH_RADIUS_M, NMS_DIST_M, OPERATING_THRESHOLD, FrameSplit, beam_votes, calibration_network, candidate_targets, decode_votes,
-    detect_device, frame_batch, load_frames, nms_decode, score_detections, voting_beams,
+    CANDIDATE_FLOOR, detect_device, frame_batch, load_frames, nms_decode, score_detections, union_decode,
+    voting_beams,
 )
 
 LFE_MERGE_M = 0.30                  # `LFEPeaksDetector.merge_radius`
@@ -65,11 +66,11 @@ CROWD_EDGES_M = (0.0, 0.6, 1.0, 2.0, math.inf)
 BISECTION_STEPS = 12                # a threshold to 2.4e-4, far finer than the scores' own steps
 # The breakdown is the slow part; these are the decoders a choice is between. The constant radii sit beside the range-split
 # arms deliberately: A38's range-aware radius beat its control only until the control was widened to the same average size.
-BREAKDOWN_DECODERS = ("vote-grid", "nms-mean", "nms-mean-0.4", "nms-mean-0.6", "split-6m", "split-8m", "peaks")
+BREAKDOWN_DECODERS = ("vote-grid", "nms-mean", "nms-mean-0.4", "nms-mean-0.6", "split-6m", "split-8m", "peaks", "union")
 # Pairs whose misses are worth comparing: each is a decoder that beats `nms-mean` somewhere. Their union bounds every
 # parallel-decoder scheme at once, because nothing can report a person that neither of them found.
 COMPLEMENT_PAIRS = (("nms-mean", "vote-grid"), ("nms-mean", "nms-mean-0.4"), ("nms-mean", "nms-mean-0.6"),
-                    ("nms-mean", "peaks"))
+                    ("nms-mean", "peaks"), ("union", "nms-mean"))
 
 Detections = np.ndarray            # `[K, 3]`: score, x, y in the detection frame
 Frame = Tuple[np.ndarray, np.ndarray, np.ndarray]
@@ -119,6 +120,7 @@ DECODERS: Dict[str, Callable[[np.ndarray, np.ndarray, np.ndarray, np.ndarray], D
     "split-5m": lambda scan, angles, prob, votes: range_split_decode(scan, angles, prob, votes, 5.0),
     "split-6m": lambda scan, angles, prob, votes: range_split_decode(scan, angles, prob, votes, 6.0),
     "split-8m": lambda scan, angles, prob, votes: range_split_decode(scan, angles, prob, votes, 8.0),
+    "union": lambda scan, angles, prob, votes: union_decode(scan, angles, prob, votes),
     "peaks": lambda scan, angles, prob, votes: peak_decode(scan, angles, prob, votes, at_vote=False),
     "peaks-vote": lambda scan, angles, prob, votes: peak_decode(scan, angles, prob, votes, at_vote=True),
 }
@@ -235,6 +237,19 @@ def print_breakdowns(title: str, named: Dict[str, Dict[str, object]]) -> None:
             print("  " + f"{label:<14}" + "".join(f"{named[n][key][i]['recall']:>16.1%}" for n in names))
 
 
+def pool_coverage(frames: List[Frame], floor: float) -> Dict[str, float]:
+    """How many annotated people have **any** candidate at all, at the floor candidates really enter stage 3 at.
+
+    This is the lens item 34 is about, and it is not the matched-false-positive one. A candidate is not a detection: it
+    enters the memory at `CANDIDATE_FLOOR` (0.01), the pool is capacity-limited rather than score-limited -- never more
+    than ~17 of its 64 slots are in use on any of 245,146 frames -- and stage 3's whole job is to rescore what it is
+    given. So what matters is whether a person is *in the pool* for the memory to find, not whether stage 2 already
+    ranked them above an operating threshold.
+    """
+    _, _, covered, fp = coverage(frames, floor)
+    return dict(people=len(covered), covered=int(covered.sum()), recall=float(covered.mean()), fp_per_frame=fp)
+
+
 def print_complementarity(title: str, pairs: Dict[str, Dict[str, float]]) -> None:
     print(f"\n{title}")
     print(f"  {'pair':<28} {'A alone':>8} {'B alone':>8} {'A only':>7} {'B only':>7} {'union':>7} {'headroom':>9}")
@@ -250,6 +265,7 @@ def main() -> None:
     ap.add_argument("--split", choices=("val", "test"), default="test", help="val scores the decoders' AP alone, for choosing one")
     ap.add_argument("--stride", type=int, default=5, help="score every Nth annotated frame")
     ap.add_argument("--out", type=Path, default=_HERE.parent / "results" / "stage2_probe.json")
+    ap.add_argument("--decoders", nargs="+", default=list(DECODERS), help="decode only these, to keep a targeted run short")
     args = ap.parse_args()
 
     device, _ = detect_device()
@@ -268,16 +284,24 @@ def main() -> None:
         net = calibration_network(torch.load(path, map_location="cpu", weights_only=False), angles).to(device)
         outputs = stage2_outputs(net, split, positions, device)
         people = [split.people_xy[a] for a in positions]
-        decoded = {name: [(d[:, 0], d[:, 1:], g) for d, g in zip((decode(s, angles, p, v) for s, p, v in outputs), people, strict=True)] for name, decode in DECODERS.items()}
+        decoded = {name: [(d[:, 0], d[:, 1:], g) for d, g in zip((decode(s, angles, p, v) for s, p, v in outputs), people, strict=True)]
+                   for name, decode in DECODERS.items() if name in args.decoders}
         run = dict(decoders={name: ap_row(frames) for name, frames in decoded.items()})
         print(f"\n=== {path.parent.name}/{path.name} ({sum(p.numel() for p in net.parameters()):,} parameters) ===", flush=True)
         for name, row in run["decoders"].items():
             print(f"  {name:<11} AP {row['ap']:.2%}  AP@0.3 {row['ap_03']:.2%}  at {OPERATING_THRESHOLD}: recall {row['recall_03']:.1%}  FP/frame {row['fp_per_frame_03']:.3f}", flush=True)
+        # What stage 3 is handed, before any operating threshold: the number item 34 turns on.
+        run["pool"] = {name: pool_coverage(frames_, CANDIDATE_FLOOR) for name, frames_ in decoded.items()}
+        print(f"\n  people with any candidate at the {CANDIDATE_FLOOR} candidate floor (what stage 3 receives):", flush=True)
+        for name, row in run["pool"].items():
+            print(f"    {name:<16} {row['covered']:>6} of {row['people']} = {row['recall']:>6.2%}   "
+                  f"({row['fp_per_frame']:.2f} non-person candidates per frame)", flush=True)
+
         run["matched"], run["complementarity"] = {}, {}
         for reference, frames in lfe.items():
             own = breakdown(frames, OPERATING_THRESHOLD)
-            at = {name: threshold_at(decoded[name], own["fp_per_frame"]) for name in BREAKDOWN_DECODERS}
-            run["matched"][reference] = {reference: own, **{name: breakdown(decoded[name], at[name]) for name in BREAKDOWN_DECODERS}}
+            at = {name: threshold_at(decoded[name], own["fp_per_frame"]) for name in BREAKDOWN_DECODERS if name in decoded}
+            run["matched"][reference] = {reference: own, **{name: breakdown(decoded[name], at[name]) for name in BREAKDOWN_DECODERS if name in decoded}}
             print_breakdowns(f"at {reference}'s false positives per frame at its {OPERATING_THRESHOLD} threshold:", run["matched"][reference])
             # Every decoder here is held at the same false-positive rate, so a union's extra people are not bought with
             # extra errors -- which is what makes `headroom` a fair ceiling rather than a threshold artefact.

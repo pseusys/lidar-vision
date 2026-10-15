@@ -201,6 +201,51 @@ The published case where place-keyed memory does pay is exactly that one: Luber,
 
 **What this does not reject.** The horizon argument itself. 786 frames is still the span over which the separating evidence exists; what is rejected is reaching it through location.
 
+## Two candidate decoders in parallel, fused by stage 3 (TODO.md item 34)
+
+*keywords: item 34, union_decode, parallel decoders, complementarity, pool coverage, candidate floor, 98.41%, oracle at the wrong operating point, two score scales*
+
+**Idea** (the owner's, 2026-10-15). `nms-mean` and DROW's vote grid are each better where the other is worse, so decode every
+scan with both, hand the union to the object memory, and let the learned rescoring head decide which to trust. The pool has
+room -- never more than ~17 of its 64 slots are used -- and stage 3 already rescores candidates, so no new machinery.
+
+**It had a measured ceiling, and that is why it was built.** At LFE-Peaks' 1.784 false positives per frame, over three seeds,
+each decoder covered about **900 people of 30,283 that the other missed**: union 27,875 / 28,009 / 27,813 against the better
+alone at 26,997 / 27,168 / 26,907, a headroom of **+2.90 / 2.78 / 2.99 pp**.
+
+**What was measured, and why it is rejected.**
+
+**1. As a detector, the union realises 3% of its own ceiling.** Put both decoders through *one* threshold at matched false
+positives and the union gains **+35 / +30 / +18 people** against the oracle's +878 / +841 / +906; 8-10 m moves 81.6 -> 81.8%
+and close pairs 89.7 -> 89.8%. Same cause as the range split above: the two decoders put their scores on **different
+scales**, and one global threshold cuts a mixed set unevenly.
+
+**2. At the candidate floor -- the lens the pipeline actually uses -- there is nothing left to gain.** Candidates are not
+detections. They enter stage 3 at `CANDIDATE_FLOOR = 0.01`, the pool is capacity- rather than score-limited, and the memory's
+job is to rescore what it is handed. Measured there:
+
+| people with any candidate, of 30,283 | s0 | s1 | s2 | non-person candidates / frame |
+| --- | ---: | ---: | ---: | ---: |
+| vote-grid | 28,662 (94.65%) | 28,695 (94.76%) | 28,485 (94.06%) | 4.89-5.21 |
+| **`nms-mean` (adopted)** | 29,800 (**98.41%**) | 29,829 (**98.50%**) | 29,714 (**98.12%**) | 8.67-9.30 |
+| union | 29,802 (98.41%) | 29,820 (98.47%) | 29,705 (98.09%) | 8.63-9.26 |
+
+**+2 / -9 / -9 people, at the same cost.** `nms-mean` alone already puts **98.1-98.5%** of people in front of the memory, and
+the vote grid -- which reaches 4 pp *fewer* people at this floor -- holds none of the remaining 1.6%. The two seeds that go
+*backwards* are the displacement risk this was built knowing about: the 0.30 m dedup keeps the higher-scoring of a coincident
+pair, and where that is the grid's, its slightly worse position can fall outside the 0.5 m match radius.
+
+**The lesson is worth more than the experiment, and it generalises.** The +2.9 pp ceiling was real and was measured
+correctly -- at **1.784 false positives per frame**. The candidate stage does not operate there; it operates at a floor of
+0.01, where one decoder already has almost everyone. **A complementarity ceiling measured at one operating point does not
+transfer to a pipeline that runs at another**, and the two decoders' "disjoint misses" were an artefact of thresholding
+rather than a difference in reach. Measure the ceiling *at the operating point the consumer actually uses* -- the same family
+of error as `AGENTS.md` rule 3's cross-regime comparisons.
+
+**Reopen if** stage 2's pool coverage at the floor falls well below 98% on another dataset, which is the only condition under
+which a second decoder would have people left to contribute. `union_decode` and `pool_coverage` stay in the tree, tested, so
+checking that costs one run.
+
 ## A range-split candidate decoder, and the NMS radius with it (TODO.md items 13 and 17)
 
 *keywords: item 13, item 17, range_split_decode, split-6m, split-8m, nms-mean-0.4, nms-mean-0.6, decoder geometry, score scale, matched false positives*

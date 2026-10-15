@@ -38,6 +38,41 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 34 closes: the +2.9 pp was real, and it lived at an operating point the pipeline never visits (2026-10-15)
+
+*keywords: item 34, union_decode, pool_coverage, candidate floor 0.01, 98.41%, +2 -9 -9, oracle at the wrong operating point, two score scales, complementarity artefact*
+
+The parallel-decoder idea had a measured ceiling of **+2.90 / 2.78 / 2.99 pp** -- each of `nms-mean` and the vote grid covering
+about 900 people of 30,283 the other missed. Two measurements later it is closed, and what killed it is worth keeping.
+
+**As a detector the union realises 3% of its ceiling.** One threshold over two score scales gains **+35 / +30 / +18 people**
+at matched false positives, the same failure that took the range split hours earlier.
+
+**At the candidate floor there was never anything to gain.** Candidates are not detections: they enter stage 3 at
+`CANDIDATE_FLOOR = 0.01`, the pool is capacity- rather than score-limited, and rescoring what it is handed is the memory's
+whole job. So the deciding number is who is *in the pool*:
+
+| people with any candidate, of 30,283 | s0 | s1 | s2 | non-person candidates / frame |
+| --- | ---: | ---: | ---: | ---: |
+| vote-grid | 28,662 (94.65%) | 28,695 (94.76%) | 28,485 (94.06%) | 4.89-5.21 |
+| **`nms-mean`** | 29,800 (**98.41%**) | 29,829 (**98.50%**) | 29,714 (**98.12%**) | 8.67-9.30 |
+| union | 29,802 | 29,820 | 29,705 | 8.63-9.26 |
+
+**+2 / -9 / -9 people at the same cost.** `nms-mean` alone already hands the memory 98.1-98.5% of people; the vote grid, 4 pp
+behind it at this floor, holds none of the missing 1.6%. The two negative seeds are the displacement risk the decoder was
+built knowing about -- the 0.30 m dedup keeps the higher-scoring of a coincident pair, and where that is the grid's, its
+slightly worse position can leave the 0.5 m match radius.
+
+**The methodological lesson, which is the part that generalises.** The ceiling was measured correctly and at the wrong place:
+at **1.784 false positives per frame**, where both decoders are heavily thresholded and their surviving sets genuinely
+differ. The candidate stage runs at 0.01, where one decoder already has nearly everyone, so the "disjoint misses" were an
+artefact of thresholding rather than a difference in reach. **Measure a ceiling at the operating point its consumer uses** --
+the same family of error as `AGENTS.md` rule 3. It cost two cheap runs to find out instead of a cache regeneration and a
+five-hour stage-3 run, which is the trade step 1 exists to make.
+
+`union_decode` and `pool_coverage` stay in the tree with their tests: reopening needs only one run, and the condition is
+stated -- pool coverage falling well below 98% on another dataset.
+
 ## The owner asks whether decoders can run in parallel, and unlike the split, this one has a prize in it (2026-10-15)
 
 *keywords: item 34, complementarity, parallel decoders, union, headroom 878 841 906, +2.9 pp, 92.0%, disjoint misses, vote-grid, peaks, fusion by stage 3*

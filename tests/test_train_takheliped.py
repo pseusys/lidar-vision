@@ -21,6 +21,7 @@ from train_takheliped import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, coast_targets, decode_votes, evaluate, evaluation_segments,
     FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
     DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, coasting_hits, exponential_schedule, network_shape, select_test_weights, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
+    union_decode,
 )
 
 
@@ -1333,3 +1334,108 @@ class TestReplaySort:
         reported = [len(scores) for scores, _, _ in replay_sort(pack([seq]), min_hits=3)]
         assert reported[:5] == [0, 0, 0, 0, 0]           # its first frame is not confirmed
         assert reported[-1] == 1
+
+
+class TestUnionDecode:
+    """Item 34: both candidate decoders at once, deduplicated, for stage 3 to weigh.
+
+    Measured 2026-10-15 before any of this was written: `nms-mean` and the vote grid each cover about **900 people of
+    30,283 that the other misses**, so their union reaches 91.8-92.5% where the better alone reaches 88.9-89.7%. The
+    union is the only way to put those people in front of the memory at all.
+
+    Two properties carry the whole idea, and both are easy to lose:
+
+    * **Dedup must not cost coverage.** Both decoders usually fire on the same person, and feeding two candidates for one
+      person breaks the memory's one-to-one slot matching -- the second spawns a duplicate slot. So coincident pairs
+      collapse, but at a radius **below** the 0.5 m match radius, or a collapse could swallow a genuinely separate person
+      and give back the headroom the union was built for.
+    * **A person either decoder finds must survive**, which is the headroom itself.
+    """
+
+    @staticmethod
+    def _angles(n=720):
+        return np.linspace(-np.pi / 2, np.pi / 2, n)
+
+    def _one_person(self, at=(0.0, 4.0), beams=None):
+        """A scan whose beams vote a person at `at`, which both decoders should find."""
+        angles = self._angles()
+        scan = np.full(len(angles), 8.0)
+        prob = np.zeros(len(angles))
+        beams = np.arange(350, 362) if beams is None else beams
+        prob[beams] = 0.9
+        target = np.asarray(at, dtype=float)
+        r_gt, phi_gt = np.hypot(*target), np.arctan2(-target[0], target[1])
+        votes = np.zeros((len(angles), 2))
+        dphi = phi_gt - angles[beams]
+        votes[beams, 0] = r_gt * np.sin(dphi)
+        votes[beams, 1] = r_gt * np.cos(dphi) - scan[beams]
+        return scan, angles, prob, votes
+
+    def test_one_person_found_by_both_decoders_yields_one_candidate(self):
+        scan, angles, prob, votes = self._one_person()
+
+        out = union_decode(scan, angles, prob, votes, merge_m=0.3)
+
+        assert len(out) == 1
+
+    def test_the_survivor_keeps_the_higher_of_the_two_scores(self):
+        scan, angles, prob, votes = self._one_person()
+        from train_takheliped import decode_votes, nms_decode
+
+        both = [nms_decode(scan, angles, prob, votes, 0.5, average=True)[:, 0].max(),
+                max(d[0] for d in decode_votes(scan, angles, prob, votes))]
+        out = union_decode(scan, angles, prob, votes, merge_m=0.3)
+
+        assert out[0, 0] == pytest.approx(max(both))
+
+    def test_two_people_further_apart_than_the_merge_radius_both_survive(self):
+        """The merge radius is below the 0.5 m match radius precisely so this cannot collapse."""
+        angles = self._angles()
+        scan = np.full(len(angles), 8.0)
+        prob = np.zeros(len(angles))
+        votes = np.zeros((len(angles), 2))
+        for target, beams in (((-1.2, 4.0), np.arange(300, 312)), ((1.2, 4.0), np.arange(410, 422))):
+            prob[beams] = 0.9
+            t = np.asarray(target, dtype=float)
+            r_gt, phi_gt = np.hypot(*t), np.arctan2(-t[0], t[1])
+            dphi = phi_gt - angles[beams]
+            votes[beams, 0], votes[beams, 1] = r_gt * np.sin(dphi), r_gt * np.cos(dphi) - scan[beams]
+
+        out = union_decode(scan, angles, prob, votes, merge_m=0.3)
+
+        assert len(out) == 2
+
+    def test_a_person_only_one_decoder_finds_still_comes_through(self):
+        """The headroom itself: whatever either parent produced is in the union unless something coincides with it."""
+        scan, angles, prob, votes = self._one_person()
+        from train_takheliped import decode_votes, nms_decode
+
+        parents = np.concatenate([nms_decode(scan, angles, prob, votes, 0.5, average=True),
+                                  np.asarray(decode_votes(scan, angles, prob, votes), dtype=float).reshape(-1, 3)])
+        out = union_decode(scan, angles, prob, votes, merge_m=0.3)
+
+        for parent in parents:
+            assert np.min(np.linalg.norm(out[:, 1:] - parent[1:], axis=1)) <= 0.3
+
+    def test_an_empty_scan_decodes_to_nothing(self):
+        angles = self._angles()
+
+        out = union_decode(np.full(len(angles), 8.0), angles, np.zeros(len(angles)), np.zeros((len(angles), 2)), merge_m=0.3)
+
+        assert out.shape == (0, 3)
+
+    def test_the_output_is_ordered_by_score_so_the_pool_cap_keeps_the_best(self):
+        angles = self._angles()
+        scan = np.full(len(angles), 8.0)
+        prob = np.zeros(len(angles))
+        votes = np.zeros((len(angles), 2))
+        for target, beams, p in (((-1.5, 4.0), np.arange(300, 312), 0.4), ((1.5, 4.0), np.arange(410, 422), 0.9)):
+            prob[beams] = p
+            t = np.asarray(target, dtype=float)
+            r_gt, phi_gt = np.hypot(*t), np.arctan2(-t[0], t[1])
+            dphi = phi_gt - angles[beams]
+            votes[beams, 0], votes[beams, 1] = r_gt * np.sin(dphi), r_gt * np.cos(dphi) - scan[beams]
+
+        out = union_decode(scan, angles, prob, votes, merge_m=0.3)
+
+        assert np.all(np.diff(out[:, 0]) <= 0)
