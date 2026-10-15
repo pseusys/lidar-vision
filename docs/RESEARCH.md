@@ -301,6 +301,25 @@ They differ only in the detection head:
 | **LFE-Peaks** | Per-beam sigmoid probability | `scipy.find_peaks` on the 1-D probability map |
 | **LFE-PPN** | Anchor grid: N/6 sectors × 30 depth anchors × 3 outputs | Anchor decoding + greedy distance-based NMS |
 
+**LFE-Peaks' graph, read out of the released ONNX file** (`TODO.md` §A item 7, 2026-10-10 -- the port attempt was dropped, but the trace it produced is the architecture, which the paper's prose does not give). `lfe_peaks.onnx` holds **29 convolutions and 53,258 parameter
+values**, and walking its dataflow gives the architecture exactly -- which the published paper's prose does not:
+
+    stem        a 1x1 lift of the raw scan to 32 channels, kept for the first residual, beside a kernel-9 convolution on the
+                single raw channel and a 1x1 into 32 channels, with a folded batch norm
+    block 1     depthwise 7 -> pointwise 1 -> kernel 5, each followed by a folded norm, added to the lift
+    blocks 2-3  the beams' maximum taken and broadcast back, concatenated to **64** channels, through a depthwise 9 (groups 64)
+                and a pointwise back to 32, then the same three convolutions as a residual branch
+    blocks 4-5  the same, but the concatenation is first projected 64 -> 32 by a 1x1 and then widened again to **128**
+    head        1x1 to one channel, a bias, a sigmoid
+
+A port built to that order reproduced the graph's convolution inventory **exactly** -- every shape, kernel and grouping in
+sequence -- which is the structural claim that matters. **What stopped it** was the dataflow of blocks 4 and 5: the graph
+concatenates the projected branch back in a way that reaches 128 channels through an `Expand` whose semantics did not fall out
+of the node list, and guessing it would have produced a network we could not call LFE's. **Two things a future attempt should
+know:** the released weights are *not* needed -- they only verify the port, and training from scratch under their recipe
+reproducing ~65% verifies it better -- and the remaining work is reading `Expand`/`Concat` shapes at nodes 104-118 and 148-164
+with a shape inference pass rather than from `node.input` alone.
+
 Key constraints: single-scan only (no odometry, no temporal history); trained on 720-beam FROG scans (inference on 450-beam DROW or 541-beam JRDB scans requires zero-padding — see the fidelity caveat below); class-agnostic (person confidence only); ONNX inference only (weights are bundled automatically; re-training is not supported within this framework).
 
 **This is the closest prior work to this project's own proposed architectures** — see Section 7.2.

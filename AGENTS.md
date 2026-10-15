@@ -155,6 +155,14 @@ Do not let that suppress your own proposals — suggest freely, and say which op
 An idea agreed to and not written down is an idea lost.
 Add the item the moment it is agreed, with What / How / Why filled in.
 
+**4b. Delete a finished item's row once `CHANGELOG.md` carries its entry.**
+`TODO.md` is the working queue, not the record -- the record is `CHANGELOG.md` -- and a closed row kept "for reference" is a
+second copy that ages out of agreement with the first.
+Before deleting, check the entry really carries the finding: if the row holds something the entry does not, move it where it
+belongs (`memory/`, or `docs/RESEARCH.md` for anything describing an architecture) and delete it after.
+**Never renumber.** `item 29` has to mean the same item in every commit message, `memory/` page and `docs/` reference, so the
+gaps this leaves are deliberate and the table says so at the top.
+
 **5. Update the docs in the same step as the change**, not later.
 [`TODO.md`](TODO.md) and [`CHANGELOG.md`](CHANGELOG.md) always, plus whichever of `memory/` the change touches, plus [`memory/keywords.md`](memory/keywords.md) if you added or removed a doc.
 A finding that is not written down did not happen.
