@@ -19,7 +19,8 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
 from takheliped.detectors.takheliped import (
-    N_BEAM_FEATURES, CalibrationNetwork, ObjectMemory, SlotRules, beam_features, fold_legacy_calibration,
+    N_BEAM_FEATURES, CalibrationNetwork, MetricGather, ObjectMemory, SlotRules, beam_features,
+    fold_legacy_calibration, gather_beams, metric_offsets,
     free_range_profile, initial_slots, lfe_features, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
     sensor_to_world, visibility_feature, world_to_sensor,
 )
@@ -902,3 +903,127 @@ class TestCoastingAblation:
         model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, coast=True)
 
         assert any("coast" in name for name, _ in model.named_parameters())
+
+
+class TestMetricOffsets:
+    """Item 15: a first layer that reads a fixed width **in metres** instead of a fixed number of beams.
+
+    A person 0.8 m wide subtends 42 beams at 2 m and 9 at 9 m, so a fixed 7-beam kernel is correct at exactly one range
+    and wrong everywhere else -- which is what Tier 0's 1-NN probe measured when it priced the adaptive angular window at
+    **+2.5 pp**, with the advantage **purely long-range**: +4.9 pp at 8-10 m, zero at 4 m. DROW gets this for free because
+    its cutout is resampled per beam; a full-scan network has to be given it.
+
+    `A59`'s F1 arm shifted the prior against input-*feature* changes -- swapping our ten channels for LFE's measured
+    nothing. This is not that: it changes which beams the first layer reads, not what each beam says.
+    """
+
+    STEP = np.pi / 720          # FROG's angular increment, one beam
+
+    def test_the_window_is_a_fixed_width_in_metres_so_it_shrinks_with_range(self):
+        near = metric_offsets(torch.tensor([[2.0]]), self.STEP, width_m=1.66, samples=9)
+        far = metric_offsets(torch.tensor([[8.0]]), self.STEP, width_m=1.66, samples=9)
+
+        assert near[0, 0].abs().max() > 3 * far[0, 0].abs().max()
+
+    def test_the_span_matches_the_angle_the_width_subtends(self):
+        """Half-width 0.83 m at 4 m subtends atan(0.83/4) radians, which is that many beams at this increment."""
+        offsets = metric_offsets(torch.tensor([[4.0]]), self.STEP, width_m=1.66, samples=11)
+
+        assert offsets[0, 0].max().item() == pytest.approx(np.arctan(0.83 / 4.0) / self.STEP, rel=1e-5)
+        assert offsets[0, 0].min().item() == pytest.approx(-np.arctan(0.83 / 4.0) / self.STEP, rel=1e-5)
+
+    def test_the_offsets_are_centred_and_evenly_spaced(self):
+        offsets = metric_offsets(torch.tensor([[3.0]]), self.STEP, width_m=1.66, samples=7)[0, 0]
+
+        assert offsets[len(offsets) // 2].item() == pytest.approx(0.0, abs=1e-6)
+        assert torch.allclose(torch.diff(offsets), torch.diff(offsets)[0].expand(len(offsets) - 1), atol=1e-6)
+
+    def test_one_sample_reads_the_beam_itself(self):
+        assert metric_offsets(torch.tensor([[5.0]]), self.STEP, width_m=1.66, samples=1)[0, 0].item() == pytest.approx(0.0)
+
+
+class TestGatherBeams:
+    def test_integer_offsets_read_their_beams_exactly(self):
+        x = torch.arange(5, dtype=torch.float32).view(1, 1, 5)
+        offsets = torch.tensor([[[-1.0, 0.0, 1.0]] * 5])
+
+        out = gather_beams(x, offsets)
+
+        assert out[0, 0, 2].tolist() == [1.0, 2.0, 3.0]
+
+    def test_a_fractional_offset_interpolates_between_neighbours(self):
+        x = torch.tensor([[[0.0, 10.0, 20.0]]])
+        offsets = torch.tensor([[[0.0], [0.5], [0.0]]])
+
+        out = gather_beams(x, offsets)
+
+        assert out[0, 0, 1, 0].item() == pytest.approx(15.0)
+
+    def test_the_scan_edges_clamp_rather_than_wrap(self):
+        """Beam 0 has no left neighbour; reading past the edge must repeat the edge, not fetch the far side of the scan."""
+        x = torch.tensor([[[7.0, 1.0, 2.0, 99.0]]])
+        offsets = torch.tensor([[[-3.0], [0.0], [0.0], [3.0]]])
+
+        out = gather_beams(x, offsets)
+
+        assert out[0, 0, 0, 0].item() == 7.0
+        assert out[0, 0, 3, 0].item() == 99.0
+
+    def test_the_gathered_axis_is_the_sample_axis(self):
+        out = gather_beams(torch.zeros(2, 4, 16), torch.zeros(2, 16, 5))
+
+        assert out.shape == (2, 4, 16, 5)
+
+
+class TestMetricGather:
+    def test_it_returns_the_shape_it_was_given(self):
+        gather = MetricGather(channels=8, width_m=1.66, samples=9, step_rad=np.pi / 720)
+
+        out = gather(torch.randn(2, 8, 64), torch.full((2, 64), 4.0))
+
+        assert out.shape == (2, 8, 64)
+
+    def test_gradients_reach_it(self):
+        gather = MetricGather(channels=8, width_m=1.66, samples=9, step_rad=np.pi / 720)
+        x = torch.randn(1, 8, 32, requires_grad=True)
+
+        gather(x, torch.full((1, 32), 4.0)).sum().backward()
+
+        assert x.grad is not None and torch.isfinite(x.grad).all()
+
+    def test_two_ranges_read_different_neighbourhoods(self):
+        """The whole point: the same beam pattern seen at 2 m and at 9 m is read through different windows."""
+        torch.manual_seed(0)
+        gather = MetricGather(channels=4, width_m=1.66, samples=9, step_rad=np.pi / 720)
+        x = torch.randn(1, 4, 128)
+
+        near = gather(x, torch.full((1, 128), 2.0))
+        far = gather(x, torch.full((1, 128), 9.0))
+
+        assert not torch.allclose(near, far, atol=1e-4)
+
+
+class TestTheNetworkKeepsItsDefault:
+    def test_zero_width_leaves_the_network_exactly_as_it_was(self):
+        """Off by default, and bit-identical when off -- every trained checkpoint must keep reading the same."""
+        torch.manual_seed(0)
+        angles = torch.linspace(-np.pi / 2, np.pi / 2, 128)
+        plain = CalibrationNetwork(angles, channels=(8, 16, 32), blocks=(1, 1, 1))
+        torch.manual_seed(0)
+        same = CalibrationNetwork(angles, channels=(8, 16, 32), blocks=(1, 1, 1), gather_width_m=0.0)
+        scan = torch.rand(2, 128) * 8 + 1
+
+        with torch.no_grad():
+            a, b = plain(scan), same(scan)
+
+        assert torch.allclose(a[0], b[0], atol=0) and torch.allclose(a[1], b[1], atol=0)
+
+    def test_a_width_adds_the_gather_and_still_runs(self):
+        torch.manual_seed(0)
+        angles = torch.linspace(-np.pi / 2, np.pi / 2, 128)
+        net = CalibrationNetwork(angles, channels=(8, 16, 32), blocks=(1, 1, 1), gather_width_m=1.66)
+
+        logits, votes, features = net(torch.rand(2, 128) * 8 + 1)
+
+        assert logits.shape == (2, 128) and votes.shape == (2, 128, 2)
+        assert any("gather" in name for name, _ in net.named_parameters())

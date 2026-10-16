@@ -587,14 +587,17 @@ def decode_candidates(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, vo
 
 def network_shape(args: Dict[str, str]) -> Dict[str, object]:
     """The `CalibrationNetwork` arguments a stage-2 run's `args` (stored as strings) fix, because they change what the input means
-    or which weights exist: the range limit, the input (`--input-features`) and the widths (`--channels`), the last two for the
-    attribution arms F1 and W (`TODO.md` A59). A flag left unset, or written before it existed, falls back to the constructor's own
+    or which weights exist: the range limit, the input (`--input-features`), the widths (`--channels`) and the metric gather
+    (`--gather-width-m`, `--gather-samples`) -- the middle two for the attribution arms F1 and W (`TODO.md` A59), the last for
+    item 15. A flag left unset, or written before it existed, falls back to the constructor's own
     default rather than to a second copy of it here."""
     parameters = signature(CalibrationNetwork).parameters
     unset = (None, "None")
     return {"max_range_m": parameters["max_range_m"].default if args.get("max_range_m") in unset else float(args["max_range_m"]),
             "input_features": parameters["input_features"].default if args.get("input_features") in unset else args["input_features"],
-            "channels": parameters["channels"].default if args.get("channels") in unset else tuple(literal_eval(args["channels"]))}
+            "channels": parameters["channels"].default if args.get("channels") in unset else tuple(literal_eval(args["channels"])),
+            "gather_width_m": parameters["gather_width_m"].default if args.get("gather_width_m") in unset else float(args["gather_width_m"]),
+            "gather_samples": parameters["gather_samples"].default if args.get("gather_samples") in unset else int(args["gather_samples"])}
 
 
 def calibration_network(checkpoint: dict, angles: np.ndarray, **overrides) -> CalibrationNetwork:
@@ -1749,6 +1752,13 @@ def build_parser() -> argparse.ArgumentParser:
     step2.add_argument("--min-lr", type=float, default=1e-5, help="plateau's floor, or where exponential ends")
     step2.add_argument("--select", choices=("best", "last"), default="best", help="the weights the test scores: the best on val, or the "
                        "last, DR-SPAAM's protocol (TODO.md A59 R), which are also saved as step2_calibration.last.pth")
+    step2.add_argument("--gather-width-m", type=float, default=0.0,
+                       help="read the first spatial layer over a window of this many metres of arc instead of a fixed "
+                                "count of beams, resampled per beam from its own range; 0 keeps the fixed window. DROW's "
+                                "cutout spans 1.66 m, and Tier 0's 1-NN probe priced the adaptive window at +2.5 pp, all of "
+                                "it long-range (TODO.md item 15)")
+    step2.add_argument("--gather-samples", type=int, default=9,
+                       help="how many points the metric window is resampled to, when --gather-width-m is set")
     step2.add_argument("--input-features", choices=("beam", "lfe"), default="beam", help="beam: the ten per-beam features; lfe: LFE's "
                        "1 - r/10 alone, the attribution arm F1 (TODO.md A59)")
     step2.add_argument("--channels", type=int, nargs=3, default=None, metavar="C", help="U-Net widths at N, N/2 and N/4 beams; unset is "

@@ -12,7 +12,7 @@ from math import log, radians, sqrt
 from typing import List, Optional, Tuple
 
 from torch import (
-    Tensor, arange, argsort, atan2, cat, cos, cumprod, exp, expm1, full, full_like, isfinite, linspace, log1p, minimum, nn,
+    Tensor, arange, arctan, argsort, atan2, cat, cos, cumprod, exp, expm1, full, full_like, isfinite, linspace, log1p, minimum, nn,
     no_grad, ones, sin, stack, tanh, where, zeros, zeros_like,
 )
 from torch import log as tlog
@@ -462,6 +462,61 @@ class ConvNeXtBlock(nn.Module):
         return x + self.narrow(self.activation(self.widen(self.norm(self.depthwise(x)))))
 
 
+def metric_offsets(ranges: Tensor, step_rad: float, width_m: float, samples: int) -> Tensor:
+    """Where each beam should read, in beams, to span a fixed **metric** width `[..., N] -> [..., N, samples]`.
+
+    A person 0.8 m wide subtends 42 beams at 2 m and 9 at 9 m, so a fixed-width kernel is correct at exactly one range and
+    wrong everywhere else. Half the width subtends `atan(width/2 / r)` radians at range `r`, which is that many beams at this
+    laser's increment, so the offsets run from `-span` to `+span` and shrink as the range grows (`TODO.md` item 15).
+    """
+    span = arctan(0.5 * width_m / ranges.clamp(min=1e-3)) / step_rad
+    steps = linspace(-1.0, 1.0, samples, device=ranges.device, dtype=ranges.dtype) if samples > 1 \
+        else zeros(1, device=ranges.device, dtype=ranges.dtype)
+    return span[..., None] * steps
+
+
+def gather_beams(x: Tensor, offsets: Tensor) -> Tensor:
+    """Read `x` `[B, C, N]` at each beam's fractional offsets `[B, N, K]`, linearly interpolated `-> [B, C, N, K]`.
+
+    Past either end of the scan the edge beam repeats: a scan is not periodic, so wrapping would hand the first beam the
+    far side of the room as its neighbour.
+    """
+    b, c, n = x.shape
+    index = arange(n, device=x.device, dtype=offsets.dtype)[None, :, None] + offsets
+    index = index.clamp(0.0, n - 1.0)
+    low = index.floor()
+    frac = (index - low).unsqueeze(1)
+    low = low.long().clamp(0, n - 1)
+    high = (low + 1).clamp(max=n - 1)
+    k = offsets.shape[-1]
+    left = x.gather(2, low.reshape(b, 1, -1).expand(b, c, n * k)).reshape(b, c, n, k)
+    right = x.gather(2, high.reshape(b, 1, -1).expand(b, c, n * k)).reshape(b, c, n, k)
+    return left + (right - left) * frac
+
+
+class MetricGather(nn.Module):
+    """A depthwise read over a window of fixed metric width, in place of one of fixed beam count (`TODO.md` item 15).
+
+    Tier 0's 1-NN probe priced the range-adaptive angular window at **+2.5 pp**, and the advantage was **purely
+    long-range** -- +4.9 pp at 8-10 m, zero at 4 m, where the fixed window happens to be calibrated. DROW gets this free
+    because its cutout is resampled per beam; a full-scan network has to be given it. `width_m` is DROW's own 1.66 m of
+    arc by default.
+
+    A59's F1 arm moved the prior against input-*feature* changes -- swapping the ten per-beam channels for LFE's measured
+    nothing -- but this changes *which beams the layer reads*, not what each one says.
+    """
+
+    def __init__(self, channels: int, width_m: float, samples: int, step_rad: float):
+        super().__init__()
+        self.width_m, self.samples, self.step_rad = width_m, samples, step_rad
+        self.mix = nn.Conv2d(channels, channels, (1, samples), groups=channels)
+        self.norm = nn.GroupNorm(1, channels)
+
+    def forward(self, x: Tensor, ranges: Tensor) -> Tensor:
+        offsets = metric_offsets(ranges, self.step_rad, self.width_m, self.samples)
+        return x + self.norm(self.mix(gather_beams(x, offsets))[..., 0])
+
+
 def _stage(channels: int, blocks: int, kernel_size: int, expansion: int) -> nn.Sequential:
     return nn.Sequential(*(ConvNeXtBlock(channels, kernel_size, expansion) for _ in range(blocks)))
 
@@ -476,11 +531,14 @@ class CalibrationNetwork(nn.Module):
     stage 3 pools from stay deterministic; it holds no parameters. Neither the per-beam fine nor the bottleneck coarse temporal
     convolution survived its ablation (`TODO.md` A50, A60; `memory/rejected-ideas.md`). `input_features` "lfe" replaces the ten
     beam features with LFE's one input channel (`lfe_features`), for the attribution arm F1 (`TODO.md` A59).
+    `gather_width_m` above zero inserts a `MetricGather` after the stem, so the first spatial layer reads a window of that many
+    metres of arc instead of a fixed count of beams (`TODO.md` item 15); zero, the default, leaves the network exactly as it was.
     """
 
     def __init__(self, angles: Tensor, channels: Tuple[int, int, int] = (32, 64, 128), blocks: Tuple[int, int, int] = (2, 2, 2),
                  bottleneck_blocks: int = 2, kernel_size: int = 7, expansion: int = 4,
-                 prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M, input_features: str = "beam"):
+                 prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M, input_features: str = "beam",
+                 gather_width_m: float = 0.0, gather_samples: int = 9):
         super().__init__()
         if input_features not in INPUT_CHANNELS:
             raise ValueError(f"input_features must be one of {sorted(INPUT_CHANNELS)}, not {input_features!r}")
@@ -490,6 +548,11 @@ class CalibrationNetwork(nn.Module):
         self.input_features = input_features
         self.register_buffer("angles", angles.clone(), persistent=False)
         self.stem = nn.Conv1d(INPUT_CHANNELS[input_features], c0, 1)
+        # Off unless asked for, and bit-identical when off, so every trained checkpoint keeps reading the same
+        # (`TODO.md` item 15). The step comes from the laser's own angles rather than a constant: a different
+        # sensor has a different increment, and the window is specified in metres.
+        self.gather = MetricGather(c0, gather_width_m, gather_samples, float(angles[1] - angles[0])) \
+            if gather_width_m > 0 else None
         self.encoder = nn.ModuleList([_stage(c, n, kernel_size, expansion) for c, n in zip(channels, blocks)])
         self.down = nn.ModuleList([nn.Conv1d(c0, c1, 2, stride=2), nn.Conv1d(c1, c2, 2, stride=2), nn.Conv1d(c2, c2, 2, stride=2)])
         self.aggregate = nn.Conv1d(2 * c2 + prior_channels, c2, 1)
@@ -522,7 +585,10 @@ class CalibrationNetwork(nn.Module):
         """Person logits `[B, N]`, votes `[B, N, 2]` and decoder features `[B, C, N]` for scans `[B, N]`, with the memory prior
         `[B, prior_channels, N/8]` when the network has prior channels."""
         x = lfe_features(ranges, self.max_range_m) if self.input_features == "lfe" else beam_features(ranges, self.angles, self.max_range_m)
-        skips, bottom = self._encode(self.stem(x), prior)
+        lifted = self.stem(x)
+        if self.gather is not None:
+            lifted = self.gather(lifted, sanitize_ranges(ranges, self.max_range_m))
+        skips, bottom = self._encode(lifted, prior)
         return self._decode(self.context(bottom), skips)
 
 
