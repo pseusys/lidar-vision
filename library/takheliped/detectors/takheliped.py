@@ -295,7 +295,7 @@ class ObjectMemory(nn.Module):
     def __init__(self, rules: SlotRules = SlotRules(), dim: int = 128, heads: int = 4, sigma_m: float = 0.6, decay_init_s: Tuple[float, float] = (1.0, 60.0),
                  feature_dim: int = 0, rescore_gate: bool = True, rescore_limit: float = 0.0, room_frame: bool = True,
                  fixed_decay_s: float = 0.0, learn_value: bool = False, exchange: bool = True, learned_match: bool = True,
-                 recurrent: bool = True, rescore: bool = True, visibility: bool = False):
+                 recurrent: bool = True, rescore: bool = True, visibility: bool = False, coast: bool = True):
         super().__init__()
         self.rules, self.dim, self.sigma_m, self.feature_dim = rules, dim, sigma_m, feature_dim
         self.visibility = visibility
@@ -326,9 +326,22 @@ class ObjectMemory(nn.Module):
             self.register_parameter("rescore_gate", None)       # the head starts silent through its own last layer instead
             if rescore:
                 nn.init.zeros_(self.rescore[-1].weight), nn.init.zeros_(self.rescore[-1].bias)
-        self.coast = nn.Linear(dim + statistics, 1)
-        nn.init.zeros_(self.coast.weight)
-        nn.init.constant_(self.coast.bias, SILENT_COAST_LOGIT)
+        # `coast=False` removes the head outright -- its parameters and its reports (`TODO.md` item 24). Zeroing its
+        # loss weight would only stop it training; it would still be free to fire at inference.
+        self.coast = nn.Linear(dim + statistics, 1) if coast else None
+        if self.coast is not None:
+            nn.init.zeros_(self.coast.weight)
+            nn.init.constant_(self.coast.bias, SILENT_COAST_LOGIT)
+
+    def _coasting(self, state: Tensor, stats: Tensor, slots: Slots, events: SlotEvents, refill: Tensor):
+        """Which slots may report a person no candidate covers, and how loudly -- or neither, when the head is ablated.
+
+        Without the head there is no logit to learn and nothing to report, so the logit is pinned silent and `coasting` is
+        empty: a slot can then only reach the output through a candidate it matched (`TODO.md` item 24).
+        """
+        if self.coast is None:
+            return full_like(slots.value, SILENT_COAST_LOGIT), zeros_like(slots.alive)
+        return self.coast(cat([state, stats], dim=-1))[..., 0], slots.alive & ~events.matched & ~refill
 
     def _rescored(self, encoded: Tensor, recalled: Tensor, cand_score: Tensor) -> Tensor:
         """A candidate's logit after the memory's correction, or its own logit untouched when `rescore` is false (A51 E12a),
@@ -405,8 +418,7 @@ class ObjectMemory(nn.Module):
             slots = Slots(slots.alive, slots.value, slots.position, slots.velocity, slots.origin, slots.age_s, slots.since_match_s,
                           slots.hit_rate, state)
             candidate_logit = self._rescored(encoded, recalled, cand_score)
-            slot_logit = self.coast(cat([state, stats], dim=-1))[..., 0]
-            coasting = slots.alive & ~events.matched & ~refill
+            slot_logit, coasting = self._coasting(state, stats, slots, events, refill)
             slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
             return MemoryOutput(candidate_logit, slot_logit, slot_xy, coasting, slots, events)
 
@@ -425,8 +437,7 @@ class ObjectMemory(nn.Module):
 
         recalled = self.recall(encoded, state, _proximity(world, slots.position, self.sigma_m), slots.alive)
         candidate_logit = self._rescored(encoded, recalled, cand_score)
-        slot_logit = self.coast(cat([state, stats], dim=-1))[..., 0]
-        coasting = slots.alive & ~events.matched & ~refill
+        slot_logit, coasting = self._coasting(state, stats, slots, events, refill)
         slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
         return MemoryOutput(candidate_logit, slot_logit, slot_xy, coasting, slots, events)
 

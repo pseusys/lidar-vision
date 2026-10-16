@@ -850,3 +850,53 @@ class TestCalibrationPrior:
         with torch.no_grad():
             for got, want in zip(net(ranges, prior), base(ranges), strict=True):
                 assert torch.allclose(got, want, atol=1e-6)
+
+
+class TestCoastingAblation:
+    """Item 24: does the coasting head earn its parameters?
+
+    It is the mechanism that lets a slot report a person no candidate covers, and the measurements say it almost never
+    does: **0.0012 / 0.0000 / 0.0020 times per scored frame** on the populated split -- one seed emits nothing at all --
+    and item 27 found **2 / 0 / 0** reports across all 72,533 person-free frames at the operating threshold, with zero at
+    0.5 and 0.9. A paper should not describe a mechanism that never acts, so either removing it costs nothing, which is a
+    result, or it costs something, which is the defence.
+
+    Ablating it means removing the head's parameters *and* the reports, not merely zeroing its loss: a weight of zero
+    stops it training while leaving it free to fire at inference.
+    """
+
+    def test_the_ablated_memory_does_not_carry_the_heads_parameters(self):
+        torch.manual_seed(0)
+        with_head = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
+        without = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, coast=False)
+
+        assert sum(p.numel() for p in without.parameters()) < sum(p.numel() for p in with_head.parameters())
+        assert not any("coast" in name for name, _ in without.named_parameters())
+
+    def test_no_slot_ever_reports_a_person_no_candidate_covers(self):
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, coast=False)
+
+        for out, _, _ in TestObjectMemory()._run(model, 12):
+            assert not out.coasting.any()
+
+    def test_the_slot_logit_stays_silent_so_nothing_could_be_reported(self):
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, coast=False)
+
+        for out, _, _ in TestObjectMemory()._run(model, 8):
+            assert (torch.sigmoid(out.slot_logit) < 1e-3).all()
+
+    def test_rescoring_is_untouched_by_the_ablation(self):
+        """The ablation must remove the coasting head and nothing else -- the rescoring is the memory's other output."""
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, coast=False)
+
+        for out, score, valid in TestObjectMemory()._run(model, 12):
+            assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-5)
+
+    def test_the_default_still_carries_the_head(self):
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
+
+        assert any("coast" in name for name, _ in model.named_parameters())

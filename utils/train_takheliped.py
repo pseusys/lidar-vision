@@ -620,6 +620,7 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
     shape = {"rescore_gate": parameters["rescore_gate"].default if args.get("rescore_gate") is None else literal_eval(args["rescore_gate"]),
              "rescore_limit": parameters["rescore_limit"].default if args.get("rescore_limit") is None else float(args["rescore_limit"]),
              "room_frame": parameters["room_frame"].default if args.get("room_frame") is None else literal_eval(args["room_frame"]),
+             "coast": parameters["coast"].default if args.get("coast") is None else literal_eval(args["coast"]),
              "fixed_decay_s": parameters["fixed_decay_s"].default if args.get("fixed_decay_s") is None else float(args["fixed_decay_s"]),
              "learn_value": parameters["learn_value"].default if args.get("learn_value") is None else literal_eval(args["learn_value"]),
              "exchange": parameters["exchange"].default if args.get("exchange") is None else literal_eval(args["exchange"]),
@@ -954,7 +955,7 @@ def train_memory(args) -> None:
     resumed = load_resume(resume_path, args.resume)
 
     model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value), feature_dim=splits["train"].data.features.shape[-1],
-                         rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame,
+                         rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame, coast=args.coast,
                          fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value, exchange=args.exchange,
                          learned_match=args.learned_match, recurrent=args.recurrent, visibility=args.visibility).to(device)
     print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}"
@@ -1696,6 +1697,11 @@ def build_parser() -> argparse.ArgumentParser:
         step1.add_argument("--rescore-gate", action=argparse.BooleanOptionalAction, default=True,
                            help="scale the rescoring by a scalar that starts at zero; --no-rescore-gate zero-initialises the head's last "
                                 "layer instead, which starts equally silent but leaves the head's own gradient unscaled (TODO A51 T1)")
+        step1.add_argument("--coast", action=argparse.BooleanOptionalAction, default=True,
+                           help="--no-coast removes the coasting head outright, parameters and reports both, so a slot can only "
+                                "reach the output through a candidate it matched. It fires 0.0012-0.0020 times per populated "
+                                "frame and 2/0/0 times across 72,533 person-free frames, so either removing it costs nothing or "
+                                "the cost is its defence (TODO item 24)")
         step1.add_argument("--rescore-limit", type=float, default=0.0,
                            help="bound the rescoring correction to +-this many logits through a tanh; 0 leaves it unbounded, as it was "
                                 "when it shifted the whole score distribution down (TODO A51 O1)")
