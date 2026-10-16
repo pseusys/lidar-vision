@@ -272,7 +272,9 @@ def _proximity(a: Tensor, b: Tensor, sigma_m: float) -> Tensor:
 class ObjectMemory(nn.Module):
     """Stage 3, the short and long horizons (`docs/PROPOSAL.md` §5.5): object slots in world coordinates, learned matching of
     candidates to slots, exchange between slots, selective recurrence in real time, rule-based slot bookkeeping, candidate
-    rescoring that starts silent, and coasting slots that report people no candidate covers.
+    rescoring that starts silent. **Coasting -- a slot reporting a person no candidate covers -- was removed from the
+    architecture on 2026-10-16** after item 24 measured it costing nothing and firing essentially never; `coast=True`
+    restores the head, which every number published before that date was produced with.
 
     The ablations of A51 phases 3b and 5, each off by default: `room_frame` false keeps slots in the sensor frame, where a static
     object drifts with the robot; `SlotRules.latest_value` replaces accumulated value with the latest score; `fixed_decay_s` gives
@@ -295,7 +297,7 @@ class ObjectMemory(nn.Module):
     def __init__(self, rules: SlotRules = SlotRules(), dim: int = 128, heads: int = 4, sigma_m: float = 0.6, decay_init_s: Tuple[float, float] = (1.0, 60.0),
                  feature_dim: int = 0, rescore_gate: bool = True, rescore_limit: float = 0.0, room_frame: bool = True,
                  fixed_decay_s: float = 0.0, learn_value: bool = False, exchange: bool = True, learned_match: bool = True,
-                 recurrent: bool = True, rescore: bool = True, visibility: bool = False, coast: bool = True):
+                 recurrent: bool = True, rescore: bool = True, visibility: bool = False, coast: bool = False):
         super().__init__()
         self.rules, self.dim, self.sigma_m, self.feature_dim = rules, dim, sigma_m, feature_dim
         self.visibility = visibility
@@ -326,8 +328,11 @@ class ObjectMemory(nn.Module):
             self.register_parameter("rescore_gate", None)       # the head starts silent through its own last layer instead
             if rescore:
                 nn.init.zeros_(self.rescore[-1].weight), nn.init.zeros_(self.rescore[-1].bias)
-        # `coast=False` removes the head outright -- its parameters and its reports (`TODO.md` item 24). Zeroing its
-        # loss weight would only stop it training; it would still be free to fire at inference.
+        # **Off by default since 2026-10-16** (`TODO.md` item 24, the owner's call): ablating the head cost nothing
+        # measurable -- AP 86.08% against the matched seed's 86.35% and a three-seed control range of 85.49-86.35 --
+        # and it fired 0.0012-0.0020 times per populated frame and 2/0/0 times across 72,533 person-free frames. The
+        # argument is not its 137 parameters but that a write-up should not describe a mechanism that never acts.
+        # `coast=True` restores it, because every number published before that date was produced with it.
         self.coast = nn.Linear(dim + statistics, 1) if coast else None
         if self.coast is not None:
             nn.init.zeros_(self.coast.weight)

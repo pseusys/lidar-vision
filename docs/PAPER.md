@@ -125,7 +125,7 @@ What survives is ranking — the +3.69 pp of AP against +1.33 of recall, and GOS
 empty scenes, and **identity**, which no single-frame detector provides at any quality and which a follow-me behaviour consumes
 directly. Room coordinates, the design's central claim, win only below roughly 0.015 m/s of
 odometry drift; training with jittered poses buys +1.75 pp at 0.05 m/s and +4.34 at 0.1 for nothing at zero drift, but does not
-move that crossover. And the coasting head, which reports a remembered person no candidate supports, fires **0.001 times per
+move that crossover. And the coasting head, which reported a remembered person no candidate supports, fired **0.001 times per
 frame** on this recipe: it is described here because the architecture contains it, not because it acts.
 
 ## Model extensions: temporal reasoning on top of a frozen detector

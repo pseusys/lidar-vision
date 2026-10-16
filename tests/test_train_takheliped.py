@@ -1439,3 +1439,46 @@ class TestUnionDecode:
         out = union_decode(scan, angles, prob, votes, merge_m=0.3)
 
         assert np.all(np.diff(out[:, 0]) <= 0)
+
+
+class TestTheCoastingHeadIsGone:
+    """The owner's call, 2026-10-16: item 24 measured the coasting head costing nothing, so the architecture drops it.
+
+    Ablated it scored **AP 86.08%** against the matched seed's 86.35% and the three-seed control range 85.49-86.35, with
+    every other metric inside the control's own spread. It is 137 parameters of 173,579, so the reason to remove it is
+    not size: it fires 0.0012-0.0020 times per populated frame and 2 / 0 / 0 times across 72,533 person-free frames, and
+    a write-up should not describe a mechanism that never acts.
+
+    **The flag survives the default.** Every published number to date was produced *with* the head, so reproducing those
+    runs has to stay possible -- the same reason the owner kept `SpaceTimeCNNDetector` in item 32 rather than deleting
+    the architecture its decisions were made on.
+    """
+
+    def test_a_new_memory_has_no_coasting_head(self):
+        assert ObjectMemory(SlotRules(capacity=8), dim=16, heads=2).coast is None
+
+    def test_a_checkpoint_written_before_the_flag_existed_still_loads_with_its_head(self):
+        """Those checkpoints carry `coast.weight` and say nothing about `coast`, so the weights decide, not the default.
+
+        Falling back to the constructor default -- which is what every other ablation here does -- would now build a
+        head-free model and refuse the adopted model's own weights.
+        """
+        trained = ObjectMemory(coast=True)          # defaults: `object_memory` rebuilds at them when `args` is silent
+        checkpoint = {"model": trained.state_dict(), "args": {}}
+
+        restored = object_memory(checkpoint, feature_dim=0)
+
+        assert restored.coast is not None
+
+    def test_a_checkpoint_that_says_it_had_no_head_is_built_without_one(self):
+        trained = ObjectMemory(coast=False)
+        checkpoint = {"model": trained.state_dict(), "args": {"coast": "False"}}
+
+        assert object_memory(checkpoint, feature_dim=0).coast is None
+
+    def test_the_recorded_flag_wins_over_the_weights(self):
+        """`args` is what the run actually asked for; the weights only answer when it is silent."""
+        trained = ObjectMemory(coast=True)
+        checkpoint = {"model": trained.state_dict(), "args": {"coast": "True"}}
+
+        assert object_memory(checkpoint, feature_dim=0).coast is not None

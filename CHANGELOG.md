@@ -38,6 +38,31 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The coasting head leaves the architecture (2026-10-16)
+
+*keywords: item 24, coast default off, --coast, coasting removed, pre-flag checkpoints, coast.weight, published numbers describe the with-head model*
+
+The owner's call on the measurement below: it does not earn its place, so drop it. `ObjectMemory(coast=False)` is now the
+default, and the memory no longer reports a person no candidate covers.
+
+**`--coast` survives the default**, for the same reason item 32 kept `SpaceTimeCNNDetector`: every number published before
+today was produced with the head, and those runs have to stay reproducible.
+
+**One subtlety, and it would have been a silent breakage.** Every other stage-3 ablation resolves its shape as "what `args`
+recorded, else the constructor default". Flipping this default turns that rule against the checkpoints that matter: the
+adopted model predates the flag, so its `args` say nothing about coasting while its weights carry `coast.weight` and
+`coast.bias`. Falling back to the new default would have built a head-free model and then refused those weights. So `coast`
+is the one shape read from the **checkpoint's own weights** when `args` is silent, which is both more robust and more
+obviously correct than any default.
+
+**A consequence to carry rather than fix now:** the published **85.87%** three-seed figure describes the *with-head* model.
+The architecture it names no longer has one. Step 2's multi-seed runs on the frozen architecture are what will produce the
+head-free headline, and those runs are already planned, so this costs nothing extra -- but until they land, the headline
+number and the architecture description are one component apart, and anything quoting them together has to say so.
+
+Four tests had encoded "the default has a coasting head" -- two in the visibility suite using it as a probe of the
+statistics width, two in the ablation suite -- and now ask for it explicitly, which is what they always meant.
+
 ## Item 24: the coasting head does not earn its place, and the reason is not its size (2026-10-15)
 
 *keywords: item 24, coasting head, --no-coast, a64_no_coast_s0, 86.08 against 86.35, 137 parameters, mechanism that never acts, seed spread, step 1*

@@ -772,7 +772,8 @@ class TestMemoryWithVisibility:
         return ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, **kw)
 
     def test_the_statistics_vector_is_one_wider_and_the_heads_follow(self):
-        on, off = self._model(visibility=True), self._model()
+        # The coasting head reads the statistics, so it is the probe -- opt in, since it left the architecture in item 24.
+        on, off = self._model(visibility=True, coast=True), self._model(coast=True)
         assert on.coast.in_features == off.coast.in_features + 1
         assert on.statistics.in_features == off.statistics.in_features + 1
 
@@ -783,7 +784,7 @@ class TestMemoryWithVisibility:
 
     def test_the_default_model_is_untouched(self):
         # the flag must not perturb any existing checkpoint's shape or numbers
-        off = self._model()
+        off = self._model(coast=True)
         assert off.coast.in_features == 32 + 8
         for out, score, valid in TestObjectMemory()._run(off, 4):
             assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-5)
@@ -867,8 +868,8 @@ class TestCoastingAblation:
 
     def test_the_ablated_memory_does_not_carry_the_heads_parameters(self):
         torch.manual_seed(0)
-        with_head = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
-        without = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, coast=False)
+        with_head = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, coast=True)
+        without = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
 
         assert sum(p.numel() for p in without.parameters()) < sum(p.numel() for p in with_head.parameters())
         assert not any("coast" in name for name, _ in without.named_parameters())
@@ -895,8 +896,9 @@ class TestCoastingAblation:
         for out, score, valid in TestObjectMemory()._run(model, 12):
             assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-5)
 
-    def test_the_default_still_carries_the_head(self):
+    def test_asking_for_the_head_restores_it(self):
+        """Removed from the architecture, kept reachable: every number published before 2026-10-16 was produced with it."""
         torch.manual_seed(0)
-        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, coast=True)
 
         assert any("coast" in name for name, _ in model.named_parameters())
