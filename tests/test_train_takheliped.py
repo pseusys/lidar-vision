@@ -309,11 +309,20 @@ class TestAttributionArmShapes:
         return {k: str(v) for k, v in vars(build_parser().parse_args(["step2", *argv])).items()}
 
     def test_step2_defaults_describe_today_s_network(self):
-        assert network_shape(self._stored([])) == dict(max_range_m=MAX_RANGE_M, input_features="beam", channels=(32, 64, 128))
+        """Exact equality on purpose: a new key here changes what every loader rebuilds, so adding one is a decision."""
+        assert network_shape(self._stored([])) == dict(max_range_m=MAX_RANGE_M, input_features="beam", channels=(32, 64, 128),
+                                                       gather_width_m=0.0, gather_samples=9)
 
     def test_the_arms_flags_describe_their_network(self):
         shape = network_shape(self._stored(["--input-features", "lfe", "--channels", "8", "16", "32"]))
-        assert shape == dict(max_range_m=MAX_RANGE_M, input_features="lfe", channels=(8, 16, 32))
+        assert shape == dict(max_range_m=MAX_RANGE_M, input_features="lfe", channels=(8, 16, 32),
+                             gather_width_m=0.0, gather_samples=9)
+
+    def test_the_gather_flag_describes_its_network(self):
+        """Item 15: the metric window is part of the shape, so a checkpoint trained with it rebuilds with it."""
+        shape = network_shape(self._stored(["--gather-width-m", "1.66", "--gather-samples", "11"]))
+
+        assert (shape["gather_width_m"], shape["gather_samples"]) == (1.66, 11)
 
     def test_a_checkpoint_rebuilds_into_the_network_it_was_trained_as(self):
         torch.manual_seed(0)
