@@ -38,6 +38,38 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 24: the coasting head does not earn its place, and the reason is not its size (2026-10-15)
+
+*keywords: item 24, coasting head, --no-coast, a64_no_coast_s0, 86.08 against 86.35, 137 parameters, mechanism that never acts, seed spread, step 1*
+
+The head lets a slot report a person no candidate covers. Two measurements said it almost never does -- **0.0012 / 0.0000 /
+0.0020** reports per populated frame, and item 27's **2 / 0 / 0** across all 72,533 person-free frames at the operating
+threshold -- so this run asked what removing it costs. `ObjectMemory(coast=False)` removes its parameters *and* its reports;
+zeroing `--coast-weight` would only stop it training while leaving it free to fire.
+
+| test, stride 5 | AP | FP/frame | recall |
+| --- | ---: | ---: | ---: |
+| adopted, seed 0 | 86.35% | 1.239 | 87.76% |
+| adopted, seed 1 | 85.77% | 1.080 | 85.96% |
+| adopted, seed 2 | 85.49% | 0.849 | 81.17% |
+| **ablated (`--no-coast`), seed 0** | **86.08%** | **0.885** | **82.63%** |
+
+**Every metric lands inside the control's own three-seed spread**, and AP -- the threshold-free one -- is 0.27 pp from its
+matched seed against a 1.32 pp three-sigma bar. **The ablation's lower false-positive rate is not a win**: the control's own
+FP/frame runs 0.849-1.239 across seeds and 0.885 sits inside that, which the recall column explains -- the seeds land at
+different points on one curve (recall 81.17-87.76 moves with FP), while AP barely moves at all. Reporting that 29% as an
+improvement would have been reading seed noise as a result.
+
+**The head is 137 parameters of 173,579**, so nothing here is about size. The case for removing it is that the write-up
+should not describe a mechanism that never acts: "coasting slots that report people no candidate covers" is in the class
+docstring, in `docs/PROPOSAL.md` and in the paper's description of what the memory does, and the measurements say it does
+not happen. Dropping it also drops `--coast-weight` and the coasting loss from the recipe, which is one fewer thing to
+tune and to explain.
+
+**Proposed, and the owner's call since it removes a described component.** One seed, against a three-seed control, which is
+the right weight of evidence for "costs nothing" and would not be enough for "improves things" -- and nothing here claims
+the latter.
+
 ## Item 34 closes: the +2.9 pp was real, and it lived at an operating point the pipeline never visits (2026-10-15)
 
 *keywords: item 34, union_decode, pool_coverage, candidate floor 0.01, 98.41%, +2 -9 -9, oracle at the wrong operating point, two score scales, complementarity artefact*

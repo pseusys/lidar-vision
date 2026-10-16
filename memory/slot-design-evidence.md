@@ -65,6 +65,14 @@ history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/
 | **Slots report people no candidate covers** (coasting) | trained: 0.08-0.29 reports per frame at **22-32% precision**; at one epoch it is 0.002 at 0% | **works, and is undertuned**: it needs training time before it does anything, and its precision is the open item (A51 O2) |
 | **The bookkeeping is a fixed rule, not learned** | S1 (the rules do not bind) and D2 (the value rule earns nothing) both say there is little to learn; the spawn and eviction decisions are `argmin`/`argsort` and have no gradient without a relaxation | **defensible, and D4 tests the cheap part** -- learning the value rule's `gain` and `fade_time_s` -- but D2's null makes a null there likely |
 
+## The coasting head, ablated: nothing measurable is lost (item 24, 2026-10-15)
+`--no-coast` removes the head's parameters and its reports; on the adopted recipe
+it scores **AP 86.08%** against the matched seed's 86.35% and the three-seed control range 85.49-86.35, with FP/frame 0.885
+inside the control's own 0.849-1.239 and recall 82.63% inside 81.17-87.76. **Nothing measurable is lost.** The head is 137
+parameters of 173,579, so the argument for removing it is not size but description: it fires 0.0012-0.0020 times per
+populated frame and 2 / 0 / 0 times across 72,533 person-free frames, and a write-up should not describe a mechanism that
+never acts. Proposed for removal; the owner's call, since it is a described component.
+
 ## Two findings that change how stage 3 is read
 
 **The memory was never "buying precision for recall".** Its rescoring shifts the *whole* score distribution down (people by
