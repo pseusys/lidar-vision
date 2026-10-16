@@ -60,7 +60,10 @@ C1 = ("--dropout", "0.1", "--checkpoint-every", "0.25", "--label-assign", "neare
       "--schedule", "plateau", "--lr-factor", "0.3", "--lr-patience", "4", "--min-lr", "1e-05")
 
 JOBS = [
-    Job(name="item15_stage2", outputs=(GATHER / "step2_calibration.best.pth",),
+    # `step2_results.json` and not `step2_calibration.best.pth`: the runner stops a job once its outputs exist, and the
+    # best checkpoint appears at the first improving epoch. Declaring it cut this run off at epoch 3.25 of 20 (2026-10-16),
+    # and the runner was right to call that done -- the output it was told to wait for was there.
+    Job(name="item15_stage2", outputs=(GATHER / "step2_results.json",),
         cli=("train_takheliped.py", "step2", "--gather-width-m", "1.66", *C1,
              "--seed", "0", "--out-dir", str(GATHER), "--resume")),
     # Weight averaging is part of the recipe, and a separate script over the periodic checkpoints the run just wrote.
