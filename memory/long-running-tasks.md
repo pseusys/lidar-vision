@@ -52,6 +52,17 @@ Python module that builds `Job`s and calls `main`, and the runner owns retries, 
 and the progress lines. It takes `--list`, `--steps` and `--progress`. Every launcher incident in `TODO.md` A57's table came
 from the eight hand-copied copies, so write a queue module and do not copy a launcher again.
 
+**It happened again on 2026-10-16, and this is what it looks like from the logs.** The step-1 chain was launched with
+`Start-Process` from the session rather than through the Task Scheduler -- the mistake this section exists to prevent -- and
+died with the session at 23:31 after about ten hours, three arms in. **The signature is unmistakable once you know it:**
+every remaining job has `attempt1`, `attempt2` and `attempt3` logs, **all zero bytes, all stamped within the same second or
+two**. The children could not spawn at all, so the runner burned each job's whole retry budget in milliseconds and recorded
+nothing. A job that genuinely failed writes a log with a traceback in it and takes time doing so.
+
+So: **zero-byte attempt logs with identical timestamps mean a teardown, not a failing job.** Do not go looking for a bug in
+the arm; relaunch the chain, which skips what is already finished. The retry counters live in the runner's own process, so a
+relaunch starts them fresh -- the burnt attempts cost nothing but a confusing log directory.
+
 **Never give the one-off trigger a future time.** An earlier version of this template used `/st 23:59`, and on 2026-10-02 the
 A56 tasks then fired a second time at 23:59, re-running two finished chains over their own outputs (their pickles survived, two
 logs were truncated). `schtasks` warns that a past `/st` "may not run"; that is the point, since `/run` starts it now.
