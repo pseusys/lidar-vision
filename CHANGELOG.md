@@ -38,6 +38,58 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Step 1's chain closes: eight arms, nothing better than the adopted architecture (2026-10-18)
+
+*keywords: step 1, A51 arms, D2 D3 T1 T2 O1 O2, item 15, item 24, item 25, metric gather, rescore bound silences the head, 85.49-86.35 control range, freeze the architecture, single seed against three*
+
+Every architectural question the owner's restructure put before the two GPU-days now has an answer. One chain, eight
+stage-3 arms on the adopted recipe's own stage 2, each E13's configuration plus the single flag it is named for.
+
+| arm | what it changes | AP | FP/frame | recall | reading |
+| --- | --- | ---: | ---: | ---: | --- |
+| **adopted control**, 3 seeds | -- | **85.49-86.35%** | 0.849-1.239 | 81.17-87.76% | the range everything is read against |
+| `t1_no_rescore_gate` (T1) | zero-initialised head instead of a scalar gate | 86.20% | 0.690 | 80.20% | inside |
+| `no_coast` (item 24) | the coasting head removed | 86.08% | 0.885 | 82.63% | inside |
+| `o2_coast_weight` (O2) | coasting loss weighted 3x | 85.84% | 1.161 | 86.72% | inside |
+| `d2_latest_value` (D2) | latest score holds a slot, not accumulated value | 85.76% | 1.052 | 85.57% | inside |
+| `t2_plateau` (T2) | plateau schedule instead of cosine | 85.72% | 1.118 | 86.01% | inside |
+| `item15_gather` (item 15) | first layer reads 1.66 m of arc, not 7 beams | 85.28% | 1.068 | 85.23% | **0.21 pp below the floor** |
+| `d3_fixed_decay` (D3) | one decay time for every slot | 84.45% | 0.774 | 80.40% | **1.04 pp below the floor** |
+| `o1_rescore_limit` (O1 / item 25) | rescoring bounded to +-4 logits | 82.22% | 3.045 | 93.37% | **4.13 pp below; the head is silent** |
+
+**Five of eight are interchangeable with the adopted choice and three are worse. None is better.** Read carefully, that
+is a claim about single seeds against a three-seed control: "inside the range" means *no single-seed evidence of a
+difference*, which is weaker than equivalence and much weaker than improvement.
+
+**What the memory does rest on, and what it does not.** The design is robust to most of its own knobs -- what holds a slot
+(D2), how the rescoring is gated (T1), the schedule (T2), what coasting is weighted (O2) and whether coasting exists at
+all (item 24) can each be swapped without moving AP out of the control's spread. Two choices are load-bearing:
+
+* **The decay must be learned.** One fixed time constant for every slot costs 1.04 pp below the control's floor, agreeing
+  in sign with B0's earlier -0.90. E10 said the learned *state* is the mechanism; D3 says the learned *rate* is part of it.
+* **The rescoring must be unbounded.** O1's +-4 logit tanh does not stabilise the head that diverged twice with NaN -- it
+  **silences** it. Its memory AP is **82.22%, exactly its candidates' 82.22%**, with FP 3.045 and recall 93.37%: the raw
+  candidate operating point, untouched. A bound tight enough to be stable is tight enough to be useless, so item 25's
+  NaN divergences remain unexplained and the paper states them as a limitation rather than a solved problem.
+
+**Item 15 is answered and the prior was wrong.** A first layer reading a fixed 1.66 m of arc, resampled per beam from its
+own range, scored **1.42 pp below** the adopted stage 2 (test AP 80.70% against 82.12%) and **0.21 pp below** the control's
+floor end to end. Tier 0's 1-NN probe had priced the adaptive window at **+2.5 pp**, concentrated at long range. The probe
+measured what a *capacity-free* classifier gains from scale normalisation; a trained network of 977k parameters evidently
+learns that for itself, and paying 384 parameters plus a resample to hand it over costs rather than helps. That is the
+second time a Tier 0 probe's prize has failed to survive a trained model, after A59's F1 arm -- worth remembering when the
+next input-side idea is priced by a probe.
+
+**The architecture to freeze for step 2**, then: the C1 stage-2 recipe with its **fixed-beam** first layer, and E13's
+memory -- 256 slots in room coordinates, accumulated value, learned input-dependent decay, no slot-to-slot exchange, no
+learned matching, scalar rescore gate, **unbounded** rescoring, cosine schedule, and **no coasting head**. That is the
+adopted model minus one component, and step 2's multi-seed table is what gives it its bars.
+
+**Three ways this chain died before it finished**, each recorded where it belongs: the session's job object took it
+(2026-10-16), a stale output declaration let the runner stop stage 2 at epoch 3.25 of 20, and the host slept at 22:06:02
+on 2026-10-17 and killed a finished arm between printing its evaluation and writing its results file. The queue now holds
+the host awake.
+
 ## The coasting head leaves the architecture (2026-10-16)
 
 *keywords: item 24, coast default off, --coast, coasting removed, pre-flag checkpoints, coast.weight, published numbers describe the with-head model*

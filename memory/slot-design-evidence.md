@@ -65,6 +65,28 @@ history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/
 | **Slots report people no candidate covers** (coasting) | trained: 0.08-0.29 reports per frame at **22-32% precision**; at one epoch it is 0.002 at 0% | **works, and is undertuned**: it needs training time before it does anything, and its precision is the open item (A51 O2) |
 | **The bookkeeping is a fixed rule, not learned** | S1 (the rules do not bind) and D2 (the value rule earns nothing) both say there is little to learn; the spawn and eviction decisions are `argmin`/`argsort` and have no gradient without a relaxation | **defensible, and D4 tests the cheap part** -- learning the value rule's `gain` and `fade_time_s` -- but D2's null makes a null there likely |
 
+## Every design arm on the adopted recipe, at one seed each (step 1, 2026-10-18)
+
+The six A51 arms plus items 15 and 24, each E13's configuration plus one flag, against the adopted control's three seeds.
+
+| arm | what it changes | AP | FP/frame | recall | reading |
+| --- | --- | ---: | ---: | ---: | --- |
+| **adopted control**, 3 seeds | -- | **85.49-86.35%** | 0.849-1.239 | 81.17-87.76% | the range everything is read against |
+| `t1_no_rescore_gate` (T1) | zero-initialised head instead of a scalar gate | 86.20% | 0.690 | 80.20% | inside |
+| `no_coast` (item 24) | the coasting head removed | 86.08% | 0.885 | 82.63% | inside |
+| `o2_coast_weight` (O2) | coasting loss weighted 3x | 85.84% | 1.161 | 86.72% | inside |
+| `d2_latest_value` (D2) | latest score holds a slot, not accumulated value | 85.76% | 1.052 | 85.57% | inside |
+| `t2_plateau` (T2) | plateau schedule instead of cosine | 85.72% | 1.118 | 86.01% | inside |
+| `item15_gather` (item 15) | first layer reads 1.66 m of arc, not 7 beams | 85.28% | 1.068 | 85.23% | **0.21 pp below the floor** |
+| `d3_fixed_decay` (D3) | one decay time for every slot | 84.45% | 0.774 | 80.40% | **1.04 pp below the floor** |
+| `o1_rescore_limit` (O1 / item 25) | rescoring bounded to +-4 logits | 82.22% | 3.045 | 93.37% | **4.13 pp below; the head is silent** |
+
+**Two choices are load-bearing and the rest are not.** The decay must be **learned** (D3 costs 1.04 pp) and the rescoring
+must be **unbounded** (O1's +-4 logit bound silences the head: its AP is exactly its candidates'). Everything else -- what
+holds a slot, how the rescoring is gated, the schedule, coasting's weight, coasting's existence -- moves AP less than the
+control's own seed spread. **Single seed against three, so "inside the range" is "no evidence of a difference", not
+equivalence.**
+
 ## The coasting head, ablated: nothing measurable is lost (item 24, 2026-10-15)
 `--no-coast` removes the head's parameters and its reports; on the adopted recipe
 it scores **AP 86.08%** against the matched seed's 86.35% and the three-seed control range 85.49-86.35, with FP/frame 0.885
