@@ -37,7 +37,31 @@ It breaks the lifecycle above in two places: there is no `T`-scan window (one sc
 | --- | --- | --- | --- |
 | 1, features | 10 pose-invariant per-beam features from one raw scan; `sanitize_ranges` maps non-finite, non-positive and beyond-`max_range_m` readings to `max_range_m`, so no dataset-specific preprocessing is needed | — | — |
 | 2, calibration network | 1D ConvNeXt U-Net over **one scan**, a 3-tap convolution across bottleneck sectors and a global max; a DROW vote head, decoded by `nms-mean` into 64 candidates, sub-threshold ones included. No state, no pose: its coarse temporal convolution was removed 2026-10-08 (A60) | 0.98 M | 8.75 ms + 2.77 ms decoding, CPU, 4 threads |
-| 3, object memory | 256 slots in **room** coordinates; cross-attention association, slot self-attention, and a Δt-aware selective diagonal recurrence (Mamba-style, decay 1-60 s). Rescores candidates. **No coasting head since 2026-10-16** -- ablating it cost nothing measurable and it fired essentially never, so reporting a person no candidate covers left the architecture (`TODO.md` item 24); `--coast` restores it for reproducing runs published before that date | 0.31 M | ~4.4 ms/frame |
+| 3, object memory | 256 slots in **room** coordinates and a dt-aware selective diagonal recurrence (Mamba-style, decay 1-60 s), rescoring the candidates. **What the frozen model uses is a subset of what the class can do**: cross-attention association and slot self-attention both exist and are both **off** (E7, E6), there is **no coasting head** (item 24), and the decay is learned rather than fixed (D3). The full configuration, and what each alternative cost, is below | 0.17 M | ~4.4 ms/frame |
+
+
+### The frozen architecture (2026-10-18)
+
+**Step 1 ran every architectural question to an answer and nothing beat the adopted choice**, so this is the model the
+pre-print proposes. Written out in full because "the adopted recipe" has meant three different things over this project's
+life, and `TODO.md` item 29 exists because a number once outlived the configuration that produced it.
+
+| stage | what it is | what was ruled out, and by what |
+| --- | --- | --- |
+| **1-2** | A59's C1 recipe over a **fixed-beam** ConvNeXt 1-D U-Net: dropout 0.1, nearest-person labels at 0.6 m, mirror augmentation, plateau schedule, weight averaging over the val-chosen window. Widths (32, 64, 128), 976,707 parameters | **No metric gather** (item 15: 1.42 pp worse at stage 2, 0.21 pp below the control's floor end to end, against a Tier 0 probe that priced it at +2.5 pp). **No LFE input channel** (A59 F1). **Not LFE's widths** (A59 W: 1.4 pp for no speed). **No temporal convolution**, fine or coarse (A50, A60) |
+| **3** | E13's object memory: 256 slots in **room** coordinates, **accumulated** value, **learned input-dependent** decay (1-60 s), no slot-to-slot exchange, no learned matching, a scalar rescore gate, **unbounded** rescoring, cosine schedule, 173,442 parameters | **No coasting head** (item 24: removing it costs nothing measurable and it fired 2/0/0 times across 72,533 person-free frames). **Not the latest score** holding a slot (D2, interchangeable, so the design's own rule stays). **Not one fixed decay** (D3: 1.04 pp). **Not a bounded rescoring** (O1: a +-4 logit bound silences the head -- its AP equals its candidates'). **No slot-to-slot exchange** (E6), **no learned matching** (E7) |
+| decoding | `nms-mean` at 0.5 m: greedy over beams by probability, each detection at the probability-weighted mean of the votes it suppresses | **Not the vote grid** (2.1 pp of AP), **not a range-split or unioned decoder** (items 13, 17, 34), **not another radius** (0.4 m and 0.6 m trade range against crowding without moving the total) |
+
+**Two choices are load-bearing and the rest are not.** Of eight arms measured at one seed each against a three-seed
+control, five sat inside the control's own spread -- what holds a slot, how the rescoring is gated, the schedule,
+coasting's weight, coasting's existence. Only the **learned decay** and the **unbounded rescoring** cost anything to
+change. That robustness is worth stating in the paper rather than hiding: the memory's performance does not rest on its
+knobs.
+
+**The headline number is being re-measured.** Every published figure -- the 85.87% three-seed mean above all -- describes
+the model *with* a coasting head. `utils/queue_step2.py` is training seeds 1 and 2 of the frozen model; seed 0 exists as
+`a64_no_coast_s0` at 86.08%. Until that table lands, **do not quote 85.87% beside this description**: they are one
+component apart.
 
 Only stage 3 carries state between frames: its slots, ~138 KB per stream (the coarse convolution's ~1.8 MB cache went with it), and the per-frame cost does not grow with how far back the memory reaches. The whole detector streams at 20.8 ms per frame (p99 24.1) on this machine's CPU at 4 threads, inside FROG's 25 ms scan period (`performance-log.md`).
 **`manage_slots` runs under `no_grad`** — association, value accumulation, spawn, replacement and retirement are fixed rules; only what reads the slots learns.

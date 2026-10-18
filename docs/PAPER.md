@@ -61,6 +61,12 @@ and a DROW-style vote head (**stage 2**), and an object memory of 256 slots in r
 state (**stage 3**). **Stage 2 reads one scan per call** — it has no temporal input of any kind — so every temporal claim below
 belongs to the memory.
 
+> **The architecture was frozen on 2026-10-18 and the headline is being re-measured.** Step 1 ruled out every
+> alternative it tested (`memory/detector-architectures.md`), and one of its answers removed the **coasting head**
+> from the model. Every figure in this table was produced *with* that head, so the two rows for our detector describe
+> a model one component larger than the one described above. Seeds 1 and 2 of the frozen model are training; seed 0
+> scores **86.08%** against the with-head seed 0's 86.35%, inside the three-seed spread.
+
 | | wp-AUC | phantoms per person-free frame | ms/frame, CPU (4 threads) | ms/frame, GPU |
 | --- | --- | --- | --- | --- |
 | LFE-Peaks, authors' weights | 65.1% | 1.39 | 1.14 | — |
