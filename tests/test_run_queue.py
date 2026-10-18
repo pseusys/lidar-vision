@@ -1,4 +1,4 @@
-"""The queue runner `utils/run_queue.py`, which replaces the hand-copied PowerShell launchers (`TODO.md` A57).
+﻿"""The queue runner `utils/run_queue.py`, which replaces the hand-copied PowerShell launchers (`TODO.md` A57).
 
 Every rule pinned here is one the duplicated scripts got wrong at least once, and the reasons are in `TODO.md` A57's table:
 a step that trained ahead of a failed gate, a `Wait-Finished` that matched the wrong step's marker, a retry loop that re-ran a
@@ -12,7 +12,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from run_queue import MAX_ATTEMPTS, Job, Outcome, guard_fired, main, report, run, spawn_process, validate
+from run_queue import (ES_CONTINUOUS, ES_SYSTEM_REQUIRED, MAX_ATTEMPTS, Job, Outcome, guard_fired, main, report, run,
+                       spawn_process, stay_awake, validate)
 
 TIMESTAMP_LENGTH = len("2026-10-09T13:30:00")
 
@@ -380,3 +381,62 @@ class TestSpawnProcess:
         code = f"from pathlib import Path; import time; Path(r'{output}').write_text('x'); time.sleep(0.3)"
 
         assert spawn_process(Job(name="probe", cli=("-c", code), outputs=(output,), cwd=tmp_path), tmp_path / "probe.log") == 0
+
+
+class TestStayAwake:
+    """The chain must not be killed by the host going to sleep (2026-10-17).
+
+    Three deaths, three causes: the session's job object took it on 2026-10-16, the gate blocked it, and then -- with it
+    properly detached under the Task Scheduler -- **the machine slept at 22:06:02** and killed the children anyway, four
+    seconds after a user-mode process asked to suspend. `o1_rescore_limit` had printed its final evaluation and had not
+    yet written `step3a_results.json`, so a finished 2.6-hour arm was lost between one line and the next.
+
+    Detachment does not help with sleep: the request comes from outside the process tree. So the runner asks Windows to
+    keep the system up while it has work, which is what `SetThreadExecutionState` is for -- the same API a video player
+    or an installer uses. The lock is released when the process exits, including when it is killed, so it cannot leave
+    the machine permanently awake.
+    """
+
+    def test_it_asks_windows_to_keep_the_system_up(self):
+        asked = []
+
+        with stay_awake(setter=lambda flags: asked.append(flags) or 1):
+            pass
+
+        assert asked, "nothing was requested"
+        assert asked[0] != 0, "the first call must set a keep-awake state, not clear it"
+
+    def test_it_releases_the_lock_on_the_way_out(self):
+        asked = []
+
+        with stay_awake(setter=lambda flags: asked.append(flags) or 1):
+            pass
+
+        # Releasing is ES_CONTINUOUS on its own -- the keep-awake bit cleared, the "continuous" semantics kept. Zero is
+        # not a valid argument, so the contract is "the last call drops ES_SYSTEM_REQUIRED", not "the last call is 0".
+        assert asked[-1] == ES_CONTINUOUS
+        assert not asked[-1] & ES_SYSTEM_REQUIRED
+
+    def test_it_releases_the_lock_even_when_the_queue_raises(self):
+        asked = []
+
+        try:
+            with stay_awake(setter=lambda flags: asked.append(flags) or 1):
+                raise RuntimeError("a job blew up")
+        except RuntimeError:
+            pass
+
+        assert asked[-1] == ES_CONTINUOUS
+
+    def test_a_platform_that_cannot_do_this_runs_anyway(self):
+        """The runner is not Windows-only in principle, and a missing API must not stop a queue from running."""
+        def refuse(flags):
+            raise OSError("no such API")
+
+        with stay_awake(setter=refuse):
+            pass            # reaching here is the assertion
+
+    def test_a_refusal_from_windows_is_not_fatal_either(self):
+        """`SetThreadExecutionState` returns 0 on failure; a queue that cannot hold the lock should still run."""
+        with stay_awake(setter=lambda flags: 0):
+            pass

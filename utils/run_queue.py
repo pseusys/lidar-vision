@@ -16,6 +16,7 @@ Progress goes to `checkpoints_three_horizon/progress.txt` in the format the watc
 """
 
 from argparse import ArgumentParser
+from contextlib import contextmanager
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -153,6 +154,44 @@ def run(jobs: Sequence[Job], *, spawn: Spawn = spawn_process, progress: Path = P
     return results
 
 
+ES_CONTINUOUS, ES_SYSTEM_REQUIRED = 0x80000000, 0x00000001
+
+
+@contextmanager
+def stay_awake(setter=None):
+    """Ask the host not to sleep while the queue has work, and release that on the way out.
+
+    Detaching the chain does not help here. On 2026-10-17 the queue was running correctly under the Task Scheduler and the
+    **machine slept at 22:06:02** anyway, four seconds after a user-mode process asked to suspend -- the request comes from
+    outside the process tree, so no amount of detachment sees it coming. `o1_rescore_limit` had printed its final evaluation
+    and had not yet written its results file, so a finished 2.6-hour arm was lost between one line and the next.
+
+    `SetThreadExecutionState` is the API for "I am doing work, do not sleep", the one a video player or an installer uses.
+    The lock belongs to the process and dies with it however it dies, so a crashed queue cannot leave the host awake for
+    good. A platform without the call, or a refusal from Windows, is not a reason to refuse to run a queue.
+    """
+    if setter is None:                                               # pragma: no cover - the real call, exercised by use
+        try:
+            from ctypes import windll
+            setter = windll.kernel32.SetThreadExecutionState
+        except (ImportError, AttributeError, OSError):
+            setter = None
+    held = False
+    if setter is not None:
+        try:
+            held = bool(setter(ES_CONTINUOUS | ES_SYSTEM_REQUIRED))
+        except OSError:
+            held = False
+    try:
+        yield held
+    finally:
+        if setter is not None:
+            try:
+                setter(ES_CONTINUOUS)                                # release: back to the host's own power policy
+            except OSError:
+                pass
+
+
 def main(jobs: Sequence[Job], *, gate: Job | None = None, argv: Sequence[str] | None = None, spawn: Spawn = spawn_process) -> int:
     """The entry point a queue module calls: parse the options the PowerShell launchers took, run the queue, print the table."""
     parser = ArgumentParser(description="Run this queue's jobs, skipping the ones whose outputs already exist.")
@@ -166,7 +205,10 @@ def main(jobs: Sequence[Job], *, gate: Job | None = None, argv: Sequence[str] | 
         for job in ordered([*([gate] if gate is not None else []), *jobs]):
             print(f"{job.name:<28} needs {','.join(job.needs) or '-':<28} {'done' if finished(job) else 'to run'}")
         return 0
-    results = run(jobs, spawn=spawn, progress=args.progress, log_root=args.log_root, gate=gate, steps=args.steps)
+    with stay_awake() as held:
+        if not held:
+            print("could not ask the host to stay awake; a sleep will kill this queue", flush=True)
+        results = run(jobs, spawn=spawn, progress=args.progress, log_root=args.log_root, gate=gate, steps=args.steps)
     print(report(results))
     return 0 if all(result.outcome in (Outcome.DONE, Outcome.SKIPPED) for result in results.values()) else 1
 
