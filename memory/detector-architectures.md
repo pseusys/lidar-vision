@@ -58,10 +58,15 @@ coasting's weight, coasting's existence. Only the **learned decay** and the **un
 change. That robustness is worth stating in the paper rather than hiding: the memory's performance does not rest on its
 knobs.
 
-**The headline number is being re-measured.** Every published figure -- the 85.87% three-seed mean above all -- describes
-the model *with* a coasting head. `utils/queue_step2.py` is training seeds 1 and 2 of the frozen model; seed 0 exists as
-`a64_no_coast_s0` at 86.08%. Until that table lands, **do not quote 85.87% beside this description**: they are one
-component apart.
+**The headline, measured on this architecture** (2026-10-19, three seeds, FROG `official` test every 5th annotated
+frame): **wp-AUC 86.01%** (86.08 / 86.08 / 85.88), **0.958 false positives per frame** (0.885 / 0.903 / 1.086), recall
+84.03%, over candidates of 82.19% -- so the memory is worth **+3.82 pp** over its own input. On the CPU at four threads
+it costs **19.15 ms per frame, p99 22.07** -- 88% of FROG's 25 ms period (item 30).
+
+The **85.87%** quoted before this date described the same model *with* a coasting head: 0.14 pp apart, inside the
+1.32 pp three-sigma bar, so removing it cost nothing measurable. **The seed spread fell from 0.86 to 0.21 pp** and the
+recall spread from 6.59 to 3.64 -- suggestive of a tighter model, but three seeds against three cannot settle a
+variance claim and the paper should not make one.
 
 Only stage 3 carries state between frames: its slots, ~138 KB per stream (the coarse convolution's ~1.8 MB cache went with it), and the per-frame cost does not grow with how far back the memory reaches. The whole detector streams at 20.8 ms per frame (p99 24.1) on this machine's CPU at 4 threads, inside FROG's 25 ms scan period (`performance-log.md`).
 **`manage_slots` runs under `no_grad`** — association, value accumulation, spawn, replacement and retirement are fixed rules; only what reads the slots learns.

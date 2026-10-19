@@ -61,11 +61,11 @@ and a DROW-style vote head (**stage 2**), and an object memory of 256 slots in r
 state (**stage 3**). **Stage 2 reads one scan per call** — it has no temporal input of any kind — so every temporal claim below
 belongs to the memory.
 
-> **The architecture was frozen on 2026-10-18 and the headline is being re-measured.** Step 1 ruled out every
-> alternative it tested (`memory/detector-architectures.md`), and one of its answers removed the **coasting head**
-> from the model. Every figure in this table was produced *with* that head, so the two rows for our detector describe
-> a model one component larger than the one described above. Seeds 1 and 2 of the frozen model are training; seed 0
-> scores **86.08%** against the with-head seed 0's 86.35%, inside the three-seed spread.
+> **The architecture was frozen on 2026-10-18 and this table describes it.** Our detector's wp-AUC is the frozen
+> model's three-seed mean -- **86.01%** (86.08 / 86.08 / 85.88) -- measured after step 1 removed the coasting head.
+> The **85.87%** quoted before 2026-10-19 described the same model *with* that head: the means are 0.14 pp apart,
+> inside the 1.32 pp three-sigma bar, so removing it cost nothing. The **seed spread fell from 0.86 to 0.21**, which
+> is suggestive rather than established -- three seeds against three cannot settle a variance claim.
 
 | | wp-AUC | phantoms per person-free frame | ms/frame, CPU (4 threads) | ms/frame, GPU |
 | --- | --- | --- | --- | --- |
@@ -73,7 +73,7 @@ belongs to the memory.
 | LFE-PPN, authors' weights | 69.6% | 3.17 | 2.06 | — |
 | DR-SPAAM, **authors' published FROG figures** ¹ | 73.7% (`T=1`), 75.6% (`T=5`) | not reported | 1195.88 ² | — |
 | **stage 2 alone**, one scan per call | **82.20%** | 2.62 | 9.95 | 7.59 |
-| **stage 2 + object memory** | **85.87%** | **0.74** | **19.15** *(p99 22.07)* | 12.32 *(p99 13.63)* |
+| **stage 2 + object memory** | **86.01%** | **0.74** | **19.15** *(p99 22.07)* | 12.32 *(p99 13.63)* |
 
 *¹ Cited, not measured here: these are the authors' FROG numbers. ² Measured here, and **every row in this column was
 re-measured together on 2026-10-11 under one protocol** — the same 2,000 consecutive FROG test scans, in order, batch 1, at the
@@ -105,7 +105,7 @@ what reads them:
 | SORT, `min_hits = 1` | 82.31% | +0.14 / +0.12 / +0.12 |
 | ByteTrack as published | 81.17% | −0.94 / −1.11 / −1.00 |
 | ByteTrack + CBMOT, tuned on validation | 83.51% | +1.30 / +1.35 / +1.32 |
-| **the object memory** | **85.87%** | **+4.13 / +3.66 / +3.26** |
+| **the object memory** | **86.01%** | **+3.82 over its own candidates** |
 
 The memory beats a tuned published tracker by **+2.36 pp**, with every seed's bootstrap interval above zero, and GOSPA agrees
 (0.454 against 0.493). The ablations locate the mechanism: removing the slot-to-slot attention costs nothing and saves 43% of

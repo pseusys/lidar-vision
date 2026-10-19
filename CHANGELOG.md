@@ -38,6 +38,40 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The frozen architecture's headline: wp-AUC 86.01%, and a spread four times tighter (2026-10-19)
+
+*keywords: step 2, frozen architecture, headline, 86.01%, 86.08 86.08 85.88, spread 0.21 against 0.86, replaces 85.87, coasting head removed, three seeds*
+
+Step 2's table: the frozen architecture at three seeds, which is what the pre-print quotes. Stage 2 is unchanged by the
+freeze, so the three adopted stage-2 checkpoints stand and only the memory was retrained; seed 0 already existed as
+`a64_no_coast_s0`.
+
+| three seeds, FROG `official` test, every 5th annotated frame | **frozen (no coasting head)** | with coasting head |
+| --- | ---: | ---: |
+| **wp-AUC** | **86.01%** (86.08 / 86.08 / 85.88) | 85.87% (86.35 / 85.77 / 85.49) |
+| AP spread across seeds | **0.21 pp** | 0.86 pp |
+| false positives per frame | 0.958 (0.885 / 0.903 / 1.086) | 1.056 (1.239 / 1.080 / 0.849) |
+| recall | 84.03% (82.63 / 83.17 / 86.28) | 84.96% (87.76 / 85.96 / 81.17) |
+| recall spread | **3.64 pp** | 6.59 pp |
+| its own candidates | 82.19% | 82.19% |
+| the memory's worth | **+3.82 pp** | +3.68 pp |
+| CPU, 4 threads | **19.15 ms**, p99 22.07 (88% of the 25 ms period) | the same -- the removal drops 137 of 173,579 parameters |
+
+**The mean did not move and that was the prediction.** 86.01 against 85.87 is 0.14 pp, well inside E13's 1.32 pp
+three-sigma bar, which is exactly what item 24 measured at one seed and what removing a mechanism that fires 2/0/0 times
+across 72,533 person-free frames should do.
+
+**What did move is the spread, and it should be reported carefully.** AP across seeds tightened from 0.86 pp to 0.21,
+false positives from 0.390 to 0.200, recall from 6.59 pp to 3.64. That is a consistent direction on three metrics, and
+there is a mechanism to hand -- a head that almost never fires still contributes a gradient, and its rare firings land
+differently per seed. **But three seeds against three cannot settle a variance claim**, so this goes in as an observation
+with its sample size attached, not as a result. If it matters to the argument, it needs more seeds.
+
+**What this replaces.** Every figure quoting 85.87% described a model one component larger than the one now proposed.
+`docs/PAPER.md`, `memory/performance-log.md` and `memory/detector-architectures.md` now carry 86.01% with that history
+stated; the historical records in `memory/slot-design-evidence.md` and `TODO.md` keep their original numbers, because they
+are measurements of the with-coast model and relabelling them would be rewriting what was run.
+
 ## Step 1's chain closes: eight arms, nothing better than the adopted architecture (2026-10-18)
 
 *keywords: step 1, A51 arms, D2 D3 T1 T2 O1 O2, item 15, item 24, item 25, metric gather, rescore bound silences the head, 85.49-86.35 control range, freeze the architecture, single seed against three*

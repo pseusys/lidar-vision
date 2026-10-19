@@ -51,7 +51,7 @@ That is ours measured here, three seeds, against theirs published, one paper fig
 | nothing | 82.19% | -- |
 | SORT (`min_hits` 1) / ByteTrack, as published | 82.31% / 81.17% | +0.13 / -1.02 |
 | ByteTrack + CBMOT track confidence, tuned on val | 83.51% | +1.32, every seed's interval above zero |
-| **object memory, no attention (E13)** | **85.87%** | **+3.68; +2.36 over the tuned tracker (+2.84 / +2.31 / +1.94), every seed's interval above zero** |
+| **object memory, no attention (E13), frozen** | **86.01%** | **+3.82; +2.36 over the tuned tracker (+2.84 / +2.31 / +1.94), every seed's interval above zero** |
 
 At one matched false-positive rate the two now find the same people (95.47 against 95.56%); the memory's lead is ranking, not recall at a threshold. On the old recipe (A56, 2026-10-03, vote-grid candidates) the rows read 77.66 / 77.40 / 76.49 / 80.96 / 83.86%, the memory +2.90 over the tuned tracker. All on FROG's official test labels, which include 2,254 duplicate circles that only a second detection can match; on the old recipe, without them every row rose 0.7-1.05 pp and the memory's margin over the tuned tracker was +2.71, still above zero at every seed ([`interpreting-evaluation.md`](interpreting-evaluation.md), 2026-10-05).
 
