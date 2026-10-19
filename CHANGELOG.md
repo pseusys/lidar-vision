@@ -38,6 +38,44 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A53: RESEARCH.md proposes the detector this project actually proposes (2026-10-19)
+
+*keywords: item 10, A53, RESEARCH.md section 5, TAKHeLiPeD, citation audit, ConvNeXt, Slot Attention, Mamba, dt-aware decay, Izmailov SWA, sections 6.1-6.6*
+
+`docs/RESEARCH.md` is the document a reader outside this repository is pointed at, and its Section 5 was titled **"Proposed
+Architectures"** and proposed three architectures the project had superseded a month earlier. It now proposes TAKHeLiPeD.
+
+**The new Section 5, stage by stage**, with the audit method Section 2.1.1 established -- every borrowing checked against
+the paper it claims:
+
+* **ConvNeXt** (Liu et al., CVPR 2022) and **U-Net** (Ronneberger et al., 2015): faithful, with `Conv1d` over beams for
+  `Conv2d` over pixels and `GroupNorm(1, C)` for LayerNorm, which is the same normalisation on a 1-D tensor.
+* **DROW's vote head** (Beyer et al.): taken deliberately unchanged, and said so -- it is what makes the comparison against
+  DROW3 and DR-SPAAM an *architecture* comparison rather than a head comparison. What differs is what feeds it.
+* **Slot Attention** (Locatello et al., NeurIPS 2020): credited for *the abstraction* -- a scene as a set of addressable
+  object states -- and explicitly **not** the mechanism, since assignment here is a hand-coded one-to-one metric match
+  across frames rather than iterated competitive attention within one.
+* **Mamba** (Gu & Dao, 2023): credited for the selective diagonal decay and **not** the block -- no SSM scan, no
+  convolution, no gated MLP. And the part that is **not in Mamba at all** is named: a robot's frames are not uniformly
+  spaced, so the decay is `exp(-dt * rate)` in *seconds*.
+* **SWA** (Izmailov et al., UAI 2018): faithful in spirit, simplified in practice -- no cyclical schedule, a window chosen
+  on validation.
+* **Two components with no source claimed**, because none was found: the whole-scan global max (a cutout detector cannot
+  do it -- it never sees the whole scan) and the room-frame slots (the choice the whole design rests on).
+
+**The section argues the simplifications rather than apologising for them.** A fixed-beam first layer looks wrong -- a
+person subtends 42 beams at 2 m and 9 at 9 m -- and the write-up now says plainly that the adaptive read was built,
+measured, and scored 1.42 pp *worse*: "the fixed window is not a simplification we are defending but a result". Same for
+hand-coded association (S4: 96.9-97.0% of people already had a matching slot at every rule setting) and for the absence of
+attention anywhere in the memory.
+
+**The old sections moved whole into Section 6**, renumbered 6.1-6.6, with every cross-reference chased down -- `Section
+5.x` appears exactly once in the document now, in the new text, pointing where it should. They are kept rather than
+deleted because the `SpaceTimeCNN` history ablation inside them is *why* the proposed detector reads one scan: shuffling
+its five-frame window cost 0.5 pp while freezing it cost 4.1, so a `T`-frame architecture that does not care about frame
+order is not a temporal model. Their citation audits are kept verbatim too, including the retracted ones -- a withdrawn
+C3D citation is worth more on the record than off it.
+
 ## Item 4 closes: four numbers in the performance log had outlived their configuration (2026-10-19)
 
 *keywords: item 4, performance-log headline, 7.7 pp to 10.4, three_horizon rename, re-measuring rows, SpaceTimeCNN 63.0%, footnote 11, stale sentence*
