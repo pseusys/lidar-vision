@@ -38,6 +38,28 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 4 closes: four numbers in the performance log had outlived their configuration (2026-10-19)
+
+*keywords: item 4, performance-log headline, 7.7 pp to 10.4, three_horizon rename, re-measuring rows, SpaceTimeCNN 63.0%, footnote 11, stale sentence*
+
+The last piece of item 4 was `memory/performance-log.md`'s own headline, and what it held is a better argument for the item
+than the item made for itself. Four claims had outlived the configuration that produced them:
+
+* **The stages-1-3 cell read 85.9%**, the with-coast model. It now reads **86.0%** with the with-coast and old-recipe
+  figures kept beside it and a footnote naming the frozen architecture.
+* **"The object memory clears it by 7.7 pp"** -- a margin computed against the *old recipe's* 83.3%, left standing for three
+  weeks after the number it was derived from moved twice. It is **10.4 pp**.
+* **"The code still spells it `three_horizon`"**, written three weeks after the rename landed (item 9 / A52, 2026-10-11).
+* **Three of our own rows read "re-measuring"**, promising a `T=5, dtime=10` run that was never going to happen -- a
+  temporal window is not what this project proposes any more. `SpaceTimeCNN` now carries its real **63.0%**, the figure
+  A35's criteria were written against, and all three are marked superseded.
+
+**The pattern is the point.** Every one of these was a *sentence* that outlived a *number*, and none would have been caught
+by re-running anything -- only by reading the page as a reader would. That is the same failure mode as item 29's speed
+table, where a row outlived its protocol, and `docs/PAPER.md`'s CPU column, which claimed four threads for rows measured at
+eight. So each cell in the headline table now carries the configuration it was measured on, which is the only form of this
+fix that does not need repeating.
+
 ## The frozen architecture's headline: wp-AUC 86.01%, and a spread four times tighter (2026-10-19)
 
 *keywords: step 2, frozen architecture, headline, 86.01%, 86.08 86.08 85.88, spread 0.21 against 0.86, replaces 85.87, coasting head removed, three seeds*

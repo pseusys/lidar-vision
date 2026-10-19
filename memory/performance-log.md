@@ -35,14 +35,14 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 | DROW3 | published | 61.9% | 73.9% | 82.9% *(official repo README, merged 1091-point 360° scans)* |
 | DR-SPAAM | published | 69.6% *(RA-L'22: 72%+)* | **75.6%** *(`T=5`)* / 73.7% *(`T=1`)* | 84.9% *(official repo README, merged 1091-point 360° scans)* |
 | Li2Former | published | 76.4% | gap² | 81.4% |
-| **SpaceTimeCNN** | ours, novel | re-measuring | re-measuring³ | n/a |
-| **FullScanTCN** | ours, novel | re-measuring | re-measuring | n/a |
-| **TemporalUNet** | ours, novel | re-measuring | re-measuring | n/a |
+| **SpaceTimeCNN** | ours, superseded | not measured | **63.0%**³ | n/a |
+| **FullScanTCN**, **TemporalUNet** | ours, superseded | not measured | not measured | n/a |
 | **TAKHeLiPeD, stages 1-2** (calibration network) | ours, novel | gap | **82.2%**⁹ *(old recipe 77.7%⁴)* | n/a |
-| **TAKHeLiPeD, stages 1-3** (+ object memory) | ours, novel | gap | **85.9%**⁹ *(old recipe 83.3%⁵)* | n/a |
+| **TAKHeLiPeD, stages 1-3** (+ object memory) | ours, novel | gap | **86.0%**¹¹ *(with the coasting head 85.9%⁹; old recipe 83.3%⁵)* | n/a |
 
-**DR-SPAAM `T=5` at 75.6% on FROG was the number to beat, and the object memory clears it by 7.7 pp.**
-That is ours measured here, three seeds, against theirs published, one paper figure — read footnote 5 and [`interpreting-evaluation.md`](interpreting-evaluation.md) before quoting it.
+**DR-SPAAM `T=5` at 75.6% on FROG was the number to beat, and the frozen detector clears it by 10.4 pp.**
+That margin was **7.7 pp** while this file still led with the old recipe's 83.3%, and the sentence outlived the number by three weeks -- which is the failure `TODO.md` item 4 existed to fix and the reason each cell here now carries the configuration it was measured on.
+That is ours measured here, three seeds, against theirs published, one paper figure — read footnote 11 and [`interpreting-evaluation.md`](interpreting-evaluation.md) before quoting it.
 
 **The comparison a tracking reviewer will ask for is within one model, on identical candidates** (`TODO.md` A61, 2026-10-09, on the adopted recipe; one replay per stage-2 seed; FROG test, every 5th annotated frame, 95% block-bootstrap intervals per seed; tables in [`experiments/2026-09-tracking-claims.md`](experiments/2026-09-tracking-claims.md)):
 
@@ -55,7 +55,7 @@ That is ours measured here, three seeds, against theirs published, one paper fig
 
 At one matched false-positive rate the two now find the same people (95.47 against 95.56%); the memory's lead is ranking, not recall at a threshold. On the old recipe (A56, 2026-10-03, vote-grid candidates) the rows read 77.66 / 77.40 / 76.49 / 80.96 / 83.86%, the memory +2.90 over the tuned tracker. All on FROG's official test labels, which include 2,254 duplicate circles that only a second detection can match; on the old recipe, without them every row rose 0.7-1.05 pp and the memory's margin over the tuned tracker was +2.71, still above zero at every seed ([`interpreting-evaluation.md`](interpreting-evaluation.md), 2026-10-05).
 
-**TAKHeLiPeD** (`T`emporal `A`daptive `K`nee-`He`ight `Li`dar `Pe`rson `D`etector, named 2026-09-23) is what earlier entries in this file, `CHANGELOG.md` and `TODO.md` call *the three-horizon detector*; the code still spells it `three_horizon`.
+**TAKHeLiPeD** (`T`emporal `A`daptive `K`nee-`He`ight `Li`dar `Pe`rson `D`etector, named 2026-09-23) is what earlier entries in this file, `CHANGELOG.md` and `TODO.md` call *the three-horizon detector*. **The code followed on 2026-10-11** (item 9 / A52): the package, the C++ namespace, the ROS package and every script say `takheliped`. Only `checkpoints_three_horizon/` keeps the old name, deliberately -- each checkpoint stores the absolute path of its own stage 2.
 
 ### The FROG column is AP @ d = 0.5 m, and it did not used to be
 
@@ -89,7 +89,7 @@ It is a classical reference point, not a baseline taken from any of the papers c
 This project *has* run LFE cross-dataset by zero-padding shorter scans to 720 (DROW: 24.0% / 11.7%), but that padding is our own invention, is not described in the paper, and does not resample to FROG's 0.25°/beam angular resolution — beam index stops meaning the same physical angle.
 Degraded by construction, so it is recorded here as a footnote rather than reported as a result.
 ² Li2Former was never evaluated on FROG by its authors, and training it here has never completed (DirectML crashes, impractical CPU-only speed — `gotchas.md` I4).
-³ In progress: `T=5, dtime=10` on the fixed pipeline (`TODO.md` A1).
+³ **63.0%** single-frame, the figure A35's acceptance criteria were written against and `docs/PAPER.md` argues from (2026-09-10's history ablation). These three are the project's own first line of work, superseded by TAKHeLiPeD and trained on nothing since 2026-09; `TODO.md` item 32 keeps `SpaceTimeCNN` so the decisions made on it stay reproducible and removes the other two. The `T=5, dtime=10` re-measurement this footnote used to promise was never run and is not planned: a temporal window is not what the project proposes any more.
 ⁴ `TODO.md` A51's backbone, measured 2026-09-19 over the whole FROG `official` test split: **77.66%**, the no-temporal stage 2 (seed 0) whose decoded candidates the object memory in the row below rescores, at 2.620 false positives per frame and 88.8% recall at the 0.3 operating point.
 That backbone's own three-seed mean is **77.23%**; the default architecture, which kept the coarse temporal convolution (removed 2026-10-08, `TODO.md` A60), means **77.92%** over three seeds. The pooled per-run spread across five three-seed arms is ~0.95 pp (`interpreting-evaluation.md`), so those two are a tie, not a ranking.
 Both are scored under the limit-beam decoding rule and the running time step adopted 2026-09-17.
@@ -489,6 +489,8 @@ Both LFE rows are otherwise real-data measurements (300 scans each) taken after 
 It is quoted only against the sensor: FROG's measured mean frame period is 24.99 ms (~40 Hz, corrected 2026-09-17 from a long-standing 26.2 Hz), so stages 1-2 plus the memory's 4.4 ms still stream in real time, with roughly a third of the budget spare. A proper single-frame latency benchmark of the whole detector, on one machine with the other rows, is `TODO.md` A50 phase 1.
 
 ⁷ Measured 2026-09-17 and confirmed across B0's three seeds (2026-09-19) by `memory_ms_per_frame`, timing one stream on the RX 9060 XT under ROCm: **4.42 ms** on the fixed end-of-run block, 4.5-4.6 ms across the seeds. Same caveat as footnote 6 -- not comparable with the CPU rows above.
+
+¹¹ **The frozen architecture, three seeds, 2026-10-19** (`a64_no_coast_s0`, `a65_frozen_s1`, `a65_frozen_s2`; FROG `official` test, every 5th annotated frame): **86.01%** (86.08 / 86.08 / 85.88), 0.958 false positives per frame, recall 84.03%, over candidates of 82.19% -- the memory worth **+3.82 pp**. This is the model `memory/detector-architectures.md` freezes: the C1 stage-2 recipe over a fixed-beam U-Net, E13's memory, and **no coasting head** (item 24). The 85.9% of footnote 9 is the same model *with* that head -- 0.14 pp apart, inside the 1.32 pp three-sigma bar. The seed spread fell from 0.86 to 0.21 pp, which is suggestive and **not** a claim three seeds can support.
 
 ⁹ `TODO.md` A60 / A59 phase 3a, 2026-10-08: E13's stage 3 (no attention) on the no-temporal stage 2 trained with the adopted recipe -- `nms-mean` decoding, mirror augmentation, nearest-person labels, dropout 0.1, weight averaging (stage 2 alone 82.20%) -- three seeds, every 5th annotated test frame: **86.35 / 85.77 / 85.49%, mean 85.87**, AP@0.3 84.68%. Against E13 on the old recipe, 83.86%, +2.01. Stage 2 alone is the no-temporal network averaged over its val-chosen epochs, 82.28 / 82.08 / 82.22% (mean 82.20). Streamed one scan at a time on this machine's CPU at 4 threads (`tracking_baselines.py latency`, 2,000 frames, 2026-10-08): stage 2 8.75 ms, decoding 2.77 ms (`nms-mean`'s per-voter loop, ~1 ms more than the vote grid), memory 9.22 ms, **20.79 ms median, p99 24.08** -- inside FROG's 25 ms period with under a millisecond to spare at p99. The A56 tracking comparison above is on the old recipe's candidates and has not been repeated.
 
