@@ -146,7 +146,12 @@ Anything less important goes *below* it, clearly marked as detail.
 
 **2b. `wp-AUC` (person-class AUC at 0.5 m matching radius) leads any accuracy answer.**
 Never substitute the agnostic/any-class AUC column for it — that exact substitution once inflated native-DROW results by 15-20pp (`train_all.py`'s mislabeled summary column).
-Report `ms/frame` alongside it as the secondary axis whenever both exist for the row being discussed; a speed number without its accuracy counterpart, or vice versa, is an incomplete answer here.
+Report `ms/frame` alongside it whenever both exist for the row being discussed; a speed number without its accuracy counterpart, or vice versa, is an incomplete answer here.
+
+**And the `ms/frame` that counts is on the CPU** (owner's call, 2026-10-19).
+DROW and LFE were built for cheap, CPU-only robots, and this project has no reason to assume a different target — so **an architecture that wins on accuracy and loses on CPU has not won**, and a GPU number does not stand in for a CPU one.
+That applies to the project's own ablation arms as much as to the cross-detector table: `step3a_results.json`'s `memory_ms_per_frame` is timed on **whatever device trained the arm**, which is the GPU here, so it does not answer the question.
+The protocol is item 29's — `tracking_baselines.py latency --device cpu --threads 4`, 2,000 consecutive scans, batch 1, against FROG's 25 ms period (`memory/performance-log.md`).
 
 **3. Ask early rather than guessing** when an answer would change what you build.
 Do not let that suppress your own proposals — suggest freely, and say which option you would pick.

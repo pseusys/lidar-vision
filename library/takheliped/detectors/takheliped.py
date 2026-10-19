@@ -13,6 +13,7 @@ from typing import List, Optional, Tuple
 
 from torch import (
     Tensor, arange, arctan, argsort, atan2, cat, cos, cumprod, exp, expm1, full, full_like, isfinite, linspace, log1p, minimum, nn,
+    sigmoid,
     no_grad, ones, sin, stack, tanh, where, zeros, zeros_like,
 )
 from torch import log as tlog
@@ -30,6 +31,10 @@ SLOT_STATISTICS = 8
 CANDIDATE_FEATURES = 5
 PROBABILITY_EPS = 1e-6
 SILENT_COAST_LOGIT = -10.0
+# Item 16's arms. `selective` is the adopted one: a diagonal state whose decay rate is a function of the input, applied in
+# **real seconds** because a robot's frames are not uniformly spaced. `gru` and `mingru` take a *step* and have no notion of
+# elapsed time, which is not an oversight in the arm -- it is what the comparison measures.
+RECURRENCES = ("selective", "gru", "mingru")
 VISIBILITY_SCALE_M = 1.0        # a metre of free space past a slot saturates the evidence against it
 HIT_RATE_TIME_S = 1.0
 FEATURE_SCALE = 10.0
@@ -297,7 +302,8 @@ class ObjectMemory(nn.Module):
     def __init__(self, rules: SlotRules = SlotRules(), dim: int = 128, heads: int = 4, sigma_m: float = 0.6, decay_init_s: Tuple[float, float] = (1.0, 60.0),
                  feature_dim: int = 0, rescore_gate: bool = True, rescore_limit: float = 0.0, room_frame: bool = True,
                  fixed_decay_s: float = 0.0, learn_value: bool = False, exchange: bool = True, learned_match: bool = True,
-                 recurrent: bool = True, rescore: bool = True, visibility: bool = False, coast: bool = False):
+                 recurrent: bool = True, rescore: bool = True, visibility: bool = False, coast: bool = False,
+                 recurrence: str = "selective"):
         super().__init__()
         self.rules, self.dim, self.sigma_m, self.feature_dim = rules, dim, sigma_m, feature_dim
         self.visibility = visibility
@@ -310,8 +316,16 @@ class ObjectMemory(nn.Module):
         self.match = _BiasedAttention(dim, heads) if recurrent and learned_match else None
         self.exchange = _BiasedAttention(dim, heads) if recurrent and exchange else None
         self.exchange_norm = nn.LayerNorm(dim) if recurrent and exchange else None
+        if recurrence not in RECURRENCES:
+            raise ValueError(f"recurrence must be one of {list(RECURRENCES)}, not {recurrence!r}")
+        self.recurrence = recurrence
         self.update = nn.Linear(dim + statistics, dim) if recurrent else None
-        if fixed_decay_s or not recurrent:
+        # A GRU needs an update and a reset gate, both reading the state; minGRU (Feng et al., *Were RNNs All We Needed?*,
+        # 2024) drops the reset gate and the state dependence, leaving one gate over the input alone.
+        self.gate = nn.Linear(dim + statistics, dim) if recurrent and recurrence in ("gru", "mingru") else None
+        self.reset = nn.Linear(dim + statistics, dim) if recurrent and recurrence == "gru" else None
+        self.gru_state = nn.Linear(dim, dim, bias=False) if recurrent and recurrence == "gru" else None
+        if fixed_decay_s or not recurrent or recurrence != "selective":
             self.decay, self.decay_bias = None, None        # one time constant for every slot, or no slot state at all
         else:
             self.decay = nn.Linear(dim + statistics, dim, bias=False)
@@ -337,6 +351,30 @@ class ObjectMemory(nn.Module):
         if self.coast is not None:
             nn.init.zeros_(self.coast.weight)
             nn.init.constant_(self.coast.bias, SILENT_COAST_LOGIT)
+
+    def _recur(self, state: Tensor, u: Tensor, dt: Tensor) -> Tensor:
+        """One slot-state update, in whichever recurrence this memory was built with (`TODO.md` item 16).
+
+        **`selective`**, the adopted one: a diagonal state whose decay rate is read off the input, applied over the real
+        elapsed time -- `keep = exp(-dt * rate)` in seconds. A robot's frames are not uniformly spaced, and D3 measured the
+        learned rate as load-bearing (fixing it costs 1.04 pp).
+
+        **`gru`** is the textbook gated recurrent unit (Cho et al., 2014): an update gate, a reset gate and a candidate that
+        reads the gated state. **`mingru`** is Feng et al.'s minimal variant (*Were RNNs All We Needed?*, 2024), which drops
+        the reset gate and the hidden-state dependence inside the gates.
+
+        **Neither of them sees `dt`**, and that is deliberate: they take a step, which is exactly the assumption the adopted
+        arm abandons. An arm with `dt` bolted on would measure something else.
+        """
+        if self.recurrence == "selective":
+            rate = 1.0 / self.fixed_decay_s if self.decay is None else softplus(self.decay(u) + self.decay_bias)
+            keep = exp(-dt[:, None, None] * rate)
+            return keep * state + (1.0 - keep) * tanh(self.update(u))
+        z = sigmoid(self.gate(u))
+        if self.recurrence == "mingru":
+            return (1.0 - z) * state + z * tanh(self.update(u))
+        candidate = tanh(self.update(u) + self.gru_state(sigmoid(self.reset(u)) * state))
+        return (1.0 - z) * state + z * candidate
 
     def _coasting(self, state: Tensor, stats: Tensor, slots: Slots, events: SlotEvents, refill: Tensor):
         """Which slots may report a person no candidate covers, and how loudly -- or neither, when the head is ablated.
@@ -435,9 +473,7 @@ class ObjectMemory(nn.Module):
             found = self.match(queried, encoded, _proximity(slots.position, world, self.sigma_m), cand_valid)
         mixed = found if self.exchange is None else self.exchange_norm(found + self.exchange(found, found, _proximity(slots.position, slots.position, self.sigma_m), slots.alive))
         u = cat([mixed, stats], dim=-1)
-        rate = 1.0 / self.fixed_decay_s if self.decay is None else softplus(self.decay(u) + self.decay_bias)
-        keep = exp(-dt[:, None, None] * rate)
-        state = (keep * state + (1.0 - keep) * tanh(self.update(u))) * slots.alive[..., None]
+        state = self._recur(state, u, dt) * slots.alive[..., None]
         slots = Slots(slots.alive, slots.value, slots.position, slots.velocity, slots.origin, slots.age_s, slots.since_match_s, slots.hit_rate, state)
 
         recalled = self.recall(encoded, state, _proximity(world, slots.position, self.sigma_m), slots.alive)

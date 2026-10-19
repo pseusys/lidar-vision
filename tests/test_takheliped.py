@@ -19,7 +19,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
 from takheliped.detectors.takheliped import (
-    N_BEAM_FEATURES, CalibrationNetwork, MetricGather, ObjectMemory, SlotRules, beam_features,
+    N_BEAM_FEATURES, RECURRENCES, CalibrationNetwork, MetricGather, ObjectMemory, SlotRules, beam_features,
     fold_legacy_calibration, gather_beams, metric_offsets,
     free_range_profile, initial_slots, lfe_features, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
     sensor_to_world, visibility_feature, world_to_sensor,
@@ -1027,3 +1027,75 @@ class TestTheNetworkKeepsItsDefault:
 
         assert logits.shape == (2, 128) and votes.shape == (2, 128, 2)
         assert any("gather" in name for name, _ in net.named_parameters())
+
+
+class TestTheRecurrenceFamily:
+    """Item 16: why a bespoke selective diagonal recurrence and not a GRU?
+
+    This is the question a reviewer asks about the paper's central mechanism, and D3 made it sharper rather than softer:
+    fixing the decay rate costs **1.04 pp**, so the learned, input-dependent rate is load-bearing. The defence therefore
+    has to be against the obvious alternatives, not against nothing.
+
+    **The arms are not interchangeable in one respect, and that is the point.** The adopted recurrence decays in
+    `exp(-dt * rate)` -- real seconds -- because a robot's frames are not uniformly spaced. A GRU and a minGRU have no
+    notion of elapsed time at all; they take a step. Comparing them *is* comparing "does real-time decay matter", so the
+    arms deliberately do not get a `dt` bolted on.
+    """
+
+    @staticmethod
+    def _memory(recurrence):
+        torch.manual_seed(0)
+        return ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, recurrence=recurrence)
+
+    def test_the_adopted_recurrence_is_the_default(self):
+        assert ObjectMemory(SlotRules(capacity=8), dim=16, heads=2).recurrence == "selective"
+
+    def test_every_arm_runs_and_keeps_the_interface(self):
+        for name in RECURRENCES:
+            model = self._memory(name)
+            for out, score, valid in TestObjectMemory()._run(model, 6):
+                assert out.slots.state.shape == (2, 16, 32)
+                assert torch.isfinite(out.candidate_logit).all()
+
+    def test_an_untrained_arm_still_reproduces_the_detector_scores(self):
+        """Whatever the recurrence, the rescoring starts silent: that is what makes the memory's gain attributable."""
+        for name in RECURRENCES:
+            model = self._memory(name)
+            for out, score, valid in TestObjectMemory()._run(model, 6):
+                assert torch.allclose(torch.sigmoid(out.candidate_logit)[valid], score[valid], atol=1e-5)
+
+    def test_only_the_adopted_arms_rule_reads_elapsed_time(self):
+        """The comparison's content: a GRU takes a step, the adopted recurrence decays in seconds.
+
+        Tested on `_recur` rather than through `step`, because a whole step is *not* time-blind in any arm -- the slot
+        statistics fed to every recurrence include `age_s`, `since_match_s` and the hit rate, which move with `dt`
+        whatever the rule does with them. That is correct and worth stating: **the arms differ in whether elapsed time
+        enters the recurrence, not in whether the model can see it at all.**
+        """
+        u = torch.randn(2, 16, 32 + 8)
+        state = torch.randn(2, 16, 32)
+
+        for name, time_aware in (("selective", True), ("gru", False), ("mingru", False)):
+            model = self._memory(name)
+            quick = model._recur(state, u, torch.full((2,), 0.025))
+            slow = model._recur(state, u, torch.full((2,), 0.5))
+
+            assert torch.allclose(quick, slow) is not time_aware, f"{name} read dt: {time_aware}"
+
+    def test_mingru_has_no_reset_gate_so_it_is_cheaper_than_a_gru(self):
+        """minGRU (Feng et al. 2024) drops the reset gate and the hidden-state dependence inside the gates."""
+        gru = sum(p.numel() for p in self._memory("gru").parameters())
+        mingru = sum(p.numel() for p in self._memory("mingru").parameters())
+
+        assert mingru < gru
+
+    def test_an_unknown_recurrence_is_refused_rather_than_silently_ignored(self):
+        with pytest.raises(ValueError, match="recurrence"):
+            ObjectMemory(SlotRules(capacity=8), dim=16, heads=2, recurrence="lstm")
+
+    def test_a_dead_slot_carries_no_state_in_any_arm(self):
+        """The bookkeeping clears retired slots; a recurrence that leaked state through them would break eviction."""
+        for name in RECURRENCES:
+            model = self._memory(name)
+            for out, _, _ in TestObjectMemory()._run(model, 6):
+                assert (out.slots.state[~out.slots.alive] == 0).all()

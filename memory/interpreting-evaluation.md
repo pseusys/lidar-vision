@@ -5,6 +5,25 @@
 By how much should a given accuracy or speed number be discounted, and why.
 The standing comparison against published SOTA is in [`performance-log.md`](performance-log.md), and individual runs and sweeps in [`../CHANGELOG.md`](../CHANGELOG.md); this file is about how to read either correctly.
 
+
+## A GPU millisecond is not a CPU millisecond, and this project is judged on the CPU (2026-10-19)
+
+**The owner's framing, and it changes which number is the headline.** DROW and LFE targeted cheap, CPU-only robots; nothing
+about this project's deployment says otherwise (`memory/deployment.md` -- the robot runs a Docker image on its own
+hardware). So **CPU `ms/frame` is the deployment axis, not a secondary one**, and an architecture that wins on AP while
+costing more on a CPU has not won.
+
+**The trap that makes this easy to get wrong.** Every `step3a_results.json` carries `memory_ms_per_frame`, which looks like
+the answer and is not: `memory_ms_per_frame` times `ObjectMemory.step` on **whatever device trained the run**, which on
+this host is the RX 9060 XT. Quoting it as a cost figure silently reports a GPU number. The frozen model's own two
+measurements differ by more than a factor of two for exactly this reason -- **4.65 ms on the GPU against 9.14 ms on four
+CPU threads** -- and the memory is the *larger* half of the CPU total while being the smaller half of the GPU's.
+
+**The protocol to use instead** is item 29's, which every row of the speed table shares: `tracking_baselines.py latency
+--device cpu --threads 4`, 2,000 consecutive FROG test scans, batch 1, median and p99 against the real 25 ms frame period.
+Item 30 also settled the thread count that matters: scaling **saturates at two**, so "two CPU cores" is the deployment
+claim, and one core misses the budget at 151%.
+
 ## Before anything else: every pre-2026-09-10 FROG number is retracted
 
 Four measurement bugs, all fixed (`TODO.md` A11-A19, `CHANGELOG.md`), none of them re-measured yet.

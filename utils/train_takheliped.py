@@ -47,7 +47,7 @@ sys.path.insert(0, str(_HERE))
 from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from takheliped.detectors import LFEPeaksDetector
 from takheliped.detectors.takheliped import (
-    MAX_RANGE_M, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
+    MAX_RANGE_M, RECURRENCES, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
     world_to_sensor,
 )
 from takheliped.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
@@ -627,6 +627,7 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
              # 2026-10-16, and every checkpoint written before the flag existed carries `coast.*` while saying nothing about
              # it, so defaulting would build a head-free model and then refuse the adopted model's own weights.
              "coast": ("coast.weight" in checkpoint.get("model", {})) if args.get("coast") is None else literal_eval(args["coast"]),
+             "recurrence": parameters["recurrence"].default if args.get("recurrence") is None else args["recurrence"],
              "fixed_decay_s": parameters["fixed_decay_s"].default if args.get("fixed_decay_s") is None else float(args["fixed_decay_s"]),
              "learn_value": parameters["learn_value"].default if args.get("learn_value") is None else literal_eval(args["learn_value"]),
              "exchange": parameters["exchange"].default if args.get("exchange") is None else literal_eval(args["exchange"]),
@@ -962,6 +963,7 @@ def train_memory(args) -> None:
 
     model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value), feature_dim=splits["train"].data.features.shape[-1],
                          rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame, coast=args.coast,
+                         recurrence=args.recurrence,
                          fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value, exchange=args.exchange,
                          learned_match=args.learned_match, recurrent=args.recurrent, visibility=args.visibility).to(device)
     print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}"
@@ -1703,6 +1705,13 @@ def build_parser() -> argparse.ArgumentParser:
         step1.add_argument("--rescore-gate", action=argparse.BooleanOptionalAction, default=True,
                            help="scale the rescoring by a scalar that starts at zero; --no-rescore-gate zero-initialises the head's last "
                                 "layer instead, which starts equally silent but leaves the head's own gradient unscaled (TODO A51 T1)")
+        step1.add_argument("--recurrence", choices=RECURRENCES, default="selective",
+                           help="which rule updates a slot's state (TODO.md item 16). selective: a diagonal state whose "
+                                "decay rate is read off the input and applied over the real elapsed time, exp(-dt * rate) "
+                                "in seconds -- the adopted one, and D3 measured the learned rate as load-bearing. gru: the "
+                                "textbook gated recurrent unit. mingru: Feng et al.'s minimal variant, no reset gate. "
+                                "**Neither gru nor mingru sees dt**, which is the comparison rather than an oversight: they "
+                                "take a step, and a robot's frames are not uniformly spaced")
         step1.add_argument("--coast", action=argparse.BooleanOptionalAction, default=False,
                            help="restore the coasting head, which lets a slot report a person no candidate covers. **Removed "
                                 "from the architecture 2026-10-16** (TODO item 24): ablating it cost nothing measurable, and it "
