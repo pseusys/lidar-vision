@@ -16,7 +16,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
 from takheliped.detectors.takheliped import MAX_RANGE_M, CalibrationNetwork, ObjectMemory, SlotRules
-from takheliped.utils.drow_utils import _win2global
+from takheliped.utils.drow_utils import _win2global, swap_vote_frame
+from train import make_targets
 from train_takheliped import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, coast_targets, decode_votes, evaluate, evaluation_segments,
     FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
@@ -311,18 +312,40 @@ class TestAttributionArmShapes:
     def test_step2_defaults_describe_today_s_network(self):
         """Exact equality on purpose: a new key here changes what every loader rebuilds, so adding one is a decision."""
         assert network_shape(self._stored([])) == dict(max_range_m=MAX_RANGE_M, input_features="beam", channels=(32, 64, 128),
-                                                       gather_width_m=0.0, gather_samples=9)
+                                                       gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext")
 
     def test_the_arms_flags_describe_their_network(self):
         shape = network_shape(self._stored(["--input-features", "lfe", "--channels", "8", "16", "32"]))
         assert shape == dict(max_range_m=MAX_RANGE_M, input_features="lfe", channels=(8, 16, 32),
-                             gather_width_m=0.0, gather_samples=9)
+                             gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext")
 
     def test_the_gather_flag_describes_its_network(self):
         """Item 15: the metric window is part of the shape, so a checkpoint trained with it rebuilds with it."""
         shape = network_shape(self._stored(["--gather-width-m", "1.66", "--gather-samples", "11"]))
 
         assert (shape["gather_width_m"], shape["gather_samples"]) == (1.66, 11)
+
+    def test_the_vote_frame_and_the_block_describe_their_network(self):
+        """Items 18 and 19: both change what the weights mean, so both are read back rather than defaulted."""
+        shape = network_shape(self._stored(["--vote-frame", "sensor", "--block", "residual"]))
+
+        assert (shape["vote_frame"], shape["block"]) == ("sensor", "residual")
+
+    def test_a_checkpoint_written_before_either_flag_existed_reads_as_the_adopted_network(self):
+        """Every checkpoint trained so far says nothing about them, and must keep rebuilding exactly as it did."""
+        shape = network_shape({"max_range_m": "10.0", "input_features": "beam"})
+
+        assert (shape["vote_frame"], shape["block"]) == ("beam", "convnext")
+
+    def test_a_sensor_frame_checkpoint_rebuilds_knowing_which_frame_it_votes_in(self):
+        """The decoders read `net.vote_frame`, so losing it would silently rotate every detection."""
+        torch.manual_seed(0)
+        net = CalibrationNetwork(torch.from_numpy(self.ANGLES), channels=(8, 16, 32), vote_frame="sensor", block="residual")
+        stored = self._stored(["--vote-frame", "sensor", "--block", "residual", "--channels", "8", "16", "32"])
+
+        rebuilt = calibration_network(dict(model=net.state_dict(), args=stored), self.ANGLES)
+
+        assert (rebuilt.vote_frame, rebuilt.block) == ("sensor", "residual")
 
     def test_a_checkpoint_rebuilds_into_the_network_it_was_trained_as(self):
         torch.manual_seed(0)
@@ -1491,3 +1514,56 @@ class TestTheCoastingHeadIsGone:
         checkpoint = {"model": trained.state_dict(), "args": {"coast": "True"}}
 
         assert object_memory(checkpoint, feature_dim=0).coast is not None
+
+
+class TestTheSensorFrameTargets:
+    """Item 18's training side: `make_targets` in the frame the head regresses.
+
+    The geometry itself -- that the two parameterisations name one point, and that the rotation is its own inverse --
+    is pinned in `test_takheliped.py`. What belongs here is what the arm trains on, because `make_targets` is
+    `utils/train.py`'s and is shared with every other detector, so a default that moved would retarget all of them.
+    """
+
+    ANGLES = np.deg2rad(np.linspace(-90.0, 90.0, 91))
+
+    @staticmethod
+    def _endpoints(scan, angles):
+        return np.stack([scan * -np.sin(angles), scan * np.cos(angles)], axis=-1)
+
+    def test_the_sensor_frame_target_is_the_person_minus_the_beam_endpoint(self):
+        """What the arm actually trains on: one shared frame, so the same person is the same target for every beam."""
+        scan = np.full(len(self.ANGLES), 4.0)
+        person = (4.0, 0.0)
+        labels, sensor = make_targets(scan, self.ANGLES, {3: [person]}, frame="sensor")
+        seen = labels > 0
+        centre = np.array([person[0] * -np.sin(person[1]), person[0] * np.cos(person[1])])
+
+        assert seen.any()
+        assert np.allclose(sensor[seen], centre[None, :] - self._endpoints(scan, self.ANGLES)[seen], atol=1e-6)
+
+    def test_the_two_target_frames_describe_the_same_people(self):
+        scan = np.linspace(2.0, 8.0, len(self.ANGLES))
+        people = [(3.0, -0.4), (6.0, 0.5)]
+        beam_labels, beam = make_targets(scan, self.ANGLES, {3: people})
+        sensor_labels, sensor = make_targets(scan, self.ANGLES, {3: people}, frame="sensor")
+
+        assert np.array_equal(beam_labels, sensor_labels)
+        assert np.allclose(swap_vote_frame(sensor, self.ANGLES), beam, atol=1e-6)
+
+    def test_an_unlabelled_beam_votes_zero_in_either_frame(self):
+        """A zero target must stay zero: the loss is taken over every beam, so a rotated nothing would be something."""
+        scan = np.full(len(self.ANGLES), 4.0)
+        labels, sensor = make_targets(scan, self.ANGLES, {3: [(4.0, 0.0)]}, frame="sensor")
+
+        assert (sensor[labels == 0] == 0).all()
+
+    def test_the_beam_frame_is_the_default_so_every_other_detector_is_untouched(self):
+        scan = np.linspace(2.0, 8.0, len(self.ANGLES))
+        people = [(3.0, -0.4)]
+
+        assert np.array_equal(make_targets(scan, self.ANGLES, {3: people})[1],
+                              make_targets(scan, self.ANGLES, {3: people}, frame="beam")[1])
+
+    def test_an_unknown_target_frame_is_refused(self):
+        with pytest.raises(ValueError, match="frame"):
+            make_targets(np.full(8, 4.0), self.ANGLES[:8], {3: []}, frame="world")

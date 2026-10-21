@@ -6,6 +6,50 @@ By how much should a given accuracy or speed number be discounted, and why.
 The standing comparison against published SOTA is in [`performance-log.md`](performance-log.md), and individual runs and sweeps in [`../CHANGELOG.md`](../CHANGELOG.md); this file is about how to read either correctly.
 
 
+## A CPU millisecond moves between sessions, so only arms measured back to back can be compared (2026-10-20)
+
+**Found while answering item 16's second half**, and it changes how every future CPU row has to be taken. minGRU's memory
+phase came out 0.18 ms above the adopted arm's -- until the one phase that *cannot* differ was checked.
+
+**Stage 2 is a free control in every stage-3 CPU row.** Every stage-3 arm loads the *same* averaged stage-2 checkpoint, so
+its `stage2` phase is byte-identical work. Any difference between two rows' `stage2` is therefore pure measurement noise,
+and it bounds what a difference in the other phases can mean. Three readings per arm, 2,000 consecutive scans each:
+
+| arm | phase | r1 | r2 | r3 | spread |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `selective` | stage 2 | 8.47 | 8.81 | 8.78 | 0.34 |
+| `selective` | memory | 9.12 | 9.36 | 9.36 | 0.24 |
+| `selective` | **total** | **19.15** | **19.75** | **19.77** | **0.62** |
+| `mingru` | stage 2 | 8.90 | 8.77 | 8.89 | 0.13 |
+| `mingru` | memory | 9.30 | 9.27 | 9.32 | 0.05 |
+| `mingru` | **total** | **19.76** | **19.66** | **19.81** | **0.15** |
+
+**The offset is between sessions, not between arms.** `selective`'s r1 is the 2026-10-19 in-chain reading, and it agrees
+with item 30's independent 2026-10-11 row to 0.03 ms (19.15 both times). Tonight's session reads **~0.6 ms slower for both
+arms alike**, about 3%. So a row is reproducible within a session and carries a few percent of drift across sessions.
+
+**Judged inside one session, which is the only matched comparison** (r2 and r3 of each arm, interleaved):
+
+| phase | `selective` | `mingru` | difference |
+| --- | ---: | ---: | ---: |
+| stage 2 *(the control -- must be 0)* | 8.79 | 8.83 | **+0.04** |
+| decode | 1.56 | 1.55 | -0.01 |
+| memory | 9.36 | 9.29 | **-0.06** |
+| **total** | **19.76** | **19.73** | **-0.02** |
+
+So **minGRU's CPU cost is indistinguishable from the adopted recurrence's**: its 0.06 ms edge on the memory is barely above
+the 0.04 ms the control says is noise, and the totals differ by less than the control does.
+
+**The rules this leaves:**
+
+- **Never compare a CPU row against one from another session.** Re-measure the control arm alongside any new arm; it costs
+  about 45 seconds per reading and the protocol is identical, so there is no excuse for the cross-session comparison.
+- **Read the `stage2` phase first.** If two rows disagree there, they are not comparable anywhere, however interesting the
+  `memory` column looks.
+- **A single reading is not a measurement.** Within a session the spread is 0.15 ms; the first cross-session comparison
+  attempted here would have reported a 0.18 ms "cost" that does not exist.
+- The raw readings are in `results/item16_cpu_repeats.json`.
+
 ## A GPU millisecond is not a CPU millisecond, and this project is judged on the CPU (2026-10-19)
 
 **The owner's framing, and it changes which number is the headline.** DROW and LFE targeted cheap, CPU-only robots; nothing

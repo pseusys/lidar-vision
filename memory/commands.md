@@ -96,6 +96,21 @@ Each writes `../checkpoints_three_horizon/<step>_*.best.pth` (the run's best, wh
 **There is no `--max-hours`** (removed 2026-10-09, A50 phase 1 item 6): a run is bounded by `--max-epochs` and `--patience`, and the wall-clock cap only ever truncated a healthy run -- it ended A51's first full-curriculum step 3a inside its first chunk-length stage. `--limit-recordings N` makes a smoke run. Launch long runs as a detached process, not as a child of an agent session, which ends with the session.
 
 `--frog-mode {official,transferred,balanced}` selects the FROG partition (default `official`, the published benchmark).
+
+**The ablation flags, and which script scores each.** Every one of these is recorded in the checkpoint and restored from it
+(`network_shape` for stage 2, `object_memory` for stage 3), so a checkpoint rebuilds into the network it was trained as and
+one written before a flag existed falls back to the adopted default.
+
+| flag | step | item | arms |
+| --- | --- | --- | --- |
+| `--recurrence selective\|gru\|mingru` | `step3a` | 16 | which rule updates a slot's state; **only `selective` sees `dt`**, which is the comparison |
+| `--vote-frame beam\|sensor` | `step2` | 18 | which frame the head regresses the offset to a person's centre in |
+| `--block convnext\|residual` | `step2` | 19 | which block carries the U-Net's depth |
+| `--channels 64 128 256` | `step2` | 19 | the widening half of item 19; no new code was needed |
+| `--gather-width-m`, `--gather-samples` | `step2` | 15 | the metric-width first layer -- **answered, it costs** |
+
+Their queues: `queue_item16.py` (the recurrences, each with its own CPU latency job) and `queue_items1819.py` (three stage-2
+arms at three seeds, each followed by its weight average, then one `stage2_probe.py` pass over all twelve checkpoints).
 It is **stored in the checkpoint**, so `evaluate.py` defaults to the partition the weights were trained under and refuses to score two differently-partitioned checkpoints in one pass.
 `transferred` shares `official`'s train and val exactly, so one checkpoint serves both; `balanced` does not, and its val contains a recording the published baselines trained on.
 

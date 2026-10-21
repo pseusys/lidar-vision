@@ -38,6 +38,173 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Items 18 and 19 answered: the beam frame wins, the block and the width do not matter (2026-10-21)
+
+*keywords: item 18, item 19, a67_sensor, a67_residual, a67_wide, --vote-frame sensor, --block residual, --channels 64 128 256, stage2_probe_items1819.json, nms-mean, averaged weights*
+
+Three arms at three seeds each, every arm the adopted stage-2 recipe plus one flag, scored on the **averaged** weights that
+stage 3 actually loads, through the adopted `nms-mean` decoder (`results/stage2_probe_items1819.json`):
+
+| arm | what it changes | seeds | mean | vs control |
+| --- | --- | --- | ---: | ---: |
+| **control** (beam frame, ConvNeXt, 32/64/128) | -- | 82.28 / 82.08 / 82.22 | **82.19%** | -- |
+| `sensor` (item 18) | the head regresses in the sensor's shared Cartesian frame | 81.48 / 81.32 / 81.47 | **81.42%** | **-0.77** |
+| `residual` (item 19a) | a plain residual block, no depthwise, no inverted bottleneck | 82.34 / 81.75 / 81.98 | 82.02% | -0.17 |
+| `wide` (item 19b) | widths doubled to 64/128/256, ~3x the parameters | 82.50 / 82.31 / 81.94 | 82.25% | +0.06 |
+
+**Item 18 is a clean negative and the only separated result here: every `sensor` seed sits below every control seed**, the
+two ranges not touching (81.32-81.48 against 82.08-82.28). DROW's beam-relative `(across, along)` parameterisation is the
+better target, and the reason is readable -- the head's input is a per-beam feature stack, so a target expressed in that
+beam's own frame asks each output for a quantity its receptive field is centred on, while a shared Cartesian target asks
+every beam for the same global coordinate and makes the bearing something the network has to carry. The conversion is
+exact and the arm is cheap, which is what made the question answerable rather than arguable.
+
+**Item 19 is flat in both directions.** The plain residual block loses 0.17 pp with overlapping ranges, and **doubling the
+widths buys 0.06 pp for roughly three times the parameters** -- which closes A59's W arm from the other side: shrinking to
+LFE's widths cost 1.4 pp, widening gains nothing, so the adopted 32/64/128 sits at the top of a flat plateau and capacity
+is genuinely not where this detector's score lives.
+
+## Item 16 closed: the three recurrences tie on accuracy, and only the GRU costs more (2026-10-19 to 2026-10-21)
+
+*keywords: item 16, a66_mingru_s0, --recurrence, mingru, gru, selective diagonal decay, Feng 2024, ObjectMemory._recur, latency_cpu_t4.json, memory_ms_per_frame, item16_cpu_repeats.json, session offset, stage2 control*
+
+`ObjectMemory` gained `--recurrence`, with three arms: `selective` (the adopted rule -- a diagonal state whose decay rate is
+read off the input and applied over the **real elapsed time**, `exp(-dt * rate)` in seconds), `gru` (Cho et al., 2014) and
+`mingru` (Feng et al., *Were RNNs All We Needed?*, 2024 -- no reset gate, no hidden-state dependence in the gate). The item
+is a **defence**, not a hoped-for improvement: "why a bespoke selective diagonal recurrence and not a GRU?" is what a
+reviewer asks about this paper's central mechanism, and A51's D3 made it sharper rather than softer, since fixing the decay
+rate costs 1.04 pp.
+
+**Neither `gru` nor `mingru` sees `dt`, and that is the comparison rather than an oversight**: they take a *step*, while a
+robot's frames are not uniformly spaced. Bolting `dt` onto a GRU would measure something else.
+
+**The minGRU arm, at seed 0, against the matched control** (`a64_no_coast_s0`, the frozen memory; test stride 5, as the
+step-1 arms table is scored):
+
+| arm | AP | FP/frame | recall | epochs | wall | best val at |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| adopted control, 3 seeds | 85.49-86.35% | 0.849-1.239 | 81.17-87.76% | -- | -- | -- |
+| `selective` (matched seed) | 86.08% | 0.885 | 82.63% | 65 | **5.06 h** | epoch 16 |
+| `mingru` | **86.40%** | 0.911 | 84.33% | 64 | **10.06 h** | epoch 45 |
+
+**No accuracy difference.** +0.32 pp over the matched seed sits inside the control's own three-seed range on all three
+columns, and E13's three-sigma AP bar is 1.32 pp. One seed against three, so this is "no evidence of a difference", not
+equivalence.
+
+**But minGRU's whole selling point is that it is cheaper, and on this host it is not.** The same epoch budget took
+**twice the wall time**, 10.06 h against 5.06 h for 64 epochs against 65, and convergence was far slower, best val at
+epoch 45 against epoch 16. Inference on the GPU reads 4.84 ms/frame against 3.65. (Per-epoch times are not comparable
+across the two arms directly -- `--chunk-s 1 10` trains two curriculum stages whose epochs cost differently -- so the
+total for a matched epoch budget is the figure to quote.)
+
+**The half that decides the item is the CPU cost**, because CPU `ms/frame` is this project's deployment axis (owner's
+call, 2026-10-19) and `step3a_results.json`'s `memory_ms_per_frame` is timed on whatever device trained the arm -- the GPU
+here -- so it does not answer the question. `queue_item16.py` therefore gives every arm a `tracking_baselines.py latency
+--device cpu --threads 4` job of its own, including the adopted arm, so the three are measured rather than two measured
+and one quoted.
+
+**Measured 2026-10-20, and the first attempt at it was wrong in a way worth recording.** minGRU's memory phase came out
+0.18 ms above the adopted arm's -- a 2% cost, which is exactly the kind of number this item exists to find. It is not
+real. Comparing the two rows' **stage 2** phase gave it away: every stage-3 arm loads the *same* averaged stage-2
+checkpoint, so `stage2` is byte-identical work and any difference between two rows there is pure measurement noise. It
+differed by 0.43 ms, more than twice the "cost" being reported, because the two rows came from different sessions.
+
+Three readings per arm, interleaved inside one session, settle it:
+
+| phase | `selective` | `mingru` | difference |
+| --- | ---: | ---: | ---: |
+| stage 2 *(identical weights -- the control, must be 0)* | 8.79 | 8.83 | **+0.04** |
+| decode | 1.56 | 1.55 | -0.01 |
+| memory | 9.36 | 9.29 | **-0.06** |
+| **total** | **19.76** | **19.73** | **-0.02** |
+
+**No CPU difference either**: minGRU's 0.06 ms edge on the memory is barely above the 0.04 ms the control calls noise, and
+the totals differ by less than the control does. Both arms sit at 79% of FROG's 25 ms period.
+
+**The methodological finding, now a rule in `interpreting-evaluation.md`:** a CPU row reproduces within a session (spread
+0.15 ms) and drifts about 3% across sessions -- `selective`'s in-chain row agrees with item 30's independent 2026-10-11
+measurement to 0.03 ms, while 2026-10-20 read 0.6 ms slower for *both* arms alike. So **never compare a CPU row against
+one from another session**, re-measure the control arm alongside any new arm, and **read the `stage2` phase first**: if two
+rows disagree there, they are not comparable anywhere. Raw readings in `results/item16_cpu_repeats.json`.
+
+**The `gru` arm, and item 16's answer.** `gru` trained in **4.46 h** over 43 epochs -- the *cheapest* of the three -- to
+test AP **86.12%**, FP 0.740, recall 80.68%. So all three recurrences land inside one bar:
+
+| arm | AP | FP/frame | recall | train wall | CPU memory | CPU total | p99 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `selective` (frozen, 3 seeds) | 85.88-86.08, mean **86.01** | 0.885-1.086 | 82.63-86.28 | 5.06 h | 9.21 | **19.50** | 21.80 |
+| `mingru` | **86.40%** | 0.911 | 84.33% | 10.06 h | 9.10 | **19.39** | 21.69 |
+| `gru` | 86.12% | **0.740** | 80.68% | **4.46 h** | **10.33** | **20.57** | 23.01 |
+
+**On accuracy the recurrence rule does not matter**: the whole spread across five runs is **0.52 pp** (85.88-86.40)
+against E13's 1.32 pp three-sigma bar. **On the CPU the GRU does**: +1.12 ms on the memory phase (+12%) and +1.07 ms on
+the total, against a stage-2 control spread of **0.04 ms** across the three rows -- 28 times the noise floor, so this one
+is real where the accuracy differences are not. minGRU is 0.11 ms cheaper than the adopted rule, about three times the
+control spread, and pays for it with twice the training time.
+
+**The CPU rows above are a single matched sweep, and the in-chain rows must not be used instead.** `gru_cpu`'s own
+queue-written row reads total 23.87 ms with its **stage-2 phase at 10.49 ms** against the other arms' 8.47 and 8.90 --
+inflated across every phase by session load, which the identical-weights control makes visible immediately. Re-measured
+back to back on an idle host, all three stage-2 phases agree to 0.04 ms and the comparison becomes readable. This is the
+session-offset rule in `memory/interpreting-evaluation.md`, and it is the second time it has caught a wrong reading.
+
+**Item 16's answer, both axes:** the adopted selective rule is defended against the GRU **on cost, not on score** -- it is
+5% cheaper end to end and 12% cheaper in the phase being varied -- and against minGRU on nothing measurable except
+training time. What no arm shows is a *score* advantage for reading elapsed time: `gru` and `mingru` have no notion of
+`dt`, the adopted rule decays in `exp(-dt * rate)` over real seconds, and that difference does not appear in AP at all.
+D3 stands (fixing the decay rate costs 1.04 pp) but it varies the rate *within* the dt-aware family, so it cannot carry
+the claim. **FROG runs at a near-constant 40.01 Hz**, so the likeliest explanation is that this dataset never exercises
+the mechanism -- which makes the honest write-up "the recurrences are interchangeable here, and the dt-awareness is a
+principled design property this data cannot test" until item 37 measures it under induced frame drops.
+
+Seven tests, and the one that carries the comparison needed correcting before it was right. The first version asserted
+that a whole `step` is time-blind in the `gru` arms, and it is not, for a good reason worth keeping: the slot statistics
+fed to every recurrence include age, time since match and the hit rate, which move with `dt` whatever the rule does with
+them. **The arms differ in whether elapsed time enters the recurrence, not in whether the model can see it at all**, so
+the test now asks that of `_recur` directly.
+
+## Items 18 and 19: the head's target frame and the block it is built from, ready to run (2026-10-19)
+
+*keywords: item 18, item 19, --vote-frame, sensor, --block, residual, ResidualBlock, swap_vote_frame, beam_frame_votes, make_targets frame, queue_items1819.py, a67*
+
+Both are **defence items** -- A59 put about half this project's lead over LFE-Peaks in the output head, so the head is
+already the good part, and A59's W arm priced *shrinking* to LFE's widths at 1.4 pp without buying speed, so capacity is
+not where the score is. Neither had code. Both now do, and both are cheap: a stage-2 run is about **twenty minutes**, so
+three arms at three seeds cost roughly half of one stage-3 arm.
+
+**Item 18, `--vote-frame {beam,sensor}`.** DROW's convention, which this project inherited, puts each beam's regression in
+its **own rotated frame**: `(across, along)`, measured from that beam's endpoint. One person is therefore a different
+target for every bearing that sees it. The arm gives every beam the sensor's **one shared Cartesian frame** instead.
+
+The two name the same point, so the change is exactly two lines of geometry and lands in exactly two places:
+
+* `swap_vote_frame(votes, angles)` in `drow_utils.py`, beside `_win2global`, which is the convention it converts away
+  from. A beam at bearing `phi` points along `u = (-sin phi, cos phi)` and `across` is measured along
+  `v = (-cos phi, -sin phi)`, so the parameterisations differ by the rotation `[[-cos, -sin], [-sin, cos]]`. The beam's
+  own endpoint has no `across` component, which is why the range does not enter: it is a **pure rotation**, lengths are
+  preserved, zero stays zero, and **the matrix is its own inverse**, so one function converts both ways.
+* `make_targets(..., frame=)` builds the targets in the frame the head regresses, and `beam_frame_votes` rotates the
+  head's output back at the decoders' door -- so `nms_decode`, DROW's vote grid and the probe's eight decoders are
+  untouched. The loss is the one place that must *not* convert.
+
+`CalibrationNetwork` records `vote_frame` without reading it in `forward`, and a test pins that: a `forward` that rotated
+would take the loss in the wrong frame and leave the arm measuring nothing.
+
+**Item 19, `--block {convnext,residual}`.** `ResidualBlock` is two full convolutions with a `GroupNorm` and a GELU between
+them (He et al., CVPR 2016): no depthwise separation, so the large kernel is spent across every channel rather than per
+channel, and no inverted bottleneck, so `expansion` has nothing to widen. Item 19's second half needs no code at all --
+`--channels 64 128 256` already doubles the widths -- which a test now states so nobody writes it twice.
+
+Both flags join `network_shape`, so a checkpoint rebuilds into the network it was trained as, and a checkpoint written
+before either existed still reads as `beam`/`convnext`. **24 new tests; 939 pass; ruff clean.**
+
+`queue_items1819.py` holds the experiment: three arms at three seeds, each the adopted recipe plus one flag, each followed
+by its weight average -- because the averaged weights are what stage 3 loads, and scoring the best checkpoint instead
+would compare something the architecture does not use -- then one `stage2_probe.py` pass scoring all twelve against the
+LFE baselines with the per-range and per-crowding breakdowns that priced A59's arms. The control is **already trained**
+(`a59_c1_recipe_dropout01_s{0,1,2}`), so nothing here retrains it. **This is a stage-2 answer, not an end-to-end one**: a
+winner earns a stage-3 run on top, a loser does not. Not launched -- the owner paused the experiments.
+
 ## A53: RESEARCH.md proposes the detector this project actually proposes (2026-10-19)
 
 *keywords: item 10, A53, RESEARCH.md section 5, TAKHeLiPeD, citation audit, ConvNeXt, Slot Attention, Mamba, dt-aware decay, Izmailov SWA, sections 6.1-6.6*

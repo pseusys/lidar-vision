@@ -7,6 +7,50 @@ Open questions live in [`../TODO.md`](../TODO.md); this file is for settled ones
 
 Each entry states what was proposed, what was measured, and what new evidence would be needed to reopen it.
 
+## Sensor-frame vote targets in stage 2's head (TODO.md item 18)
+
+*keywords: item 18, --vote-frame sensor, swap_vote_frame, make_targets frame, a67_sensor, beam-relative offsets, across along*
+
+**Idea.** DROW's head, which this project inherited, regresses the offset to a person's centre in **each beam's own
+rotated frame** -- `(across, along)`, measured from that beam's endpoint. One person is therefore a different target for
+every bearing that sees it. The arm gives every beam the sensor's **one shared Cartesian frame** instead, so a person is
+one target. A59 put about half this project's lead over LFE-Peaks in the output head, which is what made the head worth
+probing.
+
+**What was measured** (2026-10-21, three seeds, averaged weights, adopted `nms-mean` decoder): **81.42% mean against the
+control's 82.19%, -0.77 pp, with every arm seed below every control seed** -- 81.32-81.48 against 82.08-82.28, the two
+ranges not touching. The only separated result of the three arms run that day.
+
+**Why rejected: the beam frame is the better target, and readably so.** The head's input is a per-beam feature stack, so a
+beam-relative target asks each output for a quantity its receptive field is already centred on; a shared Cartesian target
+asks every beam for the same global coordinate and turns the bearing into something the network must carry internally.
+
+**Where it lives, to restore it.** Kept in the tree, off by default and bit-identical when off: `--vote-frame sensor` on
+`step2`, `swap_vote_frame` in `library/takheliped/utils/drow_utils.py` (a pure rotation, its own inverse),
+`make_targets(frame=...)` in `utils/train.py`, and `beam_frame_votes` in `utils/train_takheliped.py`, which rotates the
+head's output back at the decoders' door so no decoder knows which arm produced it.
+
+## A plain residual block, and doubling stage 2's widths (TODO.md item 19)
+
+*keywords: item 19, --block residual, ResidualBlock, ConvNeXtBlock, --channels 64 128 256, a67_residual, a67_wide, capacity plateau*
+
+**Idea.** Two untested parts of stage 2: whether the **ConvNeXt block** is the reason it works (depthwise large kernel,
+inverted bottleneck) or whether a plain residual block of two full convolutions would do (He et al., CVPR 2016); and
+whether **more capacity** helps, since A59's W arm had only ever priced shrinking.
+
+**What was measured** (2026-10-21, three seeds each, averaged weights, `nms-mean`): the residual block **82.02% against
+82.19%**, -0.17 pp with overlapping ranges; the doubled widths **82.25%**, +0.06 pp for roughly **three times the
+parameters**.
+
+**Why rejected: the plateau is flat in both directions.** Shrinking to LFE's widths cost 1.4 pp (A59 arm W) and widening
+gains nothing, so the adopted 32/64/128 sits at the top of a flat region and **capacity is not where this detector's score
+lives**. The block is interchangeable, so ConvNeXt is kept for being no worse and already trained, not for being
+necessary -- which is what a write-up should say about it.
+
+**Where it lives, to restore it.** `--block residual` (`ResidualBlock`, `BLOCKS` in
+`library/takheliped/detectors/takheliped.py`) and `--channels 64 128 256`, which needed no new code. Both are recorded in
+`network_shape`, so a checkpoint rebuilds into the network it was trained as.
+
 ## Stage 2's coarse temporal convolution (TODO.md A60)
 
 *keywords: A60, coarse convolution, CausalTemporalConv, coarse_lags, --coarse-lags, align_sectors, TemporalCache, CalibrationState, calibration horizon, e76aa94, restore*

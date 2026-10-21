@@ -12,7 +12,7 @@ from scipy.ndimage import maximum_filter
 from scipy.spatial.distance import cdist
 from scipy.optimize import linear_sum_assignment
 
-from numpy import zeros, arctan, arctan2, square, add, sin, cos, logical_not, concatenate, linspace, sum, mean, argmin, argsort, array, asarray, diff, where, full_like, arange, clip, unique, radians, float32, float64, int64, uint32, nan, c_, r_
+from numpy import stack, zeros, arctan, arctan2, square, add, sin, cos, logical_not, concatenate, linspace, sum, mean, argmin, argsort, array, asarray, diff, where, full_like, arange, clip, unique, radians, float32, float64, int64, uint32, nan, c_, r_
 from numpy.typing import NDArray
 
 from cv2 import GaussianBlur
@@ -325,6 +325,22 @@ def _win2global(r, phi, dx, dy):
     y = r + dy
     dphi = arctan2(dx, y)  # dx first is correct due to problem geometry dx -> y axis and vice versa.
     return y / cos(dphi), phi + dphi
+
+
+def swap_vote_frame(votes, angles):
+    """Vote offsets `[..., N, 2]` between the beam frame DROW uses and the sensor's own Cartesian one (`TODO.md` item 18).
+
+    A beam at bearing `phi` points along `u = (-sin phi, cos phi)` in the project frame (`project_cartesian_from_polar`),
+    and `across` is measured along `v = (-cos phi, -sin phi)`, so the two parameterisations of one offset differ by the
+    rotation `[[-cos, -sin], [-sin, cos]]`. The beam's own endpoint has no `across` component, which is why the range
+    does not enter and the conversion is a pure rotation: lengths are preserved and zero stays zero.
+
+    **The matrix is its own inverse**, so this one function converts in both directions -- beam-frame `(across, along)`
+    to sensor-frame `(dx, dy)` and back.
+    """
+    c, s = cos(angles), sin(angles)
+    dx, dy = votes[..., 0], votes[..., 1]
+    return stack([-c * dx - s * dy, -s * dx + c * dy], axis=-1)
 
 
 def prepare_prec_rec_softmax(scans, pred_offs):

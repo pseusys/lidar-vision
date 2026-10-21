@@ -858,7 +858,8 @@ def run_latency(args) -> None:
     import torch
     from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
     from takheliped.detectors.takheliped import free_range_profile
-    from train_takheliped import MAX_RANGE_M, SECTOR_BEAMS, TOP_P, calibration_network, decode_candidates, detect_device, laser_angles, object_memory
+    from train_takheliped import (MAX_RANGE_M, SECTOR_BEAMS, TOP_P, beam_frame_votes, calibration_network, decode_candidates,
+                                  detect_device, laser_angles, object_memory)
 
     if args.threads:
         torch.set_num_threads(args.threads)
@@ -883,7 +884,8 @@ def run_latency(args) -> None:
             t0 = tick()
             logit, votes, features = net(torch.from_numpy(np.asarray(scan, np.float32)[None]).to(device))
             t1 = tick()
-            candidates, weights = decode_candidates(np.asarray(scan), angles, torch.sigmoid(logit)[0].cpu().numpy(), votes[0].cpu().numpy(), TOP_P, net.max_range_m)
+            offsets = beam_frame_votes(votes[0].cpu().numpy(), angles, net.vote_frame)
+            candidates, weights = decode_candidates(np.asarray(scan), angles, torch.sigmoid(logit)[0].cpu().numpy(), offsets, TOP_P, net.max_range_m)
             pooled = weights @ features[0].T.cpu().numpy()
             if memory is None:
                 memory = object_memory(checkpoint, pooled.shape[1]).to(device).eval()

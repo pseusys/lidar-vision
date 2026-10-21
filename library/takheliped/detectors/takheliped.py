@@ -35,6 +35,7 @@ SILENT_COAST_LOGIT = -10.0
 # **real seconds** because a robot's frames are not uniformly spaced. `gru` and `mingru` take a *step* and have no notion of
 # elapsed time, which is not an oversight in the arm -- it is what the comparison measures.
 RECURRENCES = ("selective", "gru", "mingru")
+VOTE_FRAMES = ("beam", "sensor")
 VISIBILITY_SCALE_M = 1.0        # a metre of free space past a slot saturates the evidence against it
 HIT_RATE_TIME_S = 1.0
 FEATURE_SCALE = 10.0
@@ -498,6 +499,30 @@ class ConvNeXtBlock(nn.Module):
         return x + self.narrow(self.activation(self.widen(self.norm(self.depthwise(x)))))
 
 
+class ResidualBlock(nn.Module):
+    """Two full convolutions with normalisation and a GELU between them, residual (He et al., CVPR 2016) -- `TODO.md` item 19.
+
+    The ablation's point is what it does *not* do: no depthwise separation, so the large kernel is spent across every
+    channel rather than per channel, and no inverted bottleneck, so `expansion` has nothing to widen and is accepted only
+    to keep `_stage`'s signature. A59's W arm priced shrinking the widths at 1.4 pp without buying speed, so capacity is
+    not where the score is; whether the *block* is remains untested, and this is the arm that tests it.
+    """
+
+    def __init__(self, channels: int, kernel_size: int = 7, expansion: int = 4):
+        super().__init__()
+        self.first = nn.Conv1d(channels, channels, kernel_size, padding=kernel_size // 2)
+        self.norm = nn.GroupNorm(1, channels)
+        self.activation = nn.GELU()
+        self.second = nn.Conv1d(channels, channels, kernel_size, padding=kernel_size // 2)
+        self.out_norm = nn.GroupNorm(1, channels)
+
+    def forward(self, x: Tensor) -> Tensor:
+        return x + self.out_norm(self.second(self.activation(self.norm(self.first(x)))))
+
+
+BLOCKS = {"convnext": ConvNeXtBlock, "residual": ResidualBlock}
+
+
 def metric_offsets(ranges: Tensor, step_rad: float, width_m: float, samples: int) -> Tensor:
     """Where each beam should read, in beams, to span a fixed **metric** width `[..., N] -> [..., N, samples]`.
 
@@ -553,8 +578,8 @@ class MetricGather(nn.Module):
         return x + self.norm(self.mix(gather_beams(x, offsets))[..., 0])
 
 
-def _stage(channels: int, blocks: int, kernel_size: int, expansion: int) -> nn.Sequential:
-    return nn.Sequential(*(ConvNeXtBlock(channels, kernel_size, expansion) for _ in range(blocks)))
+def _stage(channels: int, blocks: int, kernel_size: int, expansion: int, block: str = "convnext") -> nn.Sequential:
+    return nn.Sequential(*(BLOCKS[block](channels, kernel_size, expansion) for _ in range(blocks)))
 
 
 class CalibrationNetwork(nn.Module):
@@ -569,19 +594,30 @@ class CalibrationNetwork(nn.Module):
     beam features with LFE's one input channel (`lfe_features`), for the attribution arm F1 (`TODO.md` A59).
     `gather_width_m` above zero inserts a `MetricGather` after the stem, so the first spatial layer reads a window of that many
     metres of arc instead of a fixed count of beams (`TODO.md` item 15); zero, the default, leaves the network exactly as it was.
+    `vote_frame` records which frame the head's two outputs are an offset in -- DROW's beam-relative `(across, along)` by
+    default, or the sensor's shared Cartesian frame (`TODO.md` item 18) -- and `block` which block carries the depth,
+    ConvNeXt by default or a plain residual one (item 19).
     """
 
     def __init__(self, angles: Tensor, channels: Tuple[int, int, int] = (32, 64, 128), blocks: Tuple[int, int, int] = (2, 2, 2),
                  bottleneck_blocks: int = 2, kernel_size: int = 7, expansion: int = 4,
                  prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M, input_features: str = "beam",
-                 gather_width_m: float = 0.0, gather_samples: int = 9):
+                 gather_width_m: float = 0.0, gather_samples: int = 9, vote_frame: str = "beam", block: str = "convnext"):
         super().__init__()
         if input_features not in INPUT_CHANNELS:
             raise ValueError(f"input_features must be one of {sorted(INPUT_CHANNELS)}, not {input_features!r}")
+        if vote_frame not in VOTE_FRAMES:
+            raise ValueError(f"vote_frame must be one of {list(VOTE_FRAMES)}, not {vote_frame!r}")
+        if block not in BLOCKS:
+            raise ValueError(f"block must be one of {sorted(BLOCKS)}, not {block!r}")
         c0, c1, c2 = channels
         self.prior_channels = prior_channels
         self.max_range_m = max_range_m
         self.input_features = input_features
+        # What the head's two outputs mean, and which block carries the depth. Neither is read inside `forward` -- the
+        # frame is a property of the targets the weights were fitted to, and the block has already chosen the modules --
+        # but both are recorded so `network_shape` restores a checkpoint into the network it was trained as.
+        self.vote_frame, self.block = vote_frame, block
         self.register_buffer("angles", angles.clone(), persistent=False)
         self.stem = nn.Conv1d(INPUT_CHANNELS[input_features], c0, 1)
         # Off unless asked for, and bit-identical when off, so every trained checkpoint keeps reading the same
@@ -589,15 +625,15 @@ class CalibrationNetwork(nn.Module):
         # sensor has a different increment, and the window is specified in metres.
         self.gather = MetricGather(c0, gather_width_m, gather_samples, float(angles[1] - angles[0])) \
             if gather_width_m > 0 else None
-        self.encoder = nn.ModuleList([_stage(c, n, kernel_size, expansion) for c, n in zip(channels, blocks)])
+        self.encoder = nn.ModuleList([_stage(c, n, kernel_size, expansion, block) for c, n in zip(channels, blocks)])
         self.down = nn.ModuleList([nn.Conv1d(c0, c1, 2, stride=2), nn.Conv1d(c1, c2, 2, stride=2), nn.Conv1d(c2, c2, 2, stride=2)])
         self.aggregate = nn.Conv1d(2 * c2 + prior_channels, c2, 1)
         with no_grad():
             self.aggregate.weight[:, 2 * c2:].zero_()        # the memory prior starts silent
         self.context = nn.Conv1d(c2, c2, 3, padding=1)
-        self.bottleneck = _stage(c2, bottleneck_blocks, kernel_size, expansion)
+        self.bottleneck = _stage(c2, bottleneck_blocks, kernel_size, expansion, block)
         self.merge = nn.ModuleList([nn.Conv1d(2 * c2, c2, 1), nn.Conv1d(c2 + c1, c1, 1), nn.Conv1d(c1 + c0, c0, 1)])
-        self.decoder = nn.ModuleList([_stage(c, 1, kernel_size, expansion) for c in (c2, c1, c0)])
+        self.decoder = nn.ModuleList([_stage(c, 1, kernel_size, expansion, block) for c in (c2, c1, c0)])
         self.dropout = nn.Dropout(dropout)
         self.head = nn.Conv1d(c0, 3, 1)
 

@@ -47,11 +47,12 @@ sys.path.insert(0, str(_HERE))
 from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from takheliped.detectors import LFEPeaksDetector
 from takheliped.detectors.takheliped import (
-    MAX_RANGE_M, RECURRENCES, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
+    BLOCKS, MAX_RANGE_M, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
     world_to_sensor,
 )
 from takheliped.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
-from takheliped.utils.drow_utils import _prec_rec_2d, _win2global, frame_period_s, project_cartesian_from_polar, votes_to_detections
+from takheliped.utils.drow_utils import (_prec_rec_2d, _win2global, frame_period_s, project_cartesian_from_polar,
+                                         swap_vote_frame, votes_to_detections)
 from train import _safe_auc, compute_loss, detect_device, make_targets
 
 VOTE_DECODING = dict(blur_sigma=2.0, blur_win=11, bin_size=0.1, vote_collect_radius=0.5, min_thresh=1e-3)
@@ -516,6 +517,17 @@ def beam_votes(scan: np.ndarray, angles: np.ndarray, votes: np.ndarray) -> np.nd
     return np.stack([r * -np.sin(phi), r * np.cos(phi)], axis=1)
 
 
+def beam_frame_votes(votes: np.ndarray, angles: np.ndarray, frame: str) -> np.ndarray:
+    """Stage 2's head output `[..., N, 2]` as the beam-frame `(across, along)` offsets every decoder here reads.
+
+    A network trained with `--vote-frame sensor` regresses the offset in the sensor's own Cartesian frame instead
+    (`TODO.md` item 18). The two name the same point, so one rotation puts either on the decoders' convention and
+    nothing downstream -- `nms_decode`, the vote grid, the probe's eight decoders -- has to know which arm produced it.
+    The loss is the one place that must *not* convert: it is taken in the frame the head regresses.
+    """
+    return votes if frame == "beam" else swap_vote_frame(votes, angles)
+
+
 def nms_decode(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np.ndarray, min_dist: float = NMS_DIST_M, average: bool = False) -> np.ndarray:
     """The official DR-SPAAM repository's `nms_predicted_center`: beams in order of probability, each kept beam's vote a detection
     scored by that beam alone, and every vote within `min_dist` of it suppressed. Beams under the vote grid's floor cast nothing.
@@ -587,17 +599,19 @@ def decode_candidates(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, vo
 
 def network_shape(args: Dict[str, str]) -> Dict[str, object]:
     """The `CalibrationNetwork` arguments a stage-2 run's `args` (stored as strings) fix, because they change what the input means
-    or which weights exist: the range limit, the input (`--input-features`), the widths (`--channels`) and the metric gather
-    (`--gather-width-m`, `--gather-samples`) -- the middle two for the attribution arms F1 and W (`TODO.md` A59), the last for
-    item 15. A flag left unset, or written before it existed, falls back to the constructor's own
-    default rather than to a second copy of it here."""
+    or which weights exist: the range limit, the input (`--input-features`), the widths (`--channels`), the metric gather
+    (`--gather-width-m`, `--gather-samples`), the head's target frame (`--vote-frame`) and the block (`--block`) -- the middle
+    two for the attribution arms F1 and W (`TODO.md` A59), then items 15, 18 and 19. A flag left unset, or written before it
+    existed, falls back to the constructor's own default rather than to a second copy of it here."""
     parameters = signature(CalibrationNetwork).parameters
     unset = (None, "None")
     return {"max_range_m": parameters["max_range_m"].default if args.get("max_range_m") in unset else float(args["max_range_m"]),
             "input_features": parameters["input_features"].default if args.get("input_features") in unset else args["input_features"],
             "channels": parameters["channels"].default if args.get("channels") in unset else tuple(literal_eval(args["channels"])),
             "gather_width_m": parameters["gather_width_m"].default if args.get("gather_width_m") in unset else float(args["gather_width_m"]),
-            "gather_samples": parameters["gather_samples"].default if args.get("gather_samples") in unset else int(args["gather_samples"])}
+            "gather_samples": parameters["gather_samples"].default if args.get("gather_samples") in unset else int(args["gather_samples"]),
+            "vote_frame": parameters["vote_frame"].default if args.get("vote_frame") in unset else args["vote_frame"],
+            "block": parameters["block"].default if args.get("block") in unset else args["block"]}
 
 
 def calibration_network(checkpoint: dict, angles: np.ndarray, **overrides) -> CalibrationNetwork:
@@ -681,7 +695,8 @@ def network_candidates(net: CalibrationNetwork, scans: np.ndarray, device) -> Li
     out = []
     for scan in scans:
         logit, votes, features = net(torch.from_numpy(np.asarray(scan, np.float32)[None]).to(device))
-        candidates, weights = decode_candidates(np.asarray(scan), angles, torch.sigmoid(logit)[0].cpu().numpy(), votes[0].cpu().numpy(), TOP_P, net.max_range_m)
+        offsets = beam_frame_votes(votes[0].cpu().numpy(), angles, net.vote_frame)
+        candidates, weights = decode_candidates(np.asarray(scan), angles, torch.sigmoid(logit)[0].cpu().numpy(), offsets, TOP_P, net.max_range_m)
         out.append((candidates, weights @ features[0].T.cpu().numpy()))
     return out
 
@@ -1210,7 +1225,8 @@ def joint_step(net: CalibrationNetwork, memory: ObjectMemory, ranges: torch.Tens
             prior = render_prior(predicted, slots.value, torch.sigmoid(state.slot_logit), slots.alive, net.angles, sectors)
     logit, votes, features = net(ranges, prior)
     angles = net.angles.cpu().numpy()
-    prob, votes_np, scans = torch.sigmoid(logit).detach().cpu().numpy(), votes.detach().cpu().numpy(), ranges.cpu().numpy()
+    prob, scans = torch.sigmoid(logit).detach().cpu().numpy(), ranges.cpu().numpy()
+    votes_np = beam_frame_votes(votes.detach().cpu().numpy(), angles, net.vote_frame)
     xy, score = np.zeros((b, TOP_P, 2), np.float32), np.zeros((b, TOP_P), np.float32)
     valid, weights = np.zeros((b, TOP_P), bool), np.zeros((b, TOP_P, n), np.float32)
     for i in range(b):
@@ -1232,7 +1248,8 @@ def evaluate_calibration(net: CalibrationNetwork, split: FrameSplit, positions: 
     frames = []
     for chunk in np.array_split(positions, math.ceil(len(positions) / batch)):
         logit, votes, _ = net(frame_batch(split, split.annotated[chunk], device))
-        prob, votes = torch.sigmoid(logit).cpu().numpy(), votes.cpu().numpy()
+        prob = torch.sigmoid(logit).cpu().numpy()
+        votes = beam_frame_votes(votes.cpu().numpy(), angles, net.vote_frame)
         for j, a in enumerate(chunk):
             scan, p = voting_beams(split.scans[split.annotated[a]], prob[j], net.max_range_m)
             dets = decode_frame(scan, angles, p, votes[j])
@@ -1310,7 +1327,8 @@ def train_calibration(args) -> None:
                 people = [mirror_people(g, angles) if m else g for g, m in zip(people, flip, strict=True)]
             logit, votes, _ = net(ranges)
             targets = [make_targets(anchor_ranges(s, net.max_range_m), angles, {3: [tuple(p) for p in g]},
-                                    vote_collect_radius=args.label_radius, nearest=args.label_assign == "nearest") for s, g in zip(scans, people, strict=True)]
+                                    vote_collect_radius=args.label_radius, nearest=args.label_assign == "nearest",
+                                    frame=net.vote_frame) for s, g in zip(scans, people, strict=True)]
             labels = torch.from_numpy(np.stack([t[0] for t in targets])).to(device)
             vote_targets = torch.from_numpy(np.stack([t[1] for t in targets])).to(device)
             loss, _, _ = compute_loss(logit.reshape(-1, 1), votes.reshape(-1, 2), labels.reshape(-1), vote_targets.reshape(-1, 2))
@@ -1372,7 +1390,7 @@ def recording_bounds(start: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def joint_frame_loss(joint: JointOutput, scans: np.ndarray, angles: np.ndarray, people_polar: Sequence[Optional[np.ndarray]],
-                     people_xy: Sequence[Optional[np.ndarray]]) -> torch.Tensor:
+                     people_xy: Sequence[Optional[np.ndarray]], vote_frame: str = "beam") -> torch.Tensor:
     """One frame's loss for `B` streams: stage 2's DROW head loss on its per-beam logits and votes, plus stage 3's focal losses on the
     rescored candidates and on coasting slots near people no candidate covers. A stream whose frame is not annotated (None) adds nothing."""
     device = joint.logit.device
@@ -1380,7 +1398,7 @@ def joint_frame_loss(joint: JointOutput, scans: np.ndarray, angles: np.ndarray, 
     for i, (polar, xy) in enumerate(zip(people_polar, people_xy)):
         if polar is None:
             continue
-        labels, vote_targets = make_targets(scans[i], angles, {3: [tuple(p) for p in polar]})
+        labels, vote_targets = make_targets(scans[i], angles, {3: [tuple(p) for p in polar]}, frame=vote_frame)
         stage2, _, _ = compute_loss(joint.logit[i].reshape(-1, 1), joint.votes[i], torch.from_numpy(labels).to(device), torch.from_numpy(vote_targets).to(device))
         target, covered = candidate_targets(joint.cand_xy[i].detach().cpu().numpy(), joint.cand_valid[i].cpu().numpy(), xy, MATCH_RADIUS_M)
         stage3 = focal_loss(joint.memory.candidate_logit[i], torch.from_numpy(target).to(device), joint.cand_valid[i])
@@ -1510,7 +1528,8 @@ def train_joint(args) -> None:
             joint, state = joint_step(net, memory, torch.from_numpy(train.scans[f][None]).to(device), torch.from_numpy(train.poses[f][None]).to(device),
                                       torch.tensor([dt], dtype=torch.float32, device=device), state, prior=prior)
             if i is not None:
-                loss = loss + joint_frame_loss(joint, anchor_ranges(train.scans[f][None], net.max_range_m), angles, [train.people_polar[i]], [train.people_xy[i]])
+                loss = loss + joint_frame_loss(joint, anchor_ranges(train.scans[f][None], net.max_range_m), angles, [train.people_polar[i]],
+                                       [train.people_xy[i]], net.vote_frame)
                 annotated += 1
         if annotated:
             optimizer.zero_grad(set_to_none=True)
@@ -1771,7 +1790,18 @@ def build_parser() -> argparse.ArgumentParser:
     step2.add_argument("--input-features", choices=("beam", "lfe"), default="beam", help="beam: the ten per-beam features; lfe: LFE's "
                        "1 - r/10 alone, the attribution arm F1 (TODO.md A59)")
     step2.add_argument("--channels", type=int, nargs=3, default=None, metavar="C", help="U-Net widths at N, N/2 and N/4 beams; unset is "
-                       "the constructor's (32 64 128); LFE's 8 16 32 are the attribution arm W (TODO.md A59)")
+                       "the constructor's (32 64 128); LFE's 8 16 32 are the attribution arm W (TODO.md A59), and 64 128 256 are "
+                       "item 19's widening arm")
+    step2.add_argument("--vote-frame", choices=VOTE_FRAMES, default="beam",
+                       help="which frame the head regresses the offset to a person's centre in (TODO.md item 18). beam: DROW's "
+                            "own convention, (across, along) in the beam's own rotated frame, so one person is a different "
+                            "target for every beam that sees it. sensor: the one Cartesian frame every beam shares. The two "
+                            "name the same point, so only the decoders' input is rotated and the comparison is purely what is "
+                            "easier to learn")
+    step2.add_argument("--block", choices=sorted(BLOCKS), default="convnext",
+                       help="which block carries the U-Net's depth (TODO.md item 19). convnext: depthwise large kernel, "
+                            "inverted bottleneck. residual: two full convolutions with a GELU between, no depthwise "
+                            "separation and no widening")
     step2.add_argument("--dropout", type=float, default=0.1, help="dropout on the head's input, 0.1 since 2026-10-06 (TODO.md A59); 0 reproduces every result before, "
                                                                  "`docs/RESEARCH.md` §5.4 intends 0.1 for this project's own architectures")
     step2.add_argument("--checkpoint-every", type=float, default=0.0, help="epochs between checkpoints kept whatever they score, "

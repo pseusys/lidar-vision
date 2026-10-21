@@ -217,6 +217,11 @@ The budget is **25 ms**, FROG's real frame period — not the 38.2 ms that every
 | **GPU** (RX 9060 XT) | 5.58 | 2.01 | 4.65 | **12.32 ms** | 13.63 | **49%**, 55% at p99 |
 | **CPU, 4 threads** | 8.44 | 1.51 | 9.14 | **19.15 ms** | 22.07 | **77%**, **88% at p99** |
 
+**The CPU row reproduces to 0.03 ms across sessions a week apart, and drifts about 3% across others.** The frozen model
+re-measured 19.15 ms total on 2026-10-19, matching this row exactly; on 2026-10-20 the same checkpoint read 19.75 ms. The
+budget share is therefore **77-80%**, and the number to quote for this row is the one above. What this forbids is comparing
+*arms* across sessions: see the session-offset rule and the stage-2 control in `interpreting-evaluation.md`.
+
 **Both now have headroom, and the CPU only got it in item 30.** The same CPU row read **20.98 ms, p99 25.32 — 101% of the
 budget** until the candidate decode was restructured: it ran one Python iteration per voting beam, 314 per frame to keep 22
 detections, and built a 314x314 distance matrix to do it. Iterating only the beams still alive took decoding from **2.83 ms to

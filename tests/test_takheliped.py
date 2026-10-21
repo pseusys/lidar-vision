@@ -19,12 +19,14 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
 from takheliped.detectors.takheliped import (
-    N_BEAM_FEATURES, RECURRENCES, CalibrationNetwork, MetricGather, ObjectMemory, SlotRules, beam_features,
+    BLOCKS, N_BEAM_FEATURES, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, ConvNeXtBlock, MetricGather, ObjectMemory,
+    ResidualBlock, SlotRules, beam_features,
     fold_legacy_calibration, gather_beams, metric_offsets,
     free_range_profile, initial_slots, lfe_features, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
     sensor_to_world, visibility_feature, world_to_sensor,
 )
 from takheliped.detectors.lfe_detector import _normalize_scan
+from takheliped.utils.drow_utils import _win2global, swap_vote_frame
 
 
 def _angles(n: int, fov_deg: float = 180.0) -> torch.Tensor:
@@ -1099,3 +1101,145 @@ class TestTheRecurrenceFamily:
             model = self._memory(name)
             for out, _, _ in TestObjectMemory()._run(model, 6):
                 assert (out.slots.state[~out.slots.alive] == 0).all()
+
+
+class TestTheVoteFrame:
+    """Item 18: the head regresses the offset to the person's centre -- in which frame?
+
+    DROW's convention, which this project inherited, is the **beam's own** frame: `(across, along)`, where `along` is
+    measured from the beam's own endpoint outward along the beam and `across` is perpendicular to it. Every beam
+    therefore regresses in a frame rotated by its own bearing, so the same person at the same place is a different
+    target for each beam that sees it. The alternative is the **sensor's** Cartesian frame, shared by every beam.
+
+    A59 put about half this project's lead over LFE-Peaks in the output head, which is why the item exists and also why
+    it is a defence rather than an improvement: the head is already the good part. The two parameterisations name the
+    same point, so the conversion is exact and the question is purely what is easier to learn.
+    """
+
+    ANGLES = np.deg2rad(np.linspace(-90.0, 90.0, 91))
+
+    @staticmethod
+    def _endpoints(scan, angles):
+        return np.stack([scan * -np.sin(angles), scan * np.cos(angles)], axis=-1)
+
+    def test_the_beam_frame_is_the_default_so_every_trained_checkpoint_keeps_its_meaning(self):
+        assert CalibrationNetwork(_angles(64), channels=(8, 16, 32), blocks=(1, 1, 1)).vote_frame == "beam"
+
+    def test_an_unknown_frame_is_refused_rather_than_silently_ignored(self):
+        with pytest.raises(ValueError, match="vote_frame"):
+            CalibrationNetwork(_angles(64), channels=(8, 16, 32), blocks=(1, 1, 1), vote_frame="world")
+
+    def test_the_frame_is_a_label_on_the_head_and_changes_nothing_the_network_computes(self):
+        """Where the change lives: in the targets and at the decoders' door, never inside `forward`.
+
+        A `forward` that rotated would take the loss in the wrong frame and leave the arm measuring nothing, so both
+        frames must give bit-identical outputs from the same seed.
+        """
+        outputs = []
+        for name in VOTE_FRAMES:
+            torch.manual_seed(0)
+            net = CalibrationNetwork(_angles(128), channels=(8, 16, 32), blocks=(1, 1, 1), vote_frame=name)
+            with torch.no_grad():
+                outputs.append(net(torch.rand(2, 128) * 8 + 1)[:2])
+
+        for a, b in zip(*outputs, strict=True):
+            assert torch.allclose(a, b, atol=0)
+
+    def test_the_rotation_is_its_own_inverse(self):
+        """One function converts both ways, which is why there is one and not two."""
+        votes = np.random.default_rng(0).normal(size=(len(self.ANGLES), 2))
+
+        there = swap_vote_frame(votes, self.ANGLES)
+        back = swap_vote_frame(there, self.ANGLES)
+
+        assert not np.allclose(there, votes)
+        assert np.allclose(back, votes, atol=1e-12)
+
+    def test_a_sensor_frame_vote_lands_where_the_beam_frame_one_does(self):
+        """The two parameterisations are the same point, so the decoder's geometry must agree with plain addition."""
+        scan = np.linspace(1.0, 9.0, len(self.ANGLES))
+        target = np.array([0.7, 4.2])
+        sensor = target[None, :] - self._endpoints(scan, self.ANGLES)
+
+        beam = swap_vote_frame(sensor, self.ANGLES)
+        r, phi = _win2global(scan, self.ANGLES, beam[:, 0], beam[:, 1])
+
+        assert np.allclose(np.stack([r * -np.sin(phi), r * np.cos(phi)], axis=-1), target, atol=1e-9)
+
+    def test_a_beam_voting_for_its_own_endpoint_votes_zero_in_both_frames(self):
+        zero = np.zeros((len(self.ANGLES), 2))
+
+        assert np.allclose(swap_vote_frame(zero, self.ANGLES), zero)
+
+    def test_the_offsets_keep_their_length_because_a_frame_change_is_a_rotation(self):
+        votes = np.random.default_rng(1).normal(size=(len(self.ANGLES), 2))
+
+        assert np.allclose(np.linalg.norm(swap_vote_frame(votes, self.ANGLES), axis=-1),
+                           np.linalg.norm(votes, axis=-1))
+
+
+class TestThePlainResidualBlock:
+    """Item 19: is the ConvNeXt block the reason, or would a plain residual block do?
+
+    A59's W arm priced *shrinking* to LFE's widths at 1.4 pp and bought no speed at batch 1, so capacity is not where
+    the score is -- but the block itself has never been ablated. A plain residual block (He et al., CVPR 2016) is two
+    full convolutions with a normalisation and a non-linearity between them: no depthwise separation, no inverted
+    bottleneck, no large kernel budget spent on a per-channel filter. The widening arm needs no code -- `--channels`
+    already exists -- so only the block does.
+    """
+
+    @staticmethod
+    def _net(block):
+        torch.manual_seed(0)
+        return CalibrationNetwork(_angles(128), channels=(8, 16, 32), blocks=(1, 1, 1), block=block)
+
+    def test_the_convnext_block_is_the_default(self):
+        assert CalibrationNetwork(_angles(64), channels=(8, 16, 32), blocks=(1, 1, 1)).block == "convnext"
+        assert isinstance(self._net("convnext").encoder[0][0], ConvNeXtBlock)
+
+    def test_an_unknown_block_is_refused_rather_than_silently_ignored(self):
+        with pytest.raises(ValueError, match="block"):
+            CalibrationNetwork(_angles(64), channels=(8, 16, 32), blocks=(1, 1, 1), block="transformer")
+
+    def test_every_block_runs_and_keeps_the_interface(self):
+        for name in BLOCKS:
+            logits, votes, features = self._net(name)(torch.rand(2, 128) * 8 + 1)
+
+            assert logits.shape == (2, 128) and votes.shape == (2, 128, 2) and features.shape[-1] == 128
+
+    def test_the_residual_block_is_two_full_convolutions_and_not_a_depthwise_one(self):
+        """The distinction being ablated: ConvNeXt spends its large kernel per channel, the plain block across all."""
+        plain = ResidualBlock(16, kernel_size=7)
+        convnext = ConvNeXtBlock(16, kernel_size=7)
+
+        assert [c.groups for c in plain.modules() if isinstance(c, torch.nn.Conv1d)] == [1, 1]
+        assert convnext.depthwise.groups == 16
+        assert all(c.kernel_size == (7,) for c in plain.modules() if isinstance(c, torch.nn.Conv1d))
+
+    def test_a_block_adds_to_what_it_was_given(self):
+        """Residual in both arms, which is what lets the depth be compared at all."""
+        for make in (ResidualBlock, ConvNeXtBlock):
+            torch.manual_seed(0)
+            block = make(8, kernel_size=3)
+            for parameter in block.parameters():
+                torch.nn.init.zeros_(parameter)
+            x = torch.randn(2, 8, 16)
+
+            assert torch.allclose(block(x), x)
+
+    def test_the_block_choice_changes_which_weights_exist(self):
+        """So a checkpoint cannot be read back into the wrong block and silently half-load."""
+        plain = set(self._net("residual").state_dict())
+        convnext = set(self._net("convnext").state_dict())
+
+        assert plain != convnext
+        assert not any("depthwise" in name for name in plain)
+
+    def test_widening_needs_no_new_code(self):
+        """Item 19's second half is `--channels`, which already exists; this pins that it reaches the weights."""
+        wide = CalibrationNetwork(_angles(128), channels=(64, 128, 256), blocks=(1, 1, 1))
+        narrow = CalibrationNetwork(_angles(128), channels=(32, 64, 128), blocks=(1, 1, 1))
+
+        assert wide.stem.out_channels == 2 * narrow.stem.out_channels
+        assert sum(p.numel() for p in wide.parameters()) > 3 * sum(p.numel() for p in narrow.parameters())
+

@@ -220,7 +220,7 @@ from takheliped.detectors import (
 from takheliped.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
     cutout, raw_scan, aligned_raw_scan,
-    _win2global,
+    _win2global, swap_vote_frame,
     votes_to_detections, _deep2flat, _process_detections,
 )
 from takheliped.utils.tracking import SimpleTracker, odom_xya_delta_to_tracker_frame
@@ -361,8 +361,13 @@ def _freeze_backbone(net) -> None:
 # Ground-truth target generation
 # ---------------------------------------------------------------------------
 
+def _in_vote_frame(vote_targets: np.ndarray, angles: np.ndarray, frame: str) -> np.ndarray:
+    """Beam-frame vote targets in the frame asked for; the rotation sends zero to zero, so an unlabelled beam stays silent."""
+    return vote_targets if frame == "beam" else swap_vote_frame(vote_targets, angles).astype(np.float32)
+
+
 def make_targets(scan: np.ndarray, angles: np.ndarray,
-                 gt_per_class: dict, vote_collect_radius: float = 0.6, nearest: bool = False):
+                 gt_per_class: dict, vote_collect_radius: float = 0.6, nearest: bool = False, frame: str = "beam"):
     """
     Compute per-beam class labels and vote-offset targets.
 
@@ -374,12 +379,17 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
     vote_collect_radius : radius (m) around GT that marks a beam as positive
     nearest       : give each beam the nearest annotation within the radius, as the official DR-SPAAM code does; the default
                     lets the last-listed one within it win, which in a crowd sends a beam's vote to a neighbour (TODO.md A59)
+    frame         : "beam", DROW's own convention, gives each beam its offset in its own rotated frame; "sensor" gives every
+                    beam the same Cartesian frame, so one person is one target rather than one per bearing (TODO.md item 18).
+                    The two name the same point, and swap_vote_frame converts either way
 
     Returns
     -------
     labels       : (N,) int64
     vote_targets : (N, 2) float32  — (dx, dy) in window space
     """
+    if frame not in ("beam", "sensor"):
+        raise ValueError(f"frame must be 'beam' or 'sensor', not {frame!r}")
     scan   = np.asarray(scan,   dtype=np.float64)
     angles = np.asarray(angles, dtype=np.float64)
     N = len(scan)
@@ -402,7 +412,7 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
         dphi = phi_gt[owner] - angles[mask]
         vote_targets[mask, 0] = r_gt[owner] * np.sin(dphi)
         vote_targets[mask, 1] = r_gt[owner] * np.cos(dphi) - scan[mask]
-        return labels, vote_targets
+        return labels, _in_vote_frame(vote_targets, angles, frame)
 
     for class_id, anns in sorted(gt_per_class.items()):
         for r_gt, phi_gt in anns:
@@ -417,7 +427,7 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
             vote_targets[mask, 0] = r_gt * np.sin(dphi)
             vote_targets[mask, 1] = r_gt * np.cos(dphi) - scan[mask]
 
-    return labels, vote_targets
+    return labels, _in_vote_frame(vote_targets, angles, frame)
 
 
 # ---------------------------------------------------------------------------

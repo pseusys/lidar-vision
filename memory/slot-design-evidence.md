@@ -87,6 +87,64 @@ holds a slot, how the rescoring is gated, the schedule, coasting's weight, coast
 control's own seed spread. **Single seed against three, so "inside the range" is "no evidence of a difference", not
 equivalence.**
 
+## The recurrence family: minGRU buys nothing and costs twice the training time (item 16, 2026-10-19)
+
+**The question is a reviewer's, not an optimisation's**: "why a bespoke selective diagonal recurrence and not a GRU?" D3
+makes it sharper rather than softer -- fixing the decay rate costs 1.04 pp, so the learned, input-dependent rate is
+load-bearing -- so the defence has to be against the obvious alternatives.
+
+| arm | what it changes | AP | FP/frame | recall | epochs | wall | best val at |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| **adopted control**, 3 seeds | -- | **85.49-86.35%** | 0.849-1.239 | 81.17-87.76% | -- | -- | -- |
+| `selective` (matched seed) | the adopted rule | 86.08% | 0.885 | 82.63% | 65 | **5.06 h** | epoch 16 |
+| `mingru` (item 16) | Feng et al. 2024: no reset gate, no hidden-state dependence, **no `dt`** | 86.40% | 0.911 | 84.33% | 64 | **10.06 h** | epoch 45 |
+
+**No accuracy difference** -- every column inside the control's own three-seed range, against E13's 1.32 pp three-sigma AP
+bar, one seed against three. **But minGRU exists because it is cheaper, and here it is not**: the same epoch budget took
+twice the wall time, 10.06 h against 5.06 h, and converged far more slowly. Quote the total rather than a per-epoch time:
+`--chunk-s 1 10` trains two curriculum stages whose epochs cost differently, so per-epoch figures are not comparable
+between arms that stopped at different points in the curriculum.
+
+**Neither `gru` nor `mingru` sees `dt`, and that is the comparison**: they take a step, while the adopted rule decays in
+`exp(-dt * rate)` over real seconds because a robot's frames are not uniformly spaced. What the arms do *not* differ in is
+whether the model can see time at all -- the slot statistics fed to every recurrence include age, time since match and the
+hit rate, which move with `dt` whatever the rule does with them.
+
+**On the CPU the two cost the same** (measured 2026-10-20, item 29's protocol: `--device cpu --threads 4`, 2,000
+consecutive scans, batch 1; three readings per arm, interleaved, same session):
+
+| phase | `selective` | `mingru` | difference |
+| --- | ---: | ---: | ---: |
+| stage 2 *(identical weights -- the control)* | 8.79 | 8.83 | **+0.04** |
+| decode | 1.56 | 1.55 | -0.01 |
+| memory | 9.36 | 9.29 | **-0.06** |
+| **total** | **19.76** | **19.73** | **-0.02** |
+
+minGRU's 0.06 ms edge on the memory is barely above the 0.04 ms the control calls noise, so **there is no CPU difference
+either**. Getting this right needed the control: a first attempt compared tonight's minGRU row against last night's
+adopted row and read a 0.18 ms cost that does not exist (`interpreting-evaluation.md`). Against FROG's 25 ms period both
+arms sit at 79% of budget, and the memory is the *larger* half of the CPU total while being the smaller half of the GPU's
+-- which is why `memory_ms_per_frame` must never stand in for it.
+
+**The `gru` arm closes the item** (2026-10-21). It trained in **4.46 h**, the cheapest of the three, to AP 86.12% / FP
+0.740 / recall 80.68%:
+
+| arm | AP | FP/frame | recall | train wall | CPU memory | CPU total | p99 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `selective` (frozen, 3 seeds) | 85.88-86.08, mean **86.01** | 0.885-1.086 | 82.63-86.28 | 5.06 h | 9.21 | **19.50** | 21.80 |
+| `mingru` | **86.40%** | 0.911 | 84.33% | 10.06 h | 9.10 | **19.39** | 21.69 |
+| `gru` | 86.12% | **0.740** | 80.68% | **4.46 h** | **10.33** | **20.57** | 23.01 |
+
+**The recurrence rule does not move the score** -- 0.52 pp across five runs against a 1.32 pp bar -- **and the GRU does
+move the cost**: +1.12 ms on the memory phase (+12%), +1.07 ms on the total, against a stage-2 control spread of 0.04 ms
+across the three rows. That is the one resolvable difference in the whole item.
+
+**So the adopted rule is defended against the GRU on cost and against minGRU on training time, not on accuracy.** And the
+property that distinguishes it -- reading real elapsed time, `exp(-dt * rate)` -- **does not show up in AP at all**, which
+is the finding to carry into the write-up rather than bury. D3 stands but varies the rate *within* the dt-aware family, so
+it cannot support the claim either. FROG runs at a near-constant 40.01 Hz, so this dataset may never exercise the
+mechanism; `TODO.md` item 37 tests it under induced frame drops, which is the only way to find out from the data we have.
+
 ## The coasting head, ablated: nothing measurable is lost (item 24, 2026-10-15)
 `--no-coast` removes the head's parameters and its reports; on the adopted recipe
 it scores **AP 86.08%** against the matched seed's 86.35% and the three-seed control range 85.49-86.35, with FP/frame 0.885

@@ -51,7 +51,8 @@ from takheliped.datasets.frog_dataset import frog_laser_angles  # noqa: E402
 from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
 from takheliped.detectors.lfe_detector import _merge_nearby  # noqa: E402
 from train_takheliped import (  # noqa: E402
-    MATCH_RADIUS_M, NMS_DIST_M, OPERATING_THRESHOLD, FrameSplit, beam_votes, calibration_network, candidate_targets, decode_votes,
+    MATCH_RADIUS_M, NMS_DIST_M, OPERATING_THRESHOLD, FrameSplit, beam_frame_votes, beam_votes, calibration_network,
+    candidate_targets, decode_votes,
     CANDIDATE_FLOOR, detect_device, frame_batch, load_frames, nms_decode, score_detections, union_decode,
     voting_beams,
 )
@@ -145,7 +146,8 @@ def stage2_outputs(net, split: FrameSplit, positions: np.ndarray, device) -> Lis
     out = []
     for chunk in np.array_split(positions, math.ceil(len(positions) / EVAL_BATCH)):
         logit, votes, _ = net(frame_batch(split, split.annotated[chunk], device))
-        prob, votes = torch.sigmoid(logit).cpu().numpy(), votes.cpu().numpy()
+        prob = torch.sigmoid(logit).cpu().numpy()
+        votes = beam_frame_votes(votes.cpu().numpy(), net.angles.cpu().numpy(), net.vote_frame)
         for j, a in enumerate(chunk):
             scan, p = voting_beams(split.scans[split.annotated[a]], prob[j], net.max_range_m)
             out.append((scan, p, votes[j]))
