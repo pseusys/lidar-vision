@@ -38,7 +38,7 @@ sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
 from train_takheliped import (  # noqa: E402
-    MIN_REPORTED_SCORE, detect_device, evaluate, evaluation_segments, gather,
+    DT_MODES, MIN_REPORTED_SCORE, decimate, detect_device, evaluate, evaluation_segments, gather,
     load_split, memory_ms_per_frame, object_memory, score_detections,
 )
 
@@ -48,6 +48,59 @@ HEADING_DEG_PER_S = 0.5
 CROWD_BUCKETS = ((0, 1), (2, 3), (4, 5), (6, 99))
 SLOT_COUNTS = (64, 128, 256, 512, 720)
 TIMED_FRAMES = 500
+# Item 37. Four shapes share a 20% drop so gap shape is separated from how much data was lost; the last raises the share
+# to 50% at the same shape. Bursts stay under 40 frames because MAX_DT_S is 1.0 s and a longer gap saturates the clamp.
+FLAKY_PATTERNS = (
+    ("none", lambda s: np.ones(len(s.data.time), bool)),
+    ("periodic-5", lambda s: periodic_keep(s, 5)),                  # 20%, one-frame gaps: dt alternates 25/50 ms
+    ("bernoulli-0.2", lambda s: bernoulli_keep(s, 0.2, seed=0)),    # 20%, random gaps, mostly one frame
+    ("burst-8/40", lambda s: burst_keep(s, 8, 40)),                 # 20%, 0.2 s outages once a second
+    ("burst-20/100", lambda s: burst_keep(s, 20, 100)),             # 20%, 0.5 s outages every 2.5 s
+    ("burst-20/40", lambda s: burst_keep(s, 20, 40)),               # 50%, 0.5 s outages every second
+)
+
+
+def _per_recording(split, mark) -> np.ndarray:
+    """A keep mask over packed frames, built one recording at a time; `mark(n)` returns that recording's own mask.
+
+    Never across a boundary: recordings are packed end to end, so a pattern applied to the flat array would treat the
+    seam between two of them as an outage. Each recording's **first frame is always kept** -- it carries no elapsed time
+    anyway, so dropping it only shortens the warm-up without creating a gap to measure.
+    """
+    keep = np.zeros(len(split.data.time), bool)
+    for offset, n in zip(split.offsets, split.lengths):
+        inside = mark(int(n))
+        inside[0] = True
+        keep[int(offset):int(offset) + int(n)] = inside
+    return keep
+
+
+def periodic_keep(split, every: int) -> np.ndarray:
+    """Drop every `every`-th frame of each recording -- the mildest shape, and on its own probably too mild.
+
+    At 40 Hz it makes `dt` alternate between one and two periods, 25 and 50 ms. Worth having as the floor of the sweep
+    precisely because a mechanism that cannot be separated here needs a real outage to show itself.
+    """
+    return _per_recording(split, lambda n: (np.arange(n) % every) != every - 1)
+
+
+def bernoulli_keep(split, p: float, seed: int) -> np.ndarray:
+    """Drop each frame independently with probability `p`: a noisy link rather than a stalled sensor."""
+    def mark(n):
+        return np.random.default_rng([seed, n]).random(n) >= p
+    return _per_recording(split, mark)
+
+
+def burst_keep(split, length: int, period: int) -> np.ndarray:
+    """Drop `length` consecutive frames at the end of every `period`-frame block: a periodic sensor dropout.
+
+    This is the shape that matters. A burst of 20 frames is half a second of nothing, which is where a learned decay
+    with a 1-60 s horizon actually has to decide whether a slot still exists -- and `MAX_DT_S` is 1.0 s, so a sweep
+    must stay under 40 frames or the gap saturates the clamp instead of being measured.
+    """
+    def mark(n):
+        return (np.arange(n) % period) < period - length
+    return _per_recording(split, mark)
 
 
 def load(args, device):
@@ -153,12 +206,68 @@ def cost(args, device) -> Dict:
     return dict(rows=rows, timed_frames=TIMED_FRAMES)
 
 
+def native_timing(split) -> Dict:
+    """How uniform FROG actually is, both as stamped and as the model is fed it (`TODO.md` item 37).
+
+    The two differ on purpose and the difference is the item's premise: the raw stamps come in bunches of roughly 38 ms,
+    38 ms and under 0.1 ms, so `frame_periods` averages them over `DT_AVERAGE_FRAMES` (A51 item 0a). Whatever jitter the
+    stamps carry, what reaches `exp(-dt * rate)` is that average -- so this is the number that says whether the
+    mechanism has ever had anything to act on.
+    """
+    stamped = np.concatenate([np.diff(split.data.time[int(o):int(o) + int(n)]) for o, n in zip(split.offsets, split.lengths)])
+    fed = np.concatenate([split.dt[int(o) + 1:int(o) + int(n)] for o, n in zip(split.offsets, split.lengths)])
+    return dict(stamped_median_ms=float(np.median(stamped)) * 1e3,
+                stamped_p05_ms=float(np.percentile(stamped, 5)) * 1e3,
+                stamped_p95_ms=float(np.percentile(stamped, 95)) * 1e3,
+                stamped_under_1ms_share=float((stamped < 1e-3).mean()),
+                dt_median_ms=float(np.median(fed)) * 1e3,
+                dt_p05_ms=float(np.percentile(fed, 5)) * 1e3,
+                dt_p95_ms=float(np.percentile(fed, 95)) * 1e3)
+
+
+def flaky(args, device) -> Dict:
+    """AP against dropped frames, in both `dt` modes: the only way FROG can test the dt-aware design (`TODO.md` item 37).
+
+    **The metric is the gain over the arm's own candidates on the same decimated stream, not its raw AP.** Dropping
+    frames removes information, which moves the scored population's difficulty for every arm alike and for the
+    candidates too, so a raw-AP curve would mostly measure "fewer frames is worse". The candidates are history-free --
+    stage 2 sees one scan -- so their AP on a decimated stream is that population's intrinsic difficulty, and
+    subtracting it leaves what the memory contributed. It doubles as the harness's control: a pattern where the
+    candidate AP moves far from the undecimated run is a pattern whose population changed, not a result.
+
+    Four shapes at a constant 20% share separate **gap shape** from **how much data was lost**; `burst-20/40` then
+    raises the share to 50% at the same shape.
+    """
+    model, split = load(args, device)
+    native = native_timing(split)
+    print(f"  FROG as recorded: stamped intervals median {native['stamped_median_ms']:.2f} ms, "
+          f"5-95% {native['stamped_p05_ms']:.2f}-{native['stamped_p95_ms']:.2f}, "
+          f"{native['stamped_under_1ms_share'] * 100:.1f}% under 1 ms (bunched stamps)", flush=True)
+    print(f"  what the model is actually fed: averaged dt median {native['dt_median_ms']:.2f} ms, "
+          f"5-95% {native['dt_p05_ms']:.2f}-{native['dt_p95_ms']:.2f} -- the spread the dt-aware rule has had to work with",
+          flush=True)
+    rows = []
+    for name, pattern in FLAKY_PATTERNS:
+        keep = pattern(split)
+        # "none" is bit-identical in both modes by construction (every gap is one frame), and the tests pin that.
+        for dt_mode in (("exact",) if name == "none" else DT_MODES):
+            thin = decimate(split, keep, dt_mode)
+            r = evaluate(model, thin, device, args.stride, args.streams, evaluation_segments(thin, 0, 0, 0))
+            rows.append(dict(pattern=name, dt_mode=dt_mode, kept=float(keep.mean()),
+                             ap=r["memory"]["ap"] * 100, candidates_ap=r["candidates"]["ap"] * 100,
+                             gain=(r["memory"]["ap"] - r["candidates"]["ap"]) * 100,
+                             own_recall=r["memory"]["own_recall"] * 100))
+            print(f"  {name:>13} {dt_mode:>8} dt, {keep.mean() * 100:5.1f}% kept: memory AP {rows[-1]['ap']:.2f}%"
+                  f"  candidates {rows[-1]['candidates_ap']:.2f}%  gain {rows[-1]['gain']:+.2f} pp", flush=True)
+    return dict(rows=rows, native_timing=native)
+
+
 def output_path(args) -> Path:
     """Where this run's results go: `--out` as given, or one file per experiment under `--out-dir`."""
     return args.out if args.out is not None else args.out_dir / f"a51_{args.experiment}.json"
 
 
-EXPERIMENTS = dict(horizon=horizon, odometry=odometry, crowding=crowding, cost=cost)
+EXPERIMENTS = dict(horizon=horizon, odometry=odometry, crowding=crowding, cost=cost, flaky=flaky)
 
 
 def main() -> None:

@@ -145,6 +145,81 @@ is the finding to carry into the write-up rather than bury. D3 stands but varies
 it cannot support the claim either. FROG runs at a near-constant 40.01 Hz, so this dataset may never exercise the
 mechanism; `TODO.md` item 37 tests it under induced frame drops, which is the only way to find out from the data we have.
 
+## Per-object addressing is the mechanism: one global state captures 5% of it (item 36, 2026-10-22)
+
+**The strongest attack on this project's contribution, and it holds.** The 2x2 had one cell unmeasured: slots with
+recurrence is the adopted model, slots without is `--no-recurrent` (E10, costs a lot), and **recurrence without slots**
+had never been run. If one scene-level state matched 256 addressable per-object slots, the slots would be decoration.
+
+Run with the **strongest** global variant deliberately -- attention pooling through a learned query rather than a masked
+mean -- and with `--recurrence mingru`, the published cell, so addressability is the only variable. No `manage_slots`:
+no association, no spawn, no eviction, no per-slot decay, **no geometry at all**. 157,058 parameters against 207,362.
+
+| arm | test AP | gain over own candidates | CPU total | CPU memory |
+| --- | ---: | ---: | ---: | ---: |
+| `mingru`, 256 slots | **86.40%** | **+4.18** | 19.39 | 9.10 |
+| `gru`, 256 slots | 86.12% | +3.90 | 20.57 | 10.33 |
+| `selective`, 256 slots, 3 seeds | 85.88-86.08 | +3.65 to +3.97 | 19.50 | 9.21 |
+| **global + mingru, no slots** | **82.44%** | **+0.22** | **12.57** | **2.32** |
+
+**A 3.44 pp miss below the frozen range, 2.6x the 1.32 pp bar.** The global state captures 0.22 of the 3.65-4.18 pp the
+slots deliver -- about **5%** -- so the memory without addressing is not degraded but very nearly absent. The scalar
+rescore gate corroborates it: the slot arms drove theirs to +0.047 and +0.052, this one sat at **-0.04** and never moved,
+because there was no useful correction available from one scene-level summary.
+
+**This is the sentence the write-up has been missing.** Everything else about stage 3 has turned out interchangeable --
+the recurrence rule (item 16), the slot-to-slot exchange and the learned matching (E13), the coasting head (item 24),
+the association width (item 20), the block and the widths in stage 2 (item 19). What is *not* interchangeable is that the
+scene is held as a set of **addressable per-object states**. That is the contribution, and it is now measured rather
+than assumed.
+
+**The price, which belongs beside the claim.** The slots cost about **6.8 ms per frame** on the CPU (the memory phase
+goes 9.10 -> 2.32 ms without them) and buy 3.9 pp. Both fit FROG's 25 ms budget.
+
+**Caveats.** One seed, val-chosen weights, uninterrupted run (not a resumed draw).
+
+## Dropped frames: the dt-aware rule is the most fragile arm, not the most robust (item 37, 2026-10-22)
+
+**The premise, and it should be quoted whenever the mechanism is described.** `frame_periods` feeds stage 3 an
+exponential running average of the stamped intervals (rate `1/32`, clipped to `[1 ms, 1 s]`), which is correct -- FROG's
+stamps arrive in bunches and dividing by one of them once sent slot velocities to several m/s (A51 item 0a). Measured
+over the whole test split: the **stamped** intervals have median 38.13 ms and a 5-95% range of 0.03-40.06 ms with
+**20.2% under 1 ms**, while what the model is **actually fed** has median 24.98 ms and a 5-95% range of
+**24.50-25.53 ms**. A 1% spread, so `exp(-dt * rate)` has been a fixed per-slot decay factor for this model's whole
+life. Item 16's three-way tie is arithmetic, not mystery.
+
+**Evaluation only, no retraining**, on a stream with frames deliberately dropped. Metric: each arm's gain over **its own
+candidates on the same decimated stream**, because dropping frames moves the population's difficulty for everyone and
+stage 2 is history-free, so its AP *is* that difficulty. Two harness checks passed: no-drop reproduces the published
+86.08% exactly, and candidate AP holds inside 81.90-82.29% on every row.
+
+| arm | gain, no drops | gain, 0.5 s outages every second (50% dropped) | degradation |
+| --- | ---: | ---: | ---: |
+| `selective` (adopted, dt-aware) | 3.87 | 2.71 | **-1.16** |
+| `mingru` | **4.18** | **3.78** | -0.40 |
+| `gru` | 3.90 | 3.45 | -0.45 |
+| `d3` (one fixed decay time) | 2.23 | 2.16 | -0.07 |
+
+**Three readings.** The dt-aware arm degrades nearly three times as much as either dt-blind one. minGRU is the highest
+at every severity. And `d3` separates two things that were confused: it is almost flat but sits 1.6 pp below everyone,
+so **the learned decay supplies the level, not the robustness**.
+
+**Feeding the adopted rule true elapsed time makes it worse** -- by 0.31 and 0.42 pp on the two 0.5 s burst settings,
+against simply letting the averaging hide the gap. Most likely distribution shift, not a broken mechanism: trained at
+25 ms, handed 0.525 s, `exp(-dt * rate)` collapses the state by a factor never seen in training. **Zero-shot, so this is
+not evidence that dt-awareness is harmful** -- only that it is miscalibrated outside the regime it was trained in.
+
+**A confound that bounds what the two `dt` modes can show.** `mingru` and `gru` read no `dt` at all, yet their scores
+move between the modes (3.78 against 3.41 at the harshest), because `dt` also drives the **shared** bookkeeping: the
+rule-based confidence decay, the `position + velocity * dt` prediction, and the age / time-since-match / hit-rate
+statistics every recurrence is fed. So within-arm `exact` vs `averaged` prices the *bookkeeping's* `dt` sensitivity;
+only between-arm at one fixed mode isolates the recurrence. Quote the between-arm column.
+
+**Declined: drop-augmented retraining.** `decimate` would serve training unchanged, but the adopted rule needs +1.07 pp
+just to match minGRU at the harshest setting while the dt-blind arms were equally untrained and degraded less than half
+as much. The mechanism's remaining defence is **cross-rate transfer** (DROW's 12.5 Hz against FROG's 40.01 Hz), which
+needs no new training and is now A63 step 2.
+
 ## The coasting head, ablated: nothing measurable is lost (item 24, 2026-10-15)
 `--no-coast` removes the head's parameters and its reports; on the adopted recipe
 it scores **AP 86.08%** against the matched seed's 86.35% and the three-seed control range 85.49-86.35, with FP/frame 0.885

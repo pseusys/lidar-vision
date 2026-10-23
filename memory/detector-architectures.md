@@ -40,7 +40,14 @@ It breaks the lifecycle above in two places: there is no `T`-scan window (one sc
 | 3, object memory | 256 slots in **room** coordinates and a dt-aware selective diagonal recurrence (Mamba-style, decay 1-60 s), rescoring the candidates. **What the frozen model uses is a subset of what the class can do**: cross-attention association and slot self-attention both exist and are both **off** (E7, E6), there is **no coasting head** (item 24), and the decay is learned rather than fixed (D3). The full configuration, and what each alternative cost, is below | 0.17 M | ~4.4 ms/frame |
 
 
-### The frozen architecture (2026-10-18)
+### The frozen architecture (2026-10-18; the recurrence changed 2026-10-23)
+
+**The per-slot recurrence is minGRU as of 2026-10-23** (`TODO.md` item 38, the owner's call), not the bespoke selective
+diagonal decay. Item 16 found the three recurrences tie on AP, item 37 found the dt-aware rule the *most* fragile under
+dropped frames and the `dt` it reads a 1%-spread constant, and item 36 found that the **slots** are what carries the
+gain -- a global state reaches 82.44% against 85.88-86.08. So the citable cell replaces the re-implemented one and the
+contribution, per-object addressability, stays. **The headline below is still the selective variant's**: minGRU has one
+seed, and until seeds 1 and 2 run every number must name its variant.
 
 **Step 1 ran every architectural question to an answer and nothing beat the adopted choice**, so this is the model the
 pre-print proposes. Written out in full because "the adopted recipe" has meant three different things over this project's
@@ -49,7 +56,7 @@ life, and `TODO.md` item 29 exists because a number once outlived the configurat
 | stage | what it is | what was ruled out, and by what |
 | --- | --- | --- |
 | **1-2** | A59's C1 recipe over a **fixed-beam** ConvNeXt 1-D U-Net: dropout 0.1, nearest-person labels at 0.6 m, mirror augmentation, plateau schedule, weight averaging over the val-chosen window. Widths (32, 64, 128), 976,707 parameters | **No metric gather** (item 15: 1.42 pp worse at stage 2, 0.21 pp below the control's floor end to end, against a Tier 0 probe that priced it at +2.5 pp). **No LFE input channel** (A59 F1). **Not LFE's widths** (A59 W: 1.4 pp for no speed). **No temporal convolution**, fine or coarse (A50, A60) |
-| **3** | E13's object memory: 256 slots in **room** coordinates, **accumulated** value, **learned input-dependent** decay (1-60 s), no slot-to-slot exchange, no learned matching, a scalar rescore gate, **unbounded** rescoring, cosine schedule, 173,442 parameters | **No coasting head** (item 24: removing it costs nothing measurable and it fired 2/0/0 times across 72,533 person-free frames). **Not the latest score** holding a slot (D2, interchangeable, so the design's own rule stays). **Not one fixed decay** (D3: 1.04 pp). **Not a bounded rescoring** (O1: a +-4 logit bound silences the head -- its AP equals its candidates'). **No slot-to-slot exchange** (E6), **no learned matching** (E7) |
+| **3** | E13's object memory: 256 slots in **room** coordinates, **accumulated** value, a **minGRU** per-slot recurrence (Feng et al. 2024; item 38, 2026-10-23 -- was a learned input-dependent decay over 1-60 s), no slot-to-slot exchange, no learned matching, a scalar rescore gate, **unbounded** rescoring, cosine schedule | **No coasting head** (item 24: removing it costs nothing measurable and it fired 2/0/0 times across 72,533 person-free frames). **Not the latest score** holding a slot (D2, interchangeable, so the design's own rule stays). **Not one fixed decay** (D3: 1.04 pp). **Not a bounded rescoring** (O1: a +-4 logit bound silences the head -- its AP equals its candidates'). **No slot-to-slot exchange** (E6), **no learned matching** (E7) |
 | decoding | `nms-mean` at 0.5 m: greedy over beams by probability, each detection at the probability-weighted mean of the votes it suppresses | **Not the vote grid** (2.1 pp of AP), **not a range-split or unioned decoder** (items 13, 17, 34), **not another radius** (0.4 m and 0.6 m trade range against crowding without moving the total) |
 
 **Two choices are load-bearing and the rest are not.** Of eight arms measured at one seed each against a three-seed
@@ -58,8 +65,8 @@ coasting's weight, coasting's existence. Only the **learned decay** and the **un
 change. That robustness is worth stating in the paper rather than hiding: the memory's performance does not rest on its
 knobs.
 
-**The headline, measured on this architecture** (2026-10-19, three seeds, FROG `official` test every 5th annotated
-frame): **wp-AUC 86.01%** (86.08 / 86.08 / 85.88), **0.958 false positives per frame** (0.885 / 0.903 / 1.086), recall
+**The headline, measured on the *selective* variant and not yet on the adopted one** (2026-10-19, three seeds, FROG
+`official` test every 5th annotated frame): **wp-AUC 86.01%** (86.08 / 86.08 / 85.88), **0.958 false positives per frame** (0.885 / 0.903 / 1.086), recall
 84.03%, over candidates of 82.19% -- so the memory is worth **+3.82 pp** over its own input. On the CPU at four threads
 it costs **19.15 ms per frame, p99 22.07** -- 88% of FROG's 25 ms period (item 30).
 
@@ -73,7 +80,7 @@ Only stage 3 carries state between frames: its slots, ~138 KB per stream (the co
 
 **What A51 settled about stage 3 (2026-09-29/30), and what the write-up should propose.**
 
-- **Keep the learned slot state.** It is the only part whose removal has ever cost anything: −1.50 pp AP, −1.67 pp recall at matched false positives, −14.08 pp coasting precision, all past their bars (E10).
+- **Keep the learned slot state, and keep it addressable per object.** E10 priced removing the state at −1.50 pp AP, −1.67 pp recall at matched false positives and −14.08 pp coasting precision, all past their bars; item 36 (2026-10-23) priced removing the *addressing* -- one global scene state instead of 256 slots, strongest pooling, published cell -- at **82.44% against 85.88-86.08**, capturing 5% of the slots' gain. **Which rule updates that state does not matter** (item 16: three recurrences inside 0.52 pp), which is why item 38 took the citable one.
 - **Drop both attention mechanisms.** Rule-based association plus the per-slot recurrence ties the full model on every metric at three seeds, at **173,579 parameters against 306,443 (−43%)** and **3.72 ms against 4.53 (−18%)** (E6, E7, E13). This is the architecture to propose; the full model is the ablation.
 - **Drop the feedback path.** `render_prior` and `prior_channels` contribute 0.00 pp in three configurations, because the prior carries 0.012–0.045% of `aggregate`'s input and its exclusive ceiling is 1.91 pp of recall anyway (E12). Dropping it also drops the `step3b` joint stage, which already scored worse than `step3a` (78.84% against 80.10%) — this session localised that loss to the **rescoring head's** drift on stage 2, not the prior.
 - **Still there, still conditional:** room coordinates win only below ~0.02 m/s of odometry drift (D1, E2); training with jittered poses is the untried repair (`../TODO.md` E11).

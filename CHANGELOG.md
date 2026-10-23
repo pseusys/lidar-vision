@@ -38,6 +38,201 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 38 decided: the slots stay, the per-slot recurrence becomes minGRU (2026-10-23)
+
+*keywords: item 38, architecture decision, minGRU, Feng 2024, selective diagonal decay, slots, defensibility, headline provenance, three seeds pending*
+
+**The owner's call**, on the rule set 2026-10-22: adopt the well-established recurrent cell unless items 36 or 37 showed
+a big win for the bespoke one. All three inputs are in and none did.
+
+| input | what it found | bearing on the decision |
+| --- | --- | --- |
+| **item 16** | the three recurrences tie on AP -- 0.52 pp across five runs against a 1.32 pp bar; minGRU is the single best arm at **86.40%** and marginally the cheapest on CPU; the GRU costs +12% on the memory phase | no accuracy or cost case for the bespoke rule |
+| **item 37** | under dropped frames the dt-aware rule is the **most** fragile (-1.16 pp against minGRU's -0.40), and `frame_periods` feeds a 1%-spread constant, so the mechanism has never acted | no robustness case either |
+| **item 36** | one global state reaches 82.44% against the frozen 85.88-86.08 and captures 5% of the slots' gain | **the slots are the contribution** -- a slot-free architecture is off the table |
+
+**So: keep the 256 addressable slots, replace the selective diagonal decay with minGRU** (Feng et al., *Were RNNs All
+We Needed?*, 2024). The reasoning is defensibility, not score: a reviewer can check a cited cell against its paper, while
+a bespoke component has to be defended from scratch -- and after item 16, 37 and D3 this one had nothing left to defend
+it. What the paper keeps is the part that *is* load-bearing and now measured: the scene held as a set of **addressable
+per-object states**.
+
+**The headline's provenance, which this decision does not change yet.** **wp-AUC 86.01%** (86.08 / 86.08 / 85.88) and
+**19.15 ms** CPU describe the **selective** variant at three seeds. minGRU has **one** seed (86.40%, 19.39 ms). Until
+seeds 1 and 2 run (~20 h), the adopted architecture's headline is *pending* and every quoted number must say which
+variant produced it. Quoting 86.40% as the headline would be the error item 29 exists to prevent.
+
+**Consequences queued rather than silently inherited:** `docs/RESEARCH.md` §5 credits Mamba for the selective diagonal
+decay and claims dt-awareness as a design virtue -- the credit becomes a minGRU citation and the claim has to be
+restated as principled but **untested on FROG**, since item 37 showed the model has only ever been fed a constant.
+`memory/detector-architectures.md` and `docs/PAPER.md` follow.
+
+## Item 36: per-object addressing IS the mechanism -- one global state captures 5% of what the slots deliver (2026-10-22)
+
+*keywords: item 36, a68_global_mingru_s0, --global-state, _global_step, attention pooling, _scene_statistics, addressable slots, rescore gate, 82.44%, contribution validated*
+
+The untested cell of the 2x2. Slots **with** recurrence is the adopted model; slots **without** is `--no-recurrent`
+(A51 E10) and costs a lot; **recurrence without slots had never been run**. It is the strongest available attack on this
+project's own contribution -- if one scene-level state matched 256 addressable per-object slots, the slots would be
+decoration -- and the owner's call was to run the *strongest* global variant first, so that a miss would also rule out
+the weaker ones.
+
+**The arm.** `--global-state` carries one state vector per stream and never calls `manage_slots`, which **is** the slot
+mechanism: no association, no spawn, no eviction, no per-slot decay, and **no geometry anywhere** -- the distance-biased
+attention goes with the addressing. The frame's candidates are attention-pooled into one vector through a learned query
+(the strongest variant, not a masked mean), that vector plus eight scene-level statistics updates the single state
+through the same `_recur`, and **every candidate is rescored against the same state**. `--recurrence mingru` keeps the
+recurrence family orthogonal, so this measures addressability alone. 157,058 parameters against the adopted arm's
+207,362, **-24%**.
+
+It is a fair like-for-like because the frozen memory only rescores: the coasting head went in item 24, so neither arm
+places a detection and the only difference is whether the memory is addressable.
+
+| arm | test AP | gain over own candidates | CPU total | CPU memory |
+| --- | ---: | ---: | ---: | ---: |
+| `mingru`, 256 slots | **86.40%** | **+4.18** | 19.39 | 9.10 |
+| `gru`, 256 slots | 86.12% | +3.90 | 20.57 | 10.33 |
+| `selective`, 256 slots, 3 seeds | 85.88-86.08 | +3.65 to +3.97 | 19.50 | 9.21 |
+| **global + mingru, no slots** | **82.44%** | **+0.22** | **12.57** | **2.32** |
+
+**It misses the frozen range by 3.44 pp, which is 2.6x the 1.32 pp three-sigma bar, so this is not ambiguous.** And the
+shape of the miss is the result: the global state captures **0.22 of the 3.65-4.18 pp** the slots deliver, about **5%**.
+The memory is not degraded without addressing, it is very nearly *absent*.
+
+**The gate says the same thing mechanically.** The slot arms drove their scalar rescore gate to **+0.047** and
+**+0.052**; this arm's sat at **-0.04** and never moved across 43 epochs of the 1 s stage and 13 of the 10 s stage,
+because given one scene-level summary there was no useful correction to find. Its best validation AP was 77.06% against
+candidates of 76.97%, where the slot arms reached 81.40-82.01% on the same candidates.
+
+**So this is a positive validation of the paper's central claim, not a closed ablation**: the memory's whole +3.65 to
++4.18 pp comes from addressing a scene as a set of per-object states, and it was established by trying hardest to break
+it -- strongest pooling, published recurrence, everything else held fixed.
+
+**What the slots cost, stated rather than hidden.** Dropping them takes the CPU total from 19.39 to **12.57 ms** and the
+memory phase from 9.10 to **2.32** -- so the 256 slots cost about **6.8 ms per frame and buy 3.9 pp**. At FROG's 25 ms
+budget both fit; the trade is worth taking, and the write-up should quote the price.
+
+**Caveats.** One seed, weights chosen on validation, and the comparator is seed 0's 86.08% with the frozen three-seed
+range 85.88-86.08. The run was **uninterrupted** -- one attempt, 15:49 to 18:15 -- so it is not a resumed draw.
+
+**Two bugs the real-data smoke caught that the unit tests did not**, both worth recording because the class recurs:
+
+* **`--global-state` reached the parser and `object_memory`'s restore table but never the `ObjectMemory(...)` call in
+  `train_memory`.** The run trained the *adopted* model and printed its parameter count, and would have reported it as
+  the arm. `ObjectMemory` has fifteen-odd such switches, so `tests/test_train_takheliped.py` now introspects the
+  construction site and fails for any parsed flag that is never passed.
+* **`cand_features` was undefined in the global path**, behind a comment claiming the branch was unreachable because
+  `feature_dim` is 0. It is not -- the real arm is built with `feature_dim` from stage 2's pooled decoder features -- and
+  the unit tests all ran at 0. There is now a test at `feature_dim=7`.
+
+A third smoke failure was not a defect: `--limit-recordings 2` gives one iteration per epoch, so the loss window was
+empty at the first evaluation and the `loss == 0.0` guard fired correctly.
+
+## Item 37: the dt-aware rule is the *most* fragile arm under dropped frames, not the most robust (2026-10-22)
+
+*keywords: item 37, flaky, decimate, dt_mode exact averaged, periodic_keep, bernoulli_keep, burst_keep, slot_experiments flaky, frame_periods averaging, DT_AVERAGE_FRAMES, native_timing, a64_d3_fixed_decay_s0*
+
+Item 16 found the three recurrences tie and could not say why. This says why, and then says what happens when the
+mechanism finally has something to act on.
+
+**The premise, measured over the whole 47-recording test split.** `frame_periods` hands stage 3 an exponential running
+average of the stamped intervals with rate `1/32`, clipped to `[1 ms, 1 s]` -- correctly, because FROG's stamps arrive in
+bunches and dividing by one of them once sent slot velocities to several m/s (A51 item 0a). The consequence had never
+been quantified:
+
+| | median | 5-95% |
+| --- | ---: | ---: |
+| FROG's **stamped** intervals | 38.13 ms | 0.03 - 40.06 ms, **20.2% under 1 ms** |
+| what the model is **actually fed** | 24.98 ms | **24.50 - 25.53 ms** |
+
+**A 1% spread.** So `exp(-dt * rate)` has been a fixed per-slot decay factor for this model's entire life -- formally the
+same shape as a GRU forget gate with no time input. Item 16's tie was not a surprise waiting to be explained; it was
+arithmetic.
+
+**The experiment.** `decimate(split, keep, dt_mode)` drops frames and tells the model about the gaps either `exact`
+(`(k+1) x` the averaged rate -- legitimate because the drops are synthesised, so `k` is known rather than read off a
+bunched stamp) or `averaged` (the surviving stamps back through `frame_periods`, which is what the shipped pipeline
+does). Six patterns, four arms, evaluation only, no retraining. The metric is each arm's **gain over its own candidates
+on the same decimated stream**, because dropping frames moves the scored population's difficulty for everyone alike;
+stage 2 is history-free, so its AP *is* that difficulty.
+
+**Two checks first.** `none` reproduces the frozen model's published **86.08%** exactly, so the sweep's zero point is the
+baseline rather than a near-miss of it; and candidate AP stays inside **81.90-82.29%** across every row, so the
+population barely moves and the memory differences are signal.
+
+| arm | gain, no drops | gain, `burst-20/40` exact | degradation |
+| --- | ---: | ---: | ---: |
+| `selective` (adopted, dt-aware) | 3.87 | 2.71 | **-1.16** |
+| `mingru` | **4.18** | **3.78** | -0.40 |
+| `gru` | 3.90 | 3.45 | -0.45 |
+| `d3` (one fixed decay time) | 2.23 | 2.16 | -0.07 |
+
+**The dt-aware arm is the most fragile of the three.** minGRU is both the highest everywhere and the least damaged by
+outages; `gru` sits with it. `d3` is almost flat but 1.6 pp below everyone, which separates two things that had been
+confused: **the learned decay supplies the level, not the robustness.**
+
+**Feeding the adopted rule the true elapsed time makes it worse**, by 0.31 and 0.42 pp on the two 0.5 s burst settings
+against hiding the gap. The likely cause is distribution shift rather than a broken mechanism -- a model trained at
+`dt` = 25 ms meets 0.525 s, `exp(-dt * rate)` collapses the state by a factor it has never seen, and slots that would
+have ridden out the gap are killed. **That reading is zero-shot and must not be reported as "dt-awareness is
+harmful."**
+
+**A confound found in the results, which limits one of the two comparisons.** `mingru` and `gru` have no `dt` input, yet
+their numbers move between the two modes (3.78 against 3.41 at the harshest). They must: `dt` also drives the *shared*
+bookkeeping -- the rule-based confidence decay, the `position + velocity * dt` prediction, and the age / time-since-match
+/ hit-rate statistics every recurrence reads. So **within-arm `exact` vs `averaged` measures the bookkeeping's `dt`
+sensitivity, not the recurrence's**, and only the between-arm comparison at one fixed mode is a clean test. The
+between-arm column above is the one that stands.
+
+**Not run, deliberately: drop-augmented retraining.** It is the only way to separate "the mechanism is useless" from "we
+never trained it for the regime it exists for", and `decimate` would serve training unchanged -- but the prior is poor.
+The adopted rule would need **+1.07 pp** merely to match minGRU at the harshest setting, and the dt-blind arms were
+equally untrained for the regime while degrading less than half as much. The better remaining defence of the mechanism
+is **cross-rate transfer**, which costs no new training: DROW runs at 12.5 Hz against FROG's 40.01 Hz, and a model that
+knows its period changed should transfer where one taking fixed steps cannot. Folded into A63 step 2.
+
+## Item 35: at its own operating point the memory still loses more coverage than it recovers (2026-10-22)
+
+*keywords: item 35, takheliped_oracle, oracle_frozen_t03, oracle_frozen_matched_fp, interpolation bound, covered_stage2, covered_stage3, recovered, lost, ranking not recall*
+
+A50 measured the interpolation ceiling on the B0-era backbone and found stage 3 taking 17.5% of it while dropping 6,076
+people stage 2 had found. Re-run on the **frozen** model, at two thresholds, because a ceiling has to be read at the
+operating point its consumer uses (item 34's lesson). 153,655 person-observations, 672 trajectories, 50,088 annotated
+frames, 2,254 position-key collisions.
+
+| threshold | covered by stage 2 | covered by stage 3 | recovered | lost |
+| --- | ---: | ---: | ---: | ---: |
+| 0.3 (A50's, far above where this model runs) | 93.4% | 81.7% | 255 | **18,246** |
+| **0.0333**, the frozen model's own matched-FP point | **96.0%** | **94.2%** | 203 | **2,990** |
+
+**The memory is not harvesting the bridgeable misses; it is net negative on coverage at both thresholds** -- -2,787
+observations at the operating point that matters. Its +3.87 pp of AP is bought with **ranking, not recall**, which is
+what item 23 concluded from the other direction and what A61's GOSPA agrees with. For the ceiling question this settles
+the shape of the answer: the headroom a perfect memory would harvest is not headroom this memory is leaving on the
+table through a weak recurrence -- it is headroom this design does not reach for at all.
+
+Caveat kept with the numbers: one threshold cannot contradict an AP integrated over all of them, and the bridge-ceiling
+curve in these files is **not** quoted here -- its JSON keys differ from the reader used, so it was not read.
+
+## Item 20 closed without a run: a learned association width has nothing to recover (2026-10-22)
+
+*keywords: item 20, D5, learned association width, gate_m, S4, 99.2%, association coverage, owner's call*
+
+**D5** would have made the association width -- the Gaussian match radius between a candidate and a slot -- learned and
+input-dependent instead of a fixed `gate_m`. **Closed on evidence already on disk, the owner's call**: A51's S4 measured
+how many annotated people have a live slot within 0.5 m across a 3x range of that very parameter.
+
+| gate | people with a live slot within 0.5 m |
+| --- | ---: |
+| 0.3 m | 99.1% |
+| **0.6 m** (adopted) | **99.2%** |
+| 1.0 m | 99.2% |
+
+**A learned width has 0.8% of people to recover, over a curve that is flat across the whole range it would learn.** S4
+was itself closed as "not worth a training run" on exactly this reading, and item 20 was gated on item 8 and inherits
+the verdict. Spending a stage-3 arm to confirm a flat curve is the error AGENTS.md rule 3's family warns about --
+measuring something at a setting where it cannot move.
+
 ## Items 18 and 19 answered: the beam frame wins, the block and the width do not matter (2026-10-21)
 
 *keywords: item 18, item 19, a67_sensor, a67_residual, a67_wide, --vote-frame sensor, --block residual, --channels 64 128 256, stage2_probe_items1819.json, nms-mean, averaged weights*

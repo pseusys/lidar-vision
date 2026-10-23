@@ -6,6 +6,32 @@ By how much should a given accuracy or speed number be discounted, and why.
 The standing comparison against published SOTA is in [`performance-log.md`](performance-log.md), and individual runs and sweeps in [`../CHANGELOG.md`](../CHANGELOG.md); this file is about how to read either correctly.
 
 
+
+## The architecture search was not exhaustive, and the write-up must say so (owner's call, 2026-10-23)
+
+**Every "we tested X and it did not help" in this project means one arm at one seed, judged against a 1.32 pp
+three-sigma bar, and unpromising ideas were dropped early rather than pursued.** That is a deliberate policy and it is
+defensible, but only if it is stated. The alternative reading -- that the adopted architecture survived an exhaustive
+search -- is one this evidence cannot support, and a reviewer who assumed it would be misled.
+
+**What the policy actually is.** Run each idea **once**. If the result sits inside variance, drop it and move on. Do not
+spend a second seed on an arm with no signal, and do not take "inside variance" as equivalence -- it is *no evidence of
+a difference*, which is a weaker statement and the one to write down. The policy accepts a known risk: a **hidden gem**,
+an idea that would have paid off at a second seed or a tuned setting, is dropped. The owner takes that risk knowingly
+rather than by omission.
+
+**So the honest form of the claim is:** *of the architectural variations we tried, none beat the adopted choice by more
+than noise; we did not try every variation, and the ones we rejected we rejected on one measurement each.* Not: *this is
+the best architecture.*
+
+**Where this bites hardest.** Items 15, 17, 18, 19, 20, 24, 25, 34 and A58/A60 are all single-arm negatives, and items
+20 and S4 were closed **without any run at all**, on the grounds that the parameter's own sweep was flat. The three
+findings that do carry weight have more behind them: the memory's value over its candidates (three seeds), the removal
+of both attention mechanisms (E13, three seeds), and per-object addressability (item 36, a 3.44 pp gap against a 1.32 pp
+bar). Quote those as results and the rest as screening.
+
+**This paragraph belongs in the paper's limitations**, not only here (`docs/PAPER.md`).
+
 ## A CPU millisecond moves between sessions, so only arms measured back to back can be compared (2026-10-20)
 
 **Found while answering item 16's second half**, and it changes how every future CPU row has to be taken. minGRU's memory

@@ -76,6 +76,7 @@ DT_AVERAGE_FRAMES = 32         # intervals in stage 3's running time step; FROG'
 LFE_MISSING_RETURN_M = 10.0     # the FROG loader's legacy clamp, kept for LFE-Peaks' candidates only
 MIN_DT_S = 1e-3
 MAX_DT_S = 1.0
+DT_MODES = ("exact", "averaged")   # what a decimated stream tells the model about its gaps (`TODO.md` item 37)
 GRAD_CLIP = 1.0
 EPOCH_TOLERANCE = 0.01
 TEST_STRIDES = (1, 5)
@@ -213,6 +214,54 @@ def pack(seqs: Sequence[SequenceCandidates]) -> Split:
     lengths = np.array([len(s.time) for s in seqs])
     offsets = np.concatenate([[0], np.cumsum(lengths)[:-1]])
     return Split(data, offsets, lengths, frame_periods(data.time, offsets, lengths, DT_AVERAGE_FRAMES))
+
+
+def decimate(split: Split, keep: np.ndarray, dt_mode: str = "exact") -> Split:
+    """`split` with only the frames `keep` marks, as if the sensor had stalled (`TODO.md` item 37).
+
+    Item 16 found the three recurrences tie, and this is the experiment that asks whether the adopted rule's one
+    distinguishing property -- decaying over **real elapsed time** -- is worth anything. It cannot be asked on FROG as
+    recorded: `frame_periods` averages the stamped intervals over `DT_AVERAGE_FRAMES`, rightly (A51 item 0a), so at a
+    near-constant 40.01 Hz the model has only ever seen a constant step and `exp(-dt * rate)` has been a fixed per-slot
+    decay factor by construction. Dropping frames creates the gaps; `dt_mode` decides what the model is told about them.
+
+        "exact"     the gap reaches `dt` as `(k+1) x` the local averaged rate. Legitimate precisely because the drops
+                    are synthesised here, so `k` is known rather than read off one of FROG's bunched stamps -- the
+                    robust averaged rate is kept and only an exact integer multiplier is applied. Asks whether the
+                    mechanism is worth anything **when it actually gets `dt`**.
+        "averaged"  the surviving stamps go back through `frame_periods`, which is what the shipped pipeline does. Asks
+                    whether **today's pipeline** rides out dropouts better with the adopted rule. A single drop moves a
+                    32-interval average by under a millisecond, so this mode is expected to be nearly blind to light
+                    decimation -- and the gap between the two modes prices what the averaging discards.
+
+    Gaps are measured inside a recording, never across the boundary between two: recordings are packed end to end and
+    their stamps are far apart. A recording's first surviving frame carries `MIN_DT_S`, as its original first frame
+    does, and a recording that loses every frame is dropped rather than kept empty, which would hand `evaluate` a stream
+    with nothing in it. Keeping every frame reproduces `split` exactly in both modes, so a severity sweep's zero point
+    is the baseline rather than a near-miss of it.
+    """
+    if dt_mode not in DT_MODES:
+        raise ValueError(f"dt_mode must be one of {list(DT_MODES)}, not {dt_mode!r}")
+    keep = np.asarray(keep, bool)
+    if keep.shape != (len(split.data.time),):
+        raise ValueError(f"keep must carry one flag per packed frame ({len(split.data.time)}), not {keep.shape}")
+
+    lengths, survivors, steps = [], [], []
+    for offset, n in zip(split.offsets, split.lengths):
+        inside = np.flatnonzero(keep[int(offset):int(offset) + int(n)])
+        if not len(inside):
+            continue
+        lengths.append(len(inside))
+        survivors.append(int(offset) + inside)
+        gaps = np.diff(inside)
+        steps.append(np.concatenate([[MIN_DT_S], np.minimum(gaps * split.dt[int(offset) + inside[1:]], MAX_DT_S)]))
+
+    index = np.concatenate(survivors)
+    data = SequenceCandidates(**{f.name: getattr(split.data, f.name)[index] for f in fields(SequenceCandidates)})
+    lengths = np.array(lengths)
+    offsets = np.concatenate([[0], np.cumsum(lengths)[:-1]])
+    dt = np.concatenate(steps) if dt_mode == "exact" else frame_periods(data.time, offsets, lengths, DT_AVERAGE_FRAMES)
+    return Split(data, offsets, lengths, dt)
 
 
 class StreamSampler:
@@ -642,6 +691,7 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
              # it, so defaulting would build a head-free model and then refuse the adopted model's own weights.
              "coast": ("coast.weight" in checkpoint.get("model", {})) if args.get("coast") is None else literal_eval(args["coast"]),
              "recurrence": parameters["recurrence"].default if args.get("recurrence") is None else args["recurrence"],
+             "global_state": parameters["global_state"].default if args.get("global_state") is None else literal_eval(args["global_state"]),
              "fixed_decay_s": parameters["fixed_decay_s"].default if args.get("fixed_decay_s") is None else float(args["fixed_decay_s"]),
              "learn_value": parameters["learn_value"].default if args.get("learn_value") is None else literal_eval(args["learn_value"]),
              "exchange": parameters["exchange"].default if args.get("exchange") is None else literal_eval(args["exchange"]),
@@ -978,7 +1028,7 @@ def train_memory(args) -> None:
 
     model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value), feature_dim=splits["train"].data.features.shape[-1],
                          rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame, coast=args.coast,
-                         recurrence=args.recurrence,
+                         recurrence=args.recurrence, global_state=args.global_state,
                          fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value, exchange=args.exchange,
                          learned_match=args.learned_match, recurrent=args.recurrent, visibility=args.visibility).to(device)
     print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}"
@@ -988,8 +1038,13 @@ def train_memory(args) -> None:
           f"{'room' if args.room_frame else 'sensor'} coordinates, value by "
           f"{'the latest score' if args.latest_value else 'accumulation'}{' (learned)' if args.learn_value else ''}, decay "
           f"{f'fixed at {args.fixed_decay_s:g} s' if args.fixed_decay_s else 'learned per slot'}"
+          # Which recurrence ran, because selective and minGRU have *identical* parameter counts -- selective's
+          # bias-free `decay` plus its own `decay_bias` is exactly minGRU's `gate` with bias -- so the count cannot
+          # tell two arms apart and a sweep's logs have to say it outright (`TODO.md` item 38).
+          f", {args.recurrence} recurrence"
           f"{'' if args.exchange else ', no slot exchange'}{'' if args.learned_match else ', no learned matching'}"
-          f"{'' if args.recurrent else ', no slot state at all'}", flush=True)
+          f"{'' if args.recurrent else ', no slot state at all'}"
+          f"{', ONE GLOBAL SCENE STATE and no addressable slots (item 36)' if args.global_state else ''}", flush=True)
     start = time.time()
     history, done_hours, first_stage, first_epoch = [], 0.0, 0, 0
     if resumed:
@@ -1731,6 +1786,14 @@ def build_parser() -> argparse.ArgumentParser:
                                 "textbook gated recurrent unit. mingru: Feng et al.'s minimal variant, no reset gate. "
                                 "**Neither gru nor mingru sees dt**, which is the comparison rather than an oversight: they "
                                 "take a step, and a robot's frames are not uniformly spaced")
+        step1.add_argument("--global-state", action=argparse.BooleanOptionalAction, default=False,
+                           help="replace the addressable per-object slots with ONE scene-level recurrent state (TODO.md "
+                                "item 36): no association, no spawn, no eviction, no per-slot decay. The frame's "
+                                "candidates are attention-pooled into one vector, that updates the single state through "
+                                "the same --recurrence, and every candidate is rescored against it. The strongest attack "
+                                "on this project's own contribution: if one global state matches 256 addressable slots, "
+                                "the slots are decoration. Forces --slots 1, and refuses --coast and --visibility, which "
+                                "both read a slot's position")
         step1.add_argument("--coast", action=argparse.BooleanOptionalAction, default=False,
                            help="restore the coasting head, which lets a slot report a person no candidate covers. **Removed "
                                 "from the architecture 2026-10-16** (TODO item 24): ablating it cost nothing measurable, and it "

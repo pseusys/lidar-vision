@@ -7,6 +7,23 @@ Open questions live in [`../TODO.md`](../TODO.md); this file is for settled ones
 
 Each entry states what was proposed, what was measured, and what new evidence would be needed to reopen it.
 
+## A learned association width (TODO.md item 20, A51's D5)
+
+*keywords: item 20, D5, association width, gate_m, SlotRules, S4, 99.2%, flat curve*
+
+**Idea.** Make the Gaussian width that matches a candidate to a slot learned and input-dependent, rather than the fixed
+`gate_m` in `SlotRules`. It was the last of A51's "what could become trainable" list to stay open.
+
+**Why rejected without a run (owner's call, 2026-10-22).** A51's S4 had already swept the parameter it would learn:
+**99.1 / 99.2 / 99.2%** of annotated people have a live slot within 0.5 m at gates of 0.3 / 0.6 / 1.0 m. The association
+is not the limit -- it reaches essentially everybody, and the curve is flat across a 3x range -- so a learned width has
+**0.8% of people to recover** and no gradient in the measurement to suggest where it would find them. S4 was closed as
+"not worth a training run" on this same reading; item 20 was gated on item 8 and inherits it.
+
+**What would reopen it.** A dataset where association demonstrably fails: more crowding than FROG's 3.06 people per
+frame, or a frame rate low enough that a person moves further than the gate between scans (DROW at 12.5 Hz is 3.2x
+FROG's period, so A63 is where to look).
+
 ## Sensor-frame vote targets in stage 2's head (TODO.md item 18)
 
 *keywords: item 18, --vote-frame sensor, swap_vote_frame, make_targets frame, a67_sensor, beam-relative offsets, across along*

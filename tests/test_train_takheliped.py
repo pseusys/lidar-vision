@@ -1516,6 +1516,35 @@ class TestTheCoastingHeadIsGone:
         assert object_memory(checkpoint, feature_dim=0).coast is not None
 
 
+class TestEveryStage3FlagReachesTheModel:
+    """A flag that is parsed, stored and restored but never *passed* trains the control and reports it as the arm.
+
+    That happened on 2026-10-22: `--global-state` reached the parser and `object_memory`'s restore table, but not the
+    `ObjectMemory(...)` call in `train_memory`, so a smoke run trained the adopted model and printed the adopted
+    parameter count. `ObjectMemory` has fifteen-odd such switches, so this checks the wiring by introspection rather
+    than by one more pair of eyes.
+    """
+
+    #: Constructor parameters that deliberately do not come from a same-named CLI flag.
+    NOT_FLAGS = {"rules", "dim", "heads", "sigma_m", "decay_init_s", "feature_dim", "rescore"}
+
+    def test_every_constructor_switch_with_a_matching_flag_is_passed_at_the_construction_site(self):
+        import inspect
+        from inspect import signature
+
+        from train_takheliped import train_memory
+
+        source = inspect.getsource(train_memory)
+        call = source[source.index("ObjectMemory("):]
+        call = call[:call.index(").to(device)")]
+        flags = {action.dest for action in build_parser()._subparsers._group_actions[0].choices["step3a"]._actions}
+        shared = {name for name in signature(ObjectMemory).parameters if name not in self.NOT_FLAGS} & flags
+
+        missing = sorted(name for name in shared if f"{name}=args.{name}" not in call)
+
+        assert not missing, f"parsed but never passed to ObjectMemory: {', '.join(missing)}"
+
+
 class TestTheSensorFrameTargets:
     """Item 18's training side: `make_targets` in the frame the head regresses.
 

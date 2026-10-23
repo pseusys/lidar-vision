@@ -12,7 +12,8 @@ from math import log, radians, sqrt
 from typing import List, Optional, Tuple
 
 from torch import (
-    Tensor, arange, arctan, argsort, atan2, cat, cos, cumprod, exp, expm1, full, full_like, isfinite, linspace, log1p, minimum, nn,
+    Tensor, arange, arctan, argsort, atan2, cat, cos, cumprod, exp, expm1, full, full_like, isfinite, linspace, log1p, long,
+    minimum, nn, ones_like, randn,
     sigmoid,
     no_grad, ones, sin, stack, tanh, where, zeros, zeros_like,
 )
@@ -304,19 +305,40 @@ class ObjectMemory(nn.Module):
                  feature_dim: int = 0, rescore_gate: bool = True, rescore_limit: float = 0.0, room_frame: bool = True,
                  fixed_decay_s: float = 0.0, learn_value: bool = False, exchange: bool = True, learned_match: bool = True,
                  recurrent: bool = True, rescore: bool = True, visibility: bool = False, coast: bool = False,
-                 recurrence: str = "selective"):
+                 recurrence: str = "selective", global_state: bool = False):
         super().__init__()
+        # `TODO.md` item 36: one scene-level state in place of `rules.capacity` addressable per-object slots. The three
+        # refusals are not conservatism -- each of those features reads a slot's *position*, which this arm does not have.
+        if global_state:
+            if coast:
+                raise ValueError("global_state carries no slot positions, so coast must be False (TODO.md item 36)")
+            if visibility:
+                raise ValueError("global_state carries no slot positions, so visibility must be False (TODO.md item 36)")
+            if not recurrent:
+                raise ValueError("global_state with recurrent=False would leave no memory at all, which is not an arm")
+            rules = replace(rules, capacity=1)      # a capacity counts addressable slots, and this arm has none
+        self.global_state = global_state
+        addressable = not global_state
         self.rules, self.dim, self.sigma_m, self.feature_dim = rules, dim, sigma_m, feature_dim
         self.visibility = visibility
         statistics = SLOT_STATISTICS + int(visibility)
         self.rescore_limit, self.room_frame, self.fixed_decay_s = rescore_limit, room_frame, fixed_decay_s
         self.recurrent = recurrent
         self.encode = nn.Sequential(nn.Linear(CANDIDATE_FEATURES + feature_dim, dim), nn.GELU(), nn.Linear(dim, dim))
-        self.spawn = nn.Linear(dim, dim) if recurrent else None
+        self.spawn = nn.Linear(dim, dim) if recurrent and addressable else None
         self.statistics = nn.Linear(statistics, dim)
-        self.match = _BiasedAttention(dim, heads) if recurrent and learned_match else None
-        self.exchange = _BiasedAttention(dim, heads) if recurrent and exchange else None
-        self.exchange_norm = nn.LayerNorm(dim) if recurrent and exchange else None
+        self.match = _BiasedAttention(dim, heads) if recurrent and learned_match and addressable else None
+        self.exchange = _BiasedAttention(dim, heads) if recurrent and exchange and addressable else None
+        self.exchange_norm = nn.LayerNorm(dim) if recurrent and exchange and addressable else None
+        # Attention pooling over the frame's candidates, with a learned query: the owner's call of 2026-10-22 is to probe
+        # the ceiling of a swap with the strongest global variant, because if this cannot reach the frozen model's 86%
+        # then a masked mean cannot either and the slots have earned their place. `_BiasedAttention` carries an always
+        # attendable null item, so a frame with no valid candidate still has a defined answer.
+        self.pool = _BiasedAttention(dim, heads) if global_state else None
+        if global_state:
+            self.query = nn.Parameter(randn(1, 1, dim) * 0.02)
+        else:
+            self.register_parameter("query", None)
         if recurrence not in RECURRENCES:
             raise ValueError(f"recurrence must be one of {list(RECURRENCES)}, not {recurrence!r}")
         self.recurrence = recurrence
@@ -335,7 +357,7 @@ class ObjectMemory(nn.Module):
         if learn_value:                                      # the value rule's two constants, as parameters the loss can reach
             self.value_gain = nn.Parameter(tlog(full((), rules.gain / (1.0 - rules.gain))))
             self.value_fade = nn.Parameter(tlog(expm1(full((), rules.fade_time_s))))
-        self.recall = _BiasedAttention(dim, heads) if recurrent else None
+        self.recall = _BiasedAttention(dim, heads) if recurrent and addressable else None
         self.rescore = nn.Sequential(nn.Linear(2 * dim, dim), nn.GELU(), nn.Linear(dim, 1)) if rescore else None
         if rescore and rescore_gate:
             self.rescore_gate = nn.Parameter(zeros(()))
@@ -387,6 +409,54 @@ class ObjectMemory(nn.Module):
             return full_like(slots.value, SILENT_COAST_LOGIT), zeros_like(slots.alive)
         return self.coast(cat([state, stats], dim=-1))[..., 0], slots.alive & ~events.matched & ~refill
 
+    def _scene_statistics(self, cand_xy: Tensor, cand_score: Tensor, cand_valid: Tensor, dt: Tensor, slots: Slots) -> Tensor:
+        """The scene-level analogues of the eight per-slot statistics, `[B, 1, SLOT_STATISTICS]` (`TODO.md` item 36).
+
+        Deliberately the same width as the slot statistics they replace, so `_recur` and every gate keep the input width
+        they have in the addressable model and the recurrence family stays orthogonal to this ablation. With no
+        bookkeeping, **this is `dt`'s only route into the model**, which matters because item 37 showed that route
+        carries real signal.
+        """
+        v = cand_valid.float()
+        n = v.sum(-1).clamp(min=1.0)
+        return stack([(cand_score * v).sum(-1) / n,
+                      (cand_score * v).amax(-1),
+                      v.sum(-1) / FEATURE_SCALE,
+                      v.mean(-1),
+                      (cand_xy.norm(dim=-1) * v).sum(-1) / n / FEATURE_SCALE,
+                      (_logit(cand_score) * v).sum(-1) / n / FEATURE_SCALE,
+                      dt,
+                      slots.age_s[:, 0] / FEATURE_SCALE], dim=-1)[:, None]
+
+    def _global_step(self, cand_xy: Tensor, cand_score: Tensor, cand_valid: Tensor, pose: Tensor, dt: Tensor,
+                     slots: Slots, cand_features: Optional[Tensor] = None) -> MemoryOutput:
+        """One frame with a single scene-level state and no addressable slots at all (`TODO.md` item 36).
+
+        `manage_slots` **is** the slot mechanism, so this path never calls it: no association, no spawn, no eviction, no
+        per-slot decay, no proximity bias anywhere. The frame's candidates are pooled into one vector, that vector plus
+        the scene statistics updates the one state through the same `_recur`, and **every candidate is rescored against
+        the same state** -- which is exactly the question, since the adopted model rescores each candidate against the
+        state of the slot its association gave it.
+
+        It is a fair like-for-like because the frozen memory only rescores: the coasting head went in item 24, so
+        neither arm places a detection and the only difference is whether the memory is addressable.
+        """
+        features = stack([cand_score, _logit(cand_score) / FEATURE_SCALE, cand_xy[..., 0] / FEATURE_SCALE,
+                          cand_xy[..., 1] / FEATURE_SCALE, cand_xy.norm(dim=-1) / FEATURE_SCALE], dim=-1)
+        if self.feature_dim:
+            features = cat([features, cand_features], dim=-1)
+        encoded = self.encode(features)
+        b, p = cand_score.shape
+        pooled = self.pool(self.query.expand(b, -1, -1), encoded, zeros(b, 1, p, device=cand_score.device), cand_valid)
+        stats = self._scene_statistics(cand_xy, cand_score, cand_valid, dt, slots)
+        state = self._recur(slots.state, cat([pooled, stats], dim=-1), dt)
+        slots = Slots(ones_like(slots.alive), slots.value, slots.position, slots.velocity, slots.origin,
+                      slots.age_s + dt[:, None], slots.since_match_s, slots.hit_rate, state)
+        candidate_logit = self._rescored(encoded, state.expand(-1, p, -1), cand_score)
+        empty = full_like(slots.alive, -1, dtype=long)
+        return MemoryOutput(candidate_logit, full_like(slots.value, SILENT_COAST_LOGIT), slots.position,
+                            zeros_like(slots.alive), slots, SlotEvents(zeros_like(slots.alive), empty, empty))
+
     def _rescored(self, encoded: Tensor, recalled: Tensor, cand_score: Tensor) -> Tensor:
         """A candidate's logit after the memory's correction, or its own logit untouched when `rescore` is false (A51 E12a),
         which leaves the prior drawn into stage 2 as the memory's only remaining route to the loss."""
@@ -423,6 +493,8 @@ class ObjectMemory(nn.Module):
         detector's own features of each candidate, when the memory was built with `feature_dim`."""
         if reset is not None:
             slots = _where_slots(reset, self.initial_state(len(reset), cand_xy.device), slots)
+        if self.global_state:
+            return self._global_step(cand_xy, cand_score, cand_valid, pose, dt, slots, cand_features)
         world = sensor_to_world(cand_xy, pose) if self.room_frame else cand_xy
         previous = slots
         slots, events = manage_slots(slots, world, cand_score, cand_valid, dt, self.slot_rules())
