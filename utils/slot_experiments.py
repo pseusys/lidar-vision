@@ -37,6 +37,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
+from takheliped.detectors.takheliped import ObjectMemory  # noqa: E402
 from train_takheliped import (  # noqa: E402
     DT_MODES, MIN_REPORTED_SCORE, decimate, detect_device, evaluate, evaluation_segments, gather,
     load_split, memory_ms_per_frame, object_memory, score_detections,
@@ -48,6 +49,9 @@ HEADING_DEG_PER_S = 0.5
 CROWD_BUCKETS = ((0, 1), (2, 3), (4, 5), (6, 99))
 SLOT_COUNTS = (64, 128, 256, 512, 720)
 TIMED_FRAMES = 500
+# Item 39, bracketing the adopted 0.6 m: half it, and on up to a width at which every slot is about equally near,
+# which is item 36's global-state arm approached from the other direction.
+SIGMAS_M = (0.3, 0.45, 0.6, 0.9, 1.5, 3.0)
 # Item 37. Four shapes share a 20% drop so gap shape is separated from how much data was lost; the last raises the share
 # to 50% at the same shape. Bursts stay under 40 frames because MAX_DT_S is 1.0 s and a longer gap saturates the clamp.
 FLAKY_PATTERNS = (
@@ -206,6 +210,35 @@ def cost(args, device) -> Dict:
     return dict(rows=rows, timed_frames=TIMED_FRAMES)
 
 
+def sigma(args, device) -> Dict:
+    """AP against `sigma_m`, the width of the recall attention's distance bias (`TODO.md` item 39).
+
+    **Replayed, not retrained**, which is minutes instead of hours: `step` reads `self.sigma_m` on every call, so a
+    trained memory can be played at other widths with its weights untouched -- exactly how `cost` replays it at other
+    slot counts.
+
+    **Why this parameter.** Item 36 settled that addressing is the entire mechanism (one global state captures 5% of the
+    slots' gain), which makes `sigma_m` the number that defines the thing that matters. It has never been varied in any
+    form; A51's S4 swept `gate_m`, the *association* gate inside `manage_slots`, which is a different parameter in a
+    different component -- and that is why item 20 was closed and this is its sharper replacement.
+
+    **Read a flat curve weakly.** The weights adapted to 0.6, so a replay understates how much the width matters; a
+    sharp curve is strong evidence and a flat one only says the trained model is locally insensitive. Train an arm only
+    if the replay looks live.
+    """
+    model, split = load(args, device)
+    segments = evaluation_segments(split, 0, 0, 0)
+    rows = []
+    for width in SIGMAS_M:
+        model.sigma_m = width
+        r = evaluate(model, split, device, args.stride, args.streams, segments)
+        rows.append(dict(sigma_m=width, ap=r["memory"]["ap"] * 100, candidates_ap=r["candidates"]["ap"] * 100,
+                         gain=(r["memory"]["ap"] - r["candidates"]["ap"]) * 100, own_recall=r["memory"]["own_recall"] * 100))
+        print(f"  sigma {width:4.2f} m: memory AP {rows[-1]['ap']:.2f}%  candidates {rows[-1]['candidates_ap']:.2f}%"
+              f"  gain {rows[-1]['gain']:+.2f} pp", flush=True)
+    return dict(rows=rows, trained_at=ObjectMemory().sigma_m)
+
+
 def native_timing(split) -> Dict:
     """How uniform FROG actually is, both as stamped and as the model is fed it (`TODO.md` item 37).
 
@@ -267,7 +300,7 @@ def output_path(args) -> Path:
     return args.out if args.out is not None else args.out_dir / f"a51_{args.experiment}.json"
 
 
-EXPERIMENTS = dict(horizon=horizon, odometry=odometry, crowding=crowding, cost=cost, flaky=flaky)
+EXPERIMENTS = dict(horizon=horizon, odometry=odometry, crowding=crowding, cost=cost, flaky=flaky, sigma=sigma)
 
 
 def main() -> None:

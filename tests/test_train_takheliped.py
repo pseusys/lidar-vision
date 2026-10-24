@@ -312,18 +312,39 @@ class TestAttributionArmShapes:
     def test_step2_defaults_describe_today_s_network(self):
         """Exact equality on purpose: a new key here changes what every loader rebuilds, so adding one is a decision."""
         assert network_shape(self._stored([])) == dict(max_range_m=MAX_RANGE_M, input_features="beam", channels=(32, 64, 128),
-                                                       gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext")
+                                                       gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext", aggregator=True,
+                                                       kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2)
 
     def test_the_arms_flags_describe_their_network(self):
         shape = network_shape(self._stored(["--input-features", "lfe", "--channels", "8", "16", "32"]))
         assert shape == dict(max_range_m=MAX_RANGE_M, input_features="lfe", channels=(8, 16, 32),
-                             gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext")
+                             gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext", aggregator=True,
+                                                       kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2)
 
     def test_the_gather_flag_describes_its_network(self):
         """Item 15: the metric window is part of the shape, so a checkpoint trained with it rebuilds with it."""
         shape = network_shape(self._stored(["--gather-width-m", "1.66", "--gather-samples", "11"]))
 
         assert (shape["gather_width_m"], shape["gather_samples"]) == (1.66, 11)
+
+    def test_item_45_s_shape_knobs_describe_their_network(self):
+        """Four numbers chosen once and never varied; each has to reach the network and come back from a checkpoint."""
+        shape = network_shape(self._stored(["--kernel-size", "5", "--expansion", "2",
+                                            "--blocks", "1", "2", "3", "--bottleneck-blocks", "4"]))
+
+        assert (shape["kernel_size"], shape["expansion"]) == (5, 2)
+        assert (shape["blocks"], shape["bottleneck_blocks"]) == ((1, 2, 3), 4)
+
+    def test_a_checkpoint_written_before_item_45_s_knobs_keeps_the_adopted_shape(self):
+        shape = network_shape({"max_range_m": "10.0"})
+
+        assert (shape["kernel_size"], shape["expansion"], shape["blocks"], shape["bottleneck_blocks"]) == (7, 4, (2, 2, 2), 2)
+
+    def test_the_aggregator_describes_its_network(self):
+        """Item 40: ablating it changes which weights exist, so it is part of the shape a checkpoint rebuilds from."""
+        assert network_shape(self._stored(["--no-aggregator"]))["aggregator"] is False
+        assert network_shape(self._stored([]))["aggregator"] is True
+        assert network_shape({"max_range_m": "10.0"})["aggregator"] is True        # written before the flag existed
 
     def test_the_vote_frame_and_the_block_describe_their_network(self):
         """Items 18 and 19: both change what the weights mean, so both are read back rather than defaulted."""
@@ -1543,6 +1564,28 @@ class TestEveryStage3FlagReachesTheModel:
         missing = sorted(name for name in shared if f"{name}=args.{name}" not in call)
 
         assert not missing, f"parsed but never passed to ObjectMemory: {', '.join(missing)}"
+
+    #: `SlotRules` fields that deliberately do not come from a same-named flag -- `capacity` comes from `--slots`, and
+    #: the rest are constants A51's S1 swept and found unbinding.
+    NOT_RULE_FLAGS = {"capacity", "floor", "margin", "fade_time_s", "gain", "gate_m", "velocity_smoothing"}
+
+    def test_every_slot_rule_with_a_matching_flag_is_passed_too(self):
+        """The same bug class one layer in: `SlotRules` is built beside `ObjectMemory` and is just as easy to forget."""
+        import inspect
+        from inspect import signature
+
+        from takheliped.detectors.takheliped import SlotRules
+        from train_takheliped import train_memory
+
+        source = inspect.getsource(train_memory)
+        call = source[source.index("SlotRules("):]
+        call = call[:call.index(")")]
+        flags = {action.dest for action in build_parser()._subparsers._group_actions[0].choices["step3a"]._actions}
+        shared = {name for name in signature(SlotRules).parameters if name not in self.NOT_RULE_FLAGS} & flags
+
+        missing = sorted(name for name in shared if f"{name}=args.{name}" not in call)
+
+        assert not missing, f"parsed but never passed to SlotRules: {', '.join(missing)}"
 
 
 class TestTheSensorFrameTargets:

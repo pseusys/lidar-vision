@@ -7,6 +7,32 @@ The standing comparison against published SOTA is in [`performance-log.md`](perf
 
 
 
+
+## Training cost is not inference cost, and a queued latency row is not a comparable one (2026-10-24)
+
+**Two mistakes from item 43, both worth not repeating.**
+
+**First: a per-epoch training multiple says nothing about the deployment axis.** Hungarian association cost **4.3x per
+epoch** on 1 s curriculum chunks and ~1.8x on 10 s ones, and this project predicted from that, repeatedly and out loud,
+that it would be expensive on the CPU. It is not: **+0.08 ms on a 19.46 ms total, inside the noise.** The reason is
+structural. Training runs **26 streams** in the 1 s stage and 2 streams of 399-frame chunks in the 10 s stage, so a
+per-frame assignment happens thousands of times per optimiser step; **inference is batch 1**, one assignment per frame
+over a ~24x22 gated block. Anything whose cost scales with the number of concurrent streams will look far worse in
+training than it is in deployment. Measure the axis you intend to claim.
+
+**Second: the queue cannot produce comparable latency rows, and giving it latency jobs invites a wrong one.**
+`queue_item16.py` and `queue_item36.py` each paired an arm with a `tracking_baselines.py latency` job, which looked like
+good hygiene and produced item 16's wrong `gru_cpu` row -- 23.87 ms against a true 20.57, because its `stage2` control
+phase read 10.49 ms instead of ~8.6 under session load. **A latency row is only comparable to rows measured beside it in
+the same session**, and a sequential queue runs every job in its own session by construction. So:
+
+- **Do not add latency jobs to a sweep queue.** They will each be a different session.
+- **Measure latency as a matched sweep by hand, after the chain, on an idle host**: every arm plus the control, back to
+  back, interleaved, two or three rounds.
+- **Read the `stage2` phase first.** It is byte-identical work across stage-3 arms, so its spread *is* the noise floor.
+  Item 43's three rounds agreed to 0.01 ms on the means, which is what made a 0.10 ms memory difference readable as
+  noise rather than signal.
+
 ## The architecture search was not exhaustive, and the write-up must say so (owner's call, 2026-10-23)
 
 **Every "we tested X and it did not help" in this project means one arm at one seed, judged against a 1.32 pp

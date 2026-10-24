@@ -10,6 +10,7 @@
 """
 import math
 import sys
+from dataclasses import fields, replace
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,7 @@ from takheliped.detectors.takheliped import (
     BLOCKS, N_BEAM_FEATURES, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, ConvNeXtBlock, MetricGather, ObjectMemory,
     ResidualBlock, SlotRules, beam_features,
     fold_legacy_calibration, gather_beams, metric_offsets,
-    free_range_profile, initial_slots, lfe_features, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
+    Slots, free_range_profile, initial_slots, lfe_features, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
     sensor_to_world, visibility_feature, world_to_sensor,
 )
 from takheliped.detectors.lfe_detector import _normalize_scan
@@ -1242,4 +1243,239 @@ class TestThePlainResidualBlock:
 
         assert wide.stem.out_channels == 2 * narrow.stem.out_channels
         assert sum(p.numel() for p in wide.parameters()) > 3 * sum(p.numel() for p in narrow.parameters())
+
+
+class TestTheRecallWidthIsReplayable:
+    """Item 39: `sigma_m` is the width of the recall attention's distance bias, and it has never been varied.
+
+    Item 36 settled that **addressing is the entire mechanism** -- one global state captures 5% of the slots' gain -- so
+    `sigma_m` is the parameter that defines the thing that matters, and a grep of `memory/` and `CHANGELOG.md` finds it
+    never swept in any form. S4's sweep was of `gate_m`, the *association* gate inside `manage_slots`, which is a
+    different parameter in a different component.
+
+    It can be probed by **replay** rather than by training, which is minutes instead of hours, because `step` reads
+    `self.sigma_m` on every call. These tests pin that: a replay knob that silently did nothing would produce a flat
+    curve and we would read it as "the width does not matter" -- the same failure mode as `--global-state` reaching the
+    parser but not the model.
+    """
+
+    @staticmethod
+    def _memory():
+        torch.manual_seed(0)
+        model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, exchange=False, learned_match=False)
+        with torch.no_grad():
+            model.rescore_gate.fill_(1.0)       # the head starts silent, so a replay could not show anything
+        return model
+
+    @staticmethod
+    def _play(model, steps=3):
+        g = torch.Generator().manual_seed(1)
+        xy = torch.rand(2, 6, 2, generator=g) * 6 - 3
+        score = torch.rand(2, 6, generator=g)
+        valid = torch.ones(2, 6, dtype=torch.bool)
+        pose = torch.zeros(2, 3)
+        slots = model.initial_state(2)
+        out = None
+        for _ in range(steps):
+            out = model.step(xy, score, valid, pose, torch.full((2,), 0.025), slots)
+            slots = out.slots
+        return out
+
+    def test_the_default_width_is_the_adopted_one(self):
+        assert ObjectMemory(SlotRules(capacity=8), dim=16, heads=2).sigma_m == 0.6
+
+    def test_changing_the_width_changes_what_the_candidates_are_rescored_to(self):
+        """The knob the sweep turns. If this passed trivially, a flat sweep would mean nothing."""
+        model = self._memory()
+
+        with torch.no_grad():
+            tight = self._play(model)
+            model.sigma_m = 0.3
+            narrow = self._play(model)
+            model.sigma_m = 1.5
+            wide = self._play(model)
+
+        assert not torch.allclose(tight.candidate_logit, narrow.candidate_logit, atol=1e-6)
+        assert not torch.allclose(narrow.candidate_logit, wide.candidate_logit, atol=1e-6)
+
+    def test_it_is_read_at_call_time_so_a_replay_needs_no_rebuild(self):
+        """Why the probe is minutes: the trained weights are reused and only the bias width moves."""
+        model = self._memory()
+        before = {k: v.clone() for k, v in model.state_dict().items()}
+
+        with torch.no_grad():
+            model.sigma_m = 1.0
+            self._play(model)
+
+        assert all(torch.equal(before[k], v) for k, v in model.state_dict().items())
+
+    def test_a_very_wide_bias_flattens_the_addressing(self):
+        """The limit the sweep brackets: at a large enough width every slot is equally near, which is item 36's arm
+        reached from the other direction -- so the curve should have a shape rather than be flat by construction."""
+        model = self._memory()
+
+        with torch.no_grad():
+            model.sigma_m = 0.6
+            adopted = self._play(model)
+            model.sigma_m = 1e6
+            flattened = self._play(model)
+
+        assert not torch.allclose(adopted.candidate_logit, flattened.candidate_logit, atol=1e-4)
+
+
+class TestTheWholeScanAggregator:
+    """Item 40: stage 2's whole-scan max, named as a defining feature everywhere and never ablated.
+
+    `docs/RESEARCH.md` §5.2 and `performance-log.md` both describe this network as "a ConvNeXt U-Net **with a whole-scan
+    aggregator**". A59's decomposition put about half the lead over LFE-Peaks in the output head and left the rest with
+    "the network's form"; item 19 has since shown the widths flat in both directions and the block interchangeable, so
+    the aggregator is the leading unexplained candidate for stage 2's advantage.
+    """
+
+    @staticmethod
+    def _net(aggregator: bool, **kwargs):
+        torch.manual_seed(0)
+        return CalibrationNetwork(_angles(128), channels=(8, 16, 32), blocks=(1, 1, 1), aggregator=aggregator, **kwargs)
+
+    def test_the_aggregator_is_on_by_default(self):
+        assert CalibrationNetwork(_angles(64), channels=(8, 16, 32), blocks=(1, 1, 1)).aggregator is True
+
+    def test_a_network_built_without_the_flag_computes_exactly_what_it_did(self):
+        torch.manual_seed(0)
+        plain = CalibrationNetwork(_angles(128), channels=(8, 16, 32), blocks=(1, 1, 1))
+        scan = torch.rand(2, 128) * 8 + 1
+
+        with torch.no_grad():
+            a, b = plain(scan), self._net(True)(scan)
+
+        assert torch.allclose(a[0], b[0], atol=0) and torch.allclose(a[1], b[1], atol=0)
+
+    def test_without_it_the_bottleneck_reads_half_as_wide_and_still_runs(self):
+        with_it, without = self._net(True), self._net(False)
+
+        logits, votes, features = without(torch.rand(2, 128) * 8 + 1)
+
+        assert without.aggregate.in_channels * 2 == with_it.aggregate.in_channels
+        assert logits.shape == (2, 128) and votes.shape == (2, 128, 2)
+        assert sum(p.numel() for p in without.parameters()) < sum(p.numel() for p in with_it.parameters())
+
+    # **No behavioural test of "it carries information across the scan", deliberately.** Two attempts failed for
+    # instructive reasons. Asserting that the far end stops moving without the aggregator is false: on a 128-beam
+    # network the U-Net's own receptive field already spans the scan. Asserting that silencing the pooled block
+    # *reduces* the far end's response is also false, because at random initialisation the max path can cancel against
+    # the convolutional one, so the sign is arbitrary (0.00141 against 0.00176 on seed 0). Whether the aggregator earns
+    # its place is exactly what item 40's trained arm measures; a unit test that depended on the sign of an untrained
+    # draw would be flaky and would prove nothing. The structural tests above -- default on, bit-identical when on, the
+    # bottleneck's width, and the prior's zeroed slice -- are what can be pinned here.
+
+    def test_the_memory_prior_still_starts_silent_without_it(self):
+        """`aggregate`'s prior columns are zeroed at construction, and the slice depends on the aggregator's width."""
+        net = self._net(False, prior_channels=2)
+
+        assert (net.aggregate.weight[:, -2:] == 0).all()
+
+
+class TestHungarianAssociation:
+    """Item 43: the standard primitive in place of this project's mutual-nearest-neighbour rule.
+
+    The adopted association is **mutual** nearest-neighbour: a slot's nearest candidate and that candidate's nearest
+    slot must agree, within `gate_m`. That is already a principled heuristic, and it differs from a globally optimal
+    assignment **only under contention** -- when several slots compete for the same candidate. A59's S4 measured the
+    association as already reaching 99.2% of annotated people, so the accuracy headroom is about 0.8%; the reason to run
+    it is that "why not Hungarian?" is a reviewer's question about the one component item 36 proved load-bearing.
+
+    **Solved over the gated sub-problem only.** `dist` is `inf` outside `alive & usable`, and `linear_sum_assignment`
+    cannot take that; the gated block is also far smaller -- roughly 24 live slots by 22 usable candidates rather than
+    256 by 64 -- which matters because `manage_slots` runs every frame inside the phase that already dominates the CPU
+    budget (item 36: the memory is 9.1 ms of 19.4).
+    """
+
+    RULES = SlotRules(capacity=2, gate_m=0.6)
+
+    @staticmethod
+    def _slots(positions, rules, state_dim=4):
+        """Live slots at `positions`, each confidently held, so nothing retires during the test."""
+        xy = torch.tensor(positions, dtype=torch.float32)[None]
+        k = xy.shape[1]
+        return Slots(alive=torch.ones(1, k, dtype=torch.bool), value=torch.full((1, k), 0.9), position=xy,
+                     velocity=torch.zeros(1, k, 2), origin=xy.clone(), age_s=torch.full((1, k), 1.0),
+                     since_match_s=torch.zeros(1, k), hit_rate=torch.full((1, k), 1.0),
+                     state=torch.zeros(1, k, state_dim))
+
+    def _run(self, association, slot_xy, cand_xy, scores=(0.9, 0.9)):
+        rules = replace(self.RULES, capacity=len(slot_xy), association=association)
+        slots = self._slots(slot_xy, rules)
+        cand = torch.tensor(cand_xy, dtype=torch.float32)[None]
+        score = torch.tensor(scores, dtype=torch.float32)[None]
+        valid = torch.ones_like(score, dtype=torch.bool)
+        return manage_slots(slots, cand, score, valid, torch.full((1,), 0.025), rules)
+
+    def test_mutual_nearest_neighbour_is_the_default(self):
+        assert SlotRules().association == "mutual"
+
+    def test_an_unknown_association_is_refused_rather_than_silently_ignored(self):
+        with pytest.raises(ValueError, match="association"):
+            manage_slots(self._slots([[0.0, 2.0]], self.RULES), torch.zeros(1, 1, 2), torch.ones(1, 1),
+                         torch.ones(1, 1, dtype=torch.bool), torch.full((1,), 0.025),
+                         replace(self.RULES, capacity=1, association="greedy"))
+
+    def test_the_contention_case_is_exactly_where_the_two_differ(self):
+        """The whole point of the item, constructed so the outcome is decidable by hand.
+
+        Slots at x = 0.0 and 0.45; candidates at x = 0.1 and 0.9; gate 0.6. Both slots' nearest candidate is the first
+        one (0.1 and 0.35 away), but that candidate's nearest slot is the first slot -- so the **second slot is mutual
+        with nothing and goes unmatched**. A global assignment instead pays 0.1 + 0.45 = 0.55 and matches both, rather
+        than 0.9 + 0.35 = 1.25 the other way round.
+
+        The distances are deliberately all distinct: a first version put the second slot equidistant from both
+        candidates (0.4 and 0.4), which made the outcome depend on `torch.argmin`'s tie-breaking rather than on the
+        rule, and it matched both slots.
+        """
+        slot_xy, cand_xy = [[0.0, 2.0], [0.45, 2.0]], [[0.1, 2.0], [0.9, 2.0]]
+
+        _, mutual = self._run("mutual", slot_xy, cand_xy)
+        _, hungarian = self._run("hungarian", slot_xy, cand_xy)
+
+        assert mutual.matched[0].tolist() == [True, False]
+        assert hungarian.matched[0].tolist() == [True, True]
+        assert hungarian.match_index[0].tolist() == [0, 1]
+
+    def test_it_never_matches_two_slots_to_one_candidate(self):
+        """A one-to-one assignment is the property the primitive is chosen for."""
+        slot_xy = [[0.0, 2.0], [0.1, 2.0], [0.2, 2.0]]
+        cand_xy = [[0.05, 2.0], [0.15, 2.0]]
+
+        _, events = self._run("hungarian", slot_xy, cand_xy, scores=(0.9, 0.9))
+        taken = [i for i, m in enumerate(events.matched[0].tolist()) if m]
+
+        assert len(set(events.match_index[0, taken].tolist())) == len(taken)
+
+    def test_nothing_beyond_the_gate_is_matched_however_good_the_assignment_would_be(self):
+        """Hungarian minimises a total, so without the gate check it would happily pair a slot to a distant candidate."""
+        _, events = self._run("hungarian", [[0.0, 2.0]], [[0.0, 8.0]])
+
+        assert not events.matched.any()
+
+    def test_a_frame_with_no_usable_candidate_matches_nothing_and_does_not_raise(self):
+        rules = replace(self.RULES, capacity=2, association="hungarian")
+        slots = self._slots([[0.0, 2.0], [0.5, 2.0]], rules)
+        cand = torch.tensor([[[0.1, 2.0]]], dtype=torch.float32)
+        score = torch.full((1, 1), rules.floor / 2)          # under the floor, so not usable
+
+        _, events = manage_slots(slots, cand, score, torch.ones(1, 1, dtype=torch.bool), torch.full((1,), 0.025), rules)
+
+        assert not events.matched.any()
+
+    def test_streams_in_a_batch_are_assigned_independently(self):
+        rules = replace(self.RULES, capacity=2, association="hungarian")
+        one = self._slots([[0.0, 2.0], [0.5, 2.0]], rules)
+        both = Slots(**{f.name: torch.cat([getattr(one, f.name), getattr(one, f.name)]) for f in fields(Slots)})
+        cand = torch.tensor([[[0.1, 2.0], [0.9, 2.0]], [[5.0, 5.0], [6.0, 6.0]]], dtype=torch.float32)
+        score = torch.full((2, 2), 0.9)
+
+        _, events = manage_slots(both, cand, score, torch.ones(2, 2, dtype=torch.bool),
+                                 torch.full((2,), 0.025), rules)
+
+        assert events.matched[0].tolist() == [True, True]     # the near stream matches both
+        assert not events.matched[1].any()                    # the far stream is all out of gate
 

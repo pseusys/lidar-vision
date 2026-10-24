@@ -38,6 +38,145 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Items 43 and 45: Hungarian association ties on both axes, and four more shape knobs are flat (2026-10-24)
+
+*keywords: item 43, item 45, hungarian, mutual nearest-neighbour, linear_sum_assignment, kernel_size, expansion, blocks, bottleneck_blocks, training cost vs inference cost, batch 1*
+
+**Item 43 -- Hungarian association in place of mutual nearest-neighbour.** The standard primitive against this project's
+own rule, solved over the gated sub-problem per stream (roughly 24 live slots by 22 usable candidates, not 256 by 64,
+because `dist` is `inf` outside `alive & usable` and `linear_sum_assignment` cannot take that matrix).
+
+| arm | AP | gain | FP/frame | recall | epochs | wall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| control (`mutual`) | **86.40%** | +4.18 | 0.911 | 84.33% | 64 | 10.06 h |
+| `hungarian` | 86.08% | +3.86 | 1.330 | **88.94%** | 58 | 13.99 h |
+
+**-0.32 pp, well inside the 1.32 pp bar.** Its one real difference is the operating point, not the score: a globally
+optimal assignment keeps more slots matched, so recall rises 4.6 pp and false positives rise with it, for the same
+integrated AP.
+
+**And the CPU cost is a null result, which contradicts what this project predicted all the way through the run.** Three
+interleaved rounds on an idle host, with the identical-weights `stage2` phase as the control:
+
+| arm | stage 2 *(control)* | decode | memory | total |
+| --- | ---: | ---: | ---: | ---: |
+| `mutual` | 8.71 | 1.55 | 9.15 | **19.46** |
+| `hungarian` | 8.72 | 1.55 | 9.25 | **19.54** |
+
+The control agrees to **0.01 ms** on the means (per-round spread +-0.13), so the +0.10 ms on the memory phase and
++0.08 ms on the total are not resolvable.
+
+**The lesson, and it is the generalisable part of item 43.** Training cost and inference cost are *different axes* here
+and this project conflated them for a day. Training runs **26 streams** in the 1 s curriculum stage and 2 streams of
+399-frame chunks in the 10 s stage, so a per-frame assignment is made thousands of times per optimiser step -- hence
+4.3x per epoch on 1 s chunks and ~1.8x on 10 s ones, netting **1.4x overall** (13.99 h against 10.06, in 58 epochs
+against 64). **Inference is batch 1**: one tiny assignment per frame, which vanishes into the noise. A per-epoch
+training multiple says nothing about the deployment axis, and predicting one from the other was wrong.
+
+**Also worth recording: this arm survived two OOMs.** Attempts 1 and 2 died in the same place -- `gather` allocating
+128 MiB during validation, at 0.2-0.4 GB of free commit -- and `--resume` carried 8.24 h of work into attempt 3, which
+finished. The resume path is the reason the arm exists at all.
+
+**Item 45 -- four stage-2 shape knobs, each already a constructor argument and never varied.** Averaged weights through
+`nms-mean`, against the three control seeds (82.08 / 82.22 / 82.28, mean **82.19**):
+
+| arm | what it changes | AP | vs control mean |
+| --- | --- | ---: | ---: |
+| `expansion2` | ConvNeXt's inverted bottleneck 2, not 4 | 82.27% | +0.08 |
+| `kernel11` | depthwise kernel 11, not 7 | 82.15% | -0.04 |
+| `kernel5` | depthwise kernel 5, not 7 | 82.11% | -0.08 |
+| `deeper` | blocks (3,3,3), not (2,2,2) | 81.87% | -0.32 |
+
+**All four inside or at the control's own range.** `deeper` is the only one below the lowest seed, by 0.21 pp, which is
+well inside noise -- so **depth is flat exactly as item 19 found width flat**, closing the capacity question on both
+axes. `expansion2` is the mild surprise: halving the inverted bottleneck changes nothing, so that ratio is free if
+anyone wants the parameters back.
+
+**`--neighbours` and `--top-p` from the same item were deliberately not run**: the first changes `N_BEAM_FEATURES` and
+the stem's input width, the second is a candidate-cache key whose rebuild costs more than the arm it enables.
+
+**Where the sweep stands.** Nine architectural questions measured, and exactly one of them moved anything:
+
+| tested | verdict |
+| --- | --- |
+| **per-object addressability** (items 36, 39) | **load-bearing -- this is the mechanism** |
+| recurrence rule: GRU, minGRU (16) | ties |
+| association: Hungarian (43) | ties on AP *and* on CPU |
+| the curriculum (41) | ties, 24% cheaper to train |
+| whole-scan aggregator (40) | ties |
+| block, widths (19a, 19b) | ties |
+| depth, kernel, expansion (45) | ties |
+| sensor-frame vote targets (18) | **worse** |
+
+Everything the write-up can claim about stage 3 rests on addressability, which items 36 and 39 measured as a contrast
+and then as a dose-response curve. Everything else is interchangeable, and `interpreting-evaluation.md` records that the
+search was not exhaustive.
+
+## Items 39, 40 and 41: the recall width has a dose-response curve, the aggregator earns nothing, the curriculum is free to drop (2026-10-23)
+
+*keywords: item 39, item 40, item 41, sigma_m, recall attention width, whole-scan aggregator, --no-aggregator, curriculum, --chunk-s 10, dose-response, averaged weights, best checkpoint*
+
+The first three arms of the architecture re-think, on the owner's rule: run each once, drop it if it sits inside
+variance, but do not rule out a hidden gem. The control is `a66_mingru_s0` (**86.40%**) against a **1.32 pp** bar.
+
+**Item 39 -- `sigma_m`, the width of the recall attention's distance bias.** Never varied in any form before: A51's S4
+swept `gate_m`, the *association* gate inside `manage_slots`, which is a different parameter in a different component.
+Probed by **replay** on the adopted memory, weights untouched, because `step` reads `self.sigma_m` on every call -- ten
+minutes instead of a five-hour arm.
+
+| `sigma_m` | AP | gain over candidates |
+| ---: | ---: | ---: |
+| 0.30 m | 86.45% | +4.23 |
+| **0.45 m** | **86.48%** | **+4.26** |
+| 0.60 m *(trained, adopted)* | 86.40% | +4.18 |
+| 0.90 m | 86.13% | +3.91 |
+| 1.50 m | 85.54% | +3.32 |
+| 3.00 m | 84.46% | +2.24 |
+
+**The adopted width needs no tuning** -- the peak at 0.45 m is +0.08 pp, far inside the bar -- **but the curve completes
+item 36's story.** Blurring the addressing costs monotonically, and the far end of this curve runs into the global-state
+arm: **+4.26 pp** at 0.45 m, **+2.24** at 3.00 m, **+0.22** with no slots at all. That is a *dose-response curve* for
+per-object addressability rather than the single contrast item 36 gave, and it came from a replay rather than a run.
+Read the flat region around 0.6 weakly -- the weights adapted to it -- which only strengthens the falling tail.
+
+**Item 40 -- stage 2's whole-scan max aggregator, and a methodological correction that matters more than the arm.** On
+the **averaged** weights through the adopted `nms-mean` decoder, the configuration stage 3 actually loads:
+
+| arm | AP | recall | FP/frame |
+| --- | ---: | ---: | ---: |
+| control, 3 seeds | 82.08 / 82.22 / 82.28 (mean **82.19**) | 94.0-94.2% | 3.26-3.53 |
+| `no_aggregator` | **82.24%** | **94.7%** | 3.662 |
+
+**+0.05 pp, inside the control's own range, with the highest recall of the four.** The aggregator earns nothing.
+
+**The correction: its best *single* checkpoint read 80.84%, which is -1.12 pp and would have been reported as the
+sweep's first real finding.** Weight averaging gained this arm **+1.40 pp** against the controls' usual +0.1 to +0.4.
+Scoring stage-2 arms on averaged weights is not a refinement -- it is the difference between a false positive and the
+answer, and the best-checkpoint column can mislead by more than a point in either direction.
+
+**What item 40 leaves open, and the write-up has to say it.** A59 put about half this project's lead over LFE-Peaks in
+the output head and attributed the rest to "the network's form". Three arms have now tested that rest: the ConvNeXt
+block is interchangeable (19a), the widths are flat in both directions (19b), and the aggregator earns nothing (40). So
+**the second half of stage 2's lead has no identified owner**, while `docs/RESEARCH.md` §5.2 and `performance-log.md`
+both describe the aggregator as a defining feature of the architecture. That description needs qualifying.
+
+**Item 41 -- the curriculum.** Every stage-3 run this project has done used `--chunk-s 1 10`, and nobody had checked
+whether the 1 s stage earns its time.
+
+| arm | AP | gain | FP/frame | recall | epochs | wall |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| control (1 s then 10 s) | 86.40% | +4.18 | 0.911 | 84.33% | 64 | 10.06 h |
+| `curriculum_10s` | 85.97% | +3.75 | 0.678 | 79.33% | 38 | **7.66 h** |
+
+**-0.43 pp, well inside the bar, in 24% less wall time and 26 fewer epochs.** Note the operating point moved a lot
+(FP 0.678 against 0.911, recall 79.3% against 84.3%) for the same integrated AP, so the two models are not
+interchangeable at a fixed threshold even though their AP is.
+
+**Two simplifications are now available at no measured cost** -- dropping the curriculum (24% of training time) and
+dropping the aggregator (16,384 parameters) -- and the project's standing principle for ties, E13's "propose the most
+efficient solution and the simplest of the ones that work", would take both. Neither has been adopted; both are the
+owner's call, and neither changes the deployed model's accuracy.
+
 ## Item 38 decided: the slots stay, the per-slot recurrence becomes minGRU (2026-10-23)
 
 *keywords: item 38, architecture decision, minGRU, Feng 2024, selective diagonal decay, slots, defensibility, headline provenance, three seeds pending*

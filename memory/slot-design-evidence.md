@@ -178,6 +178,33 @@ goes 9.10 -> 2.32 ms without them) and buy 3.9 pp. Both fit FROG's 25 ms budget.
 
 **Caveats.** One seed, val-chosen weights, uninterrupted run (not a resumed draw).
 
+## Addressability has a dose-response curve, not just an on/off contrast (item 39, 2026-10-23)
+
+Item 36 showed that replacing 256 addressable slots with one global state captures 5% of the memory's gain. Item 39
+fills in between the two, by replaying the adopted memory at other values of `sigma_m` -- the width of the **recall
+attention's** distance bias, i.e. how sharply a candidate attends to nearby slots. Weights untouched, ten minutes.
+
+| addressing | gain over candidates |
+| --- | ---: |
+| sharp, `sigma_m` 0.45 m | **+4.26** |
+| adopted, 0.60 m | +4.18 |
+| 0.90 m | +3.91 |
+| 1.50 m | +3.32 |
+| blurred, 3.00 m | **+2.24** |
+| **none at all** (item 36's global state) | **+0.22** |
+
+**Monotone across a 6.7x range of the width and then down to nothing.** For a write-up this is materially better than
+item 36's binary ablation: the mechanism does not merely stop working when removed, it degrades smoothly as the
+addressing is widened towards "every slot is equally near", which is what the global-state arm is in the limit.
+
+**The adopted 0.60 m needs no tuning**: 0.45 m is +0.08 pp, far inside the 1.32 pp bar, so there is no hidden gem in the
+parameter itself. And `sigma_m` had never been varied before this -- S4's sweep was of `gate_m`, the association gate
+inside `manage_slots`, a different parameter in a different component, which is why item 20 was closed and item 39
+replaced it.
+
+**Read the flat region weakly.** This is a replay, so the weights adapted to 0.6 m; local insensitivity around the
+trained value is expected and the falling tail is the real signal. Training at another width would only sharpen it.
+
 ## Dropped frames: the dt-aware rule is the most fragile arm, not the most robust (item 37, 2026-10-22)
 
 **The premise, and it should be quoted whenever the mechanism is described.** `frame_periods` feeds stage 3 an

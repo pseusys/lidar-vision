@@ -32,24 +32,89 @@ parameter item 36 made load-bearing -- has never been varied at all.
 
 from run_queue import CHECKPOINTS, REPO, Job, main
 
+RESULTS = REPO / "results"
 STAGE2 = CHECKPOINTS / "a59_c1_recipe_dropout01_s0" / "step2_calibration.averaged.pth"
+ADOPTED_MEMORY = CHECKPOINTS / "a66_mingru_s0" / "step3a_object_memory.best.pth"
+CONTROL_STAGE2 = "a59_c1_recipe_dropout01_s{seed}"
+AVERAGED = "step2_calibration.averaged.pth"
 ADOPTED = ("--no-exchange", "--no-learned-match", "--no-coast", "--recurrence", "mingru")
 GATE = Job(name="gate", cli=("-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"), cwd=REPO)
 
 
+def stage2_arm(name: str, *flags: str) -> list:
+    """One stage-2 arm plus its weight average, because the averaged weights are what stage 3 loads."""
+    out = CHECKPOINTS / f"a69_{name}_s0"
+    return [
+        Job(name=name, outputs=(out / "step2_results.json",),
+            cli=("train_takheliped.py", "step2", "--checkpoint-every", "0.25", *flags,
+                 "--seed", "0", "--out-dir", str(out), "--resume")),
+        Job(name=f"{name}_avg", outputs=(out / AVERAGED,), needs=(name,),
+            cli=("average_checkpoints.py", str(out))),
+    ]
+
+
 def stage3(name: str, *flags: str) -> Job:
-    """One stage-3 arm of the adopted architecture plus `flags`, seed 0, against `a66_mingru_s0`."""
+    """One stage-3 arm of the adopted architecture plus `flags`, seed 0, against `a66_mingru_s0`.
+
+    **No CPU latency job, deliberately** (`memory/interpreting-evaluation.md`, 2026-10-24). `queue_item16.py` and
+    `queue_item36.py` each paired an arm with one, which looked like hygiene and produced item 16's wrong `gru_cpu` row
+    -- 23.87 ms against a true 20.57, because that job's `stage2` control phase read 10.49 ms instead of ~8.6 under
+    session load. A sequential queue runs every job in its own session by construction, so it **cannot** produce
+    comparable rows. Measure latency as a matched sweep by hand after the chain: every arm plus the control, back to
+    back, interleaved, two or three rounds, on an idle host, reading the `stage2` phase first as the noise floor.
+    """
     out = CHECKPOINTS / f"a69_{name}_s0"
     return Job(name=name, outputs=(out / "step3a_results.json",),
                cli=("train_takheliped.py", "step3a", "--stage2", str(STAGE2), *ADOPTED, *flags,
                     "--seed", "0", "--out-dir", str(out), "--resume"))
 
 
+AGGREGATOR = CHECKPOINTS / "a69_no_aggregator_s0"
+
 JOBS = [
-    # Item 41. The only arm on the list that needs no new code: drop the 1 s warm-up and train on 10 s chunks alone.
+    # Item 41. The only arm on the list that needed no new code: drop the 1 s warm-up and train on 10 s chunks alone.
     # minGRU spent 1.16 h of its 10.06 h in the 1 s stage, so if this ties, every later arm gets ~12% cheaper and the
     # recipe loses a described component that does nothing.
     stage3("curriculum_10s", "--chunk-s", "10"),
+
+    # Item 39. Minutes, not an arm: `sigma_m` is replayed on the adopted memory with its weights untouched, because
+    # `step` reads it on every call. Read a flat curve weakly -- the weights adapted to 0.6 -- and train only if live.
+    Job(name="sigma", outputs=(RESULTS / "sigma_mingru.json",),
+        cli=("slot_experiments.py", "sigma", "--stage2", str(STAGE2), "--memory", str(ADOPTED_MEMORY),
+             "--out", str(RESULTS / "sigma_mingru.json"))),
+
+    # Item 40. A stage-2 arm, so it follows A59's shape: train, average over the val-chosen window because the averaged
+    # weights are what stage 3 loads, then one probe pass against the three control seeds (82.19% mean).
+    Job(name="no_aggregator", outputs=(AGGREGATOR / "step2_results.json",),
+        cli=("train_takheliped.py", "step2", "--checkpoint-every", "0.25", "--no-aggregator",
+             "--seed", "0", "--out-dir", str(AGGREGATOR), "--resume")),
+    Job(name="no_aggregator_avg", outputs=(AGGREGATOR / AVERAGED,), needs=("no_aggregator",),
+        cli=("average_checkpoints.py", str(AGGREGATOR))),
+    Job(name="no_aggregator_probe", outputs=(RESULTS / "stage2_probe_item40.json",), needs=("no_aggregator_avg",),
+        cli=("stage2_probe.py", "--out", str(RESULTS / "stage2_probe_item40.json"), "--stage2",
+             *(str(CHECKPOINTS / CONTROL_STAGE2.format(seed=s) / AVERAGED) for s in (0, 1, 2)),
+             str(AGGREGATOR / AVERAGED))),
+
+    # Item 43. The standard primitive in place of mutual nearest-neighbour. Expect it to tie on AP -- S4 put the
+    # association's remaining headroom at about 0.8% of people -- and to cost more on the CPU, since it adds a scipy
+    # call per frame to the phase item 36 showed is already the larger half of the budget. Worth one arm anyway:
+    # "why not Hungarian?" is a reviewer's question about the one component item 36 proved load-bearing.
+    stage3("hungarian", "--association", "hungarian", "--chunk-s", "1", "10"),
+
+    # Item 45's cheap half: four stage-2 knobs chosen once and never varied, ~20 min each plus averaging. Scored by one
+    # probe pass over all of them against the three control seeds, the same shape items 18/19 and 40 used. `--neighbours`
+    # and `--top-p` from the same item are deliberately absent -- the first changes the stem's input width, the second is
+    # a candidate-cache key and rebuilding it costs more than the arm.
+    *(job for name, flags in (("kernel5", ("--kernel-size", "5")),
+                              ("kernel11", ("--kernel-size", "11")),
+                              ("deeper", ("--blocks", "3", "3", "3")),
+                              ("expansion2", ("--expansion", "2")))
+      for job in stage2_arm(name, *flags)),
+    Job(name="item45_probe", outputs=(RESULTS / "stage2_probe_item45.json",),
+        needs=tuple(f"{name}_avg" for name in ("kernel5", "kernel11", "deeper", "expansion2")),
+        cli=("stage2_probe.py", "--out", str(RESULTS / "stage2_probe_item45.json"), "--stage2",
+             *(str(CHECKPOINTS / CONTROL_STAGE2.format(seed=s) / AVERAGED) for s in (0, 1, 2)),
+             *(str(CHECKPOINTS / f"a69_{name}_s0" / AVERAGED) for name in ("kernel5", "kernel11", "deeper", "expansion2")))),
 ]
 
 

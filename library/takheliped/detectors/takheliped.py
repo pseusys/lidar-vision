@@ -1,7 +1,7 @@
-"""Three-horizon streaming person detector (TAKHeLiPeD): per-beam input features, the single-frame calibration network, and the
+﻿"""Three-horizon streaming person detector (TAKHeLiPeD): per-beam input features, the single-frame calibration network, and the
 object memory.
 
-Design and reasoning in `docs/PROPOSAL.md` (§5.3 input, §5.4 calibration network); build status in `TODO.md` A43. Stage 2 read one
+Design and reasoning in `docs/PROPOSAL.md` (Â§5.3 input, Â§5.4 calibration network); build status in `TODO.md` A43. Stage 2 read one
 frame and its predecessors through a coarse temporal convolution until 2026-10-08, when A60 measured it end to end and dropped it;
 that code is at commit e76aa94.
 Conventions: beam angle 0 is forward, counterclockwise positive, increasing with beam index;
@@ -13,12 +13,15 @@ from typing import List, Optional, Tuple
 
 from torch import (
     Tensor, arange, arctan, argsort, atan2, cat, cos, cumprod, exp, expm1, full, full_like, isfinite, linspace, log1p, long,
-    minimum, nn, ones_like, randn,
+    minimum, nn, ones_like, randn, as_tensor,
     sigmoid,
     no_grad, ones, sin, stack, tanh, where, zeros, zeros_like,
 )
 from torch import log as tlog
 from torch.nn.functional import interpolate, pad, softmax, softplus
+# Item 43's association only. The default path is pure torch, so this import costs nothing it does not use, and scipy
+# is already a dependency of `takheliped.utils.drow_utils`.
+from scipy.optimize import linear_sum_assignment
 
 MAX_RANGE_M = 10.0
 MEDIAN_WINDOW_DEG = 11.0
@@ -36,6 +39,7 @@ SILENT_COAST_LOGIT = -10.0
 # **real seconds** because a robot's frames are not uniformly spaced. `gru` and `mingru` take a *step* and have no notion of
 # elapsed time, which is not an oversight in the arm -- it is what the comparison measures.
 RECURRENCES = ("selective", "gru", "mingru")
+ASSOCIATIONS = ("mutual", "hungarian")
 VOTE_FRAMES = ("beam", "sensor")
 VISIBILITY_SCALE_M = 1.0        # a metre of free space past a slot saturates the evidence against it
 HIT_RATE_TIME_S = 1.0
@@ -98,10 +102,14 @@ def world_to_sensor(xy: Tensor, pose: Tensor) -> Tensor:
 
 @dataclass(frozen=True)
 class SlotRules:
-    """Fixed rules for creating, matching, replacing and retiring object slots (`docs/PROPOSAL.md` §5.5 and §6.3).
+    """Fixed rules for creating, matching, replacing and retiring object slots (`docs/PROPOSAL.md` Â§5.5 and Â§6.3).
 
     `latest_value` is the ablation of the design's value rule (`TODO.md` A51 D2): a matched slot takes the candidate's score
     instead of accumulating towards certainty, so a person hidden for a moment no longer keeps their slot.
+
+    `association` chooses how slots are paired to candidates (`TODO.md` item 43). **mutual**, the adopted rule: a slot's
+    nearest candidate and that candidate's nearest slot must agree. **hungarian**: the globally optimal one-to-one
+    assignment under the same gate, which is the standard primitive and differs from `mutual` only under contention.
     """
     capacity: int = 256
     floor: float = 0.01
@@ -111,6 +119,7 @@ class SlotRules:
     gate_m: float = 0.6
     velocity_smoothing: float = 0.1
     latest_value: bool = False
+    association: str = "mutual"
 
 
 @dataclass
@@ -154,6 +163,39 @@ def _where_slots(mask: Tensor, a: Slots, b: Slots) -> Slots:
     return Slots(**picked)
 
 
+def _assign(dist: Tensor, gate_m: float) -> Tuple[Tensor, Tensor]:
+    """The globally optimal one-to-one slot-candidate assignment under `gate_m` (`TODO.md` item 43).
+
+    Solved **over the gated sub-problem only**, one stream at a time. Two reasons, and both matter: `dist` is `inf`
+    outside `alive & usable` and `linear_sum_assignment` cannot take that; and the gated block is far smaller than the
+    full matrix -- roughly 24 live slots by 22 usable candidates against 256 by 64 -- which is what keeps a per-frame
+    scipy call affordable inside the phase that already dominates the CPU budget.
+
+    A slot the assignment leaves unmatched keeps index 0, which is safe because every use of the index downstream is
+    gated by `matched`.
+    """
+    b, k, _ = dist.shape
+    index = zeros(b, k, dtype=long, device=dist.device)
+    matched = zeros(b, k, dtype=bool, device=dist.device)
+    within = dist <= gate_m                       # already inf-masked, so this is alive & usable & inside the gate
+    for i in range(b):
+        rows = within[i].any(dim=1).nonzero(as_tuple=True)[0]
+        cols = within[i].any(dim=0).nonzero(as_tuple=True)[0]
+        if not len(rows) or not len(cols):
+            continue
+        block = dist[i][rows][:, cols]
+        # A finite stand-in for the out-of-gate pairs, large enough that the solver takes one only when forced -- and
+        # the gate check below then drops it, so a forced pair cannot become a match.
+        block = block.masked_fill(~isfinite(block) | (block > gate_m), 10.0 * gate_m * (len(rows) + len(cols) + 1))
+        picked_rows, picked_cols = linear_sum_assignment(block.cpu().numpy())
+        picked_rows = as_tensor(picked_rows, device=dist.device)
+        picked_cols = as_tensor(picked_cols, device=dist.device)
+        keep = block[picked_rows, picked_cols] <= gate_m
+        index[i, rows[picked_rows[keep]]] = cols[picked_cols[keep]]
+        matched[i, rows[picked_rows[keep]]] = True
+    return index, matched
+
+
 @no_grad()
 def manage_slots(slots: Slots, cand_xy: Tensor, cand_score: Tensor, cand_valid: Tensor, dt: Tensor, rules: SlotRules) -> Tuple[Slots, SlotEvents]:
     """One bookkeeping step in world coordinates, candidates `[B, P, 2]` with scores and validity, `dt` `[B]` seconds.
@@ -172,11 +214,17 @@ def manage_slots(slots: Slots, cand_xy: Tensor, cand_score: Tensor, cand_valid: 
     predicted = slots.position + slots.velocity * step[..., None] * alive[..., None]
     usable = cand_valid & (cand_score >= rules.floor)
 
+    if rules.association not in ASSOCIATIONS:
+        raise ValueError(f"association must be one of {list(ASSOCIATIONS)}, not {rules.association!r}")
+
     dist = (predicted[:, :, None, :] - cand_xy[:, None, :, :]).norm(dim=-1)
     dist = dist.masked_fill(~(alive[:, :, None] & usable[:, None, :]), float("inf"))
-    nearest_candidate = dist.argmin(dim=2)
-    mutual = dist.argmin(dim=1).gather(1, nearest_candidate) == arange(k, device=device)[None]
-    matched = alive & mutual & (dist.gather(2, nearest_candidate[..., None])[..., 0] <= rules.gate_m)
+    if rules.association == "hungarian":
+        nearest_candidate, matched = _assign(dist, rules.gate_m)
+    else:
+        nearest_candidate = dist.argmin(dim=2)
+        mutual = dist.argmin(dim=1).gather(1, nearest_candidate) == arange(k, device=device)[None]
+        matched = alive & mutual & (dist.gather(2, nearest_candidate[..., None])[..., 0] <= rules.gate_m)
 
     match_xy = cand_xy.gather(1, nearest_candidate[..., None].expand(-1, -1, 2))
     fade = exp(-step * log(1.0 / rules.floor) / rules.fade_time_s)
@@ -257,7 +305,7 @@ class MemoryOutput:
     what the bookkeeping did -- which slot matched or spawned from which candidate.
 
     `events` carries no gradient and changes nothing about the step; it is here so a diagnostic can read **which slot backs a
-    rescored candidate**, which is what a creation or confirmation rule would act on (`TODO.md` §A item 14)."""
+    rescored candidate**, which is what a creation or confirmation rule would act on (`TODO.md` Â§A item 14)."""
     candidate_logit: Tensor
     slot_logit: Tensor
     slot_xy: Tensor
@@ -277,7 +325,7 @@ def _proximity(a: Tensor, b: Tensor, sigma_m: float) -> Tensor:
 
 
 class ObjectMemory(nn.Module):
-    """Stage 3, the short and long horizons (`docs/PROPOSAL.md` §5.5): object slots in world coordinates, learned matching of
+    """Stage 3, the short and long horizons (`docs/PROPOSAL.md` Â§5.5): object slots in world coordinates, learned matching of
     candidates to slots, exchange between slots, selective recurrence in real time, rule-based slot bookkeeping, candidate
     rescoring that starts silent. **Coasting -- a slot reporting a person no candidate covers -- was removed from the
     architecture on 2026-10-16** after item 24 measured it costing nothing and firing essentially never; `coast=True`
@@ -655,7 +703,7 @@ def _stage(channels: int, blocks: int, kernel_size: int, expansion: int, block: 
 
 
 class CalibrationNetwork(nn.Module):
-    """Stages 1-2 (`docs/PROPOSAL.md` §5.3-§5.4): one scan in, no state, no pose.
+    """Stages 1-2 (`docs/PROPOSAL.md` Â§5.3-Â§5.4): one scan in, no state, no pose.
 
     Per-beam input features read up to `max_range_m` (`sanitize_ranges`); a 1D U-Net of ConvNeXt blocks (widths `channels` at N, N/2
     and N/4 beams, bottleneck at N/8 sectors) with a global max aggregator and a 3-tap convolution across bottleneck sectors
@@ -674,7 +722,8 @@ class CalibrationNetwork(nn.Module):
     def __init__(self, angles: Tensor, channels: Tuple[int, int, int] = (32, 64, 128), blocks: Tuple[int, int, int] = (2, 2, 2),
                  bottleneck_blocks: int = 2, kernel_size: int = 7, expansion: int = 4,
                  prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M, input_features: str = "beam",
-                 gather_width_m: float = 0.0, gather_samples: int = 9, vote_frame: str = "beam", block: str = "convnext"):
+                 gather_width_m: float = 0.0, gather_samples: int = 9, vote_frame: str = "beam", block: str = "convnext",
+                 aggregator: bool = True):
         super().__init__()
         if input_features not in INPUT_CHANNELS:
             raise ValueError(f"input_features must be one of {sorted(INPUT_CHANNELS)}, not {input_features!r}")
@@ -699,9 +748,16 @@ class CalibrationNetwork(nn.Module):
             if gather_width_m > 0 else None
         self.encoder = nn.ModuleList([_stage(c, n, kernel_size, expansion, block) for c, n in zip(channels, blocks)])
         self.down = nn.ModuleList([nn.Conv1d(c0, c1, 2, stride=2), nn.Conv1d(c1, c2, 2, stride=2), nn.Conv1d(c2, c2, 2, stride=2)])
-        self.aggregate = nn.Conv1d(2 * c2 + prior_channels, c2, 1)
+        # The whole-scan max, and `TODO.md` item 40's ablation of it. It is the one path by which a return at one end of
+        # the field of view can reach the other end's logits: the U-Net's receptive field is wide but finite. Named as a
+        # defining feature of this architecture in `docs/RESEARCH.md` Â§5.2 and never tested until item 40, which matters
+        # because item 19 has since shown the widths flat and the block interchangeable, leaving this as the leading
+        # unexplained part of stage 2's lead over LFE-Peaks.
+        self.aggregator = aggregator
+        pooled = 2 if aggregator else 1
+        self.aggregate = nn.Conv1d(pooled * c2 + prior_channels, c2, 1)
         with no_grad():
-            self.aggregate.weight[:, 2 * c2:].zero_()        # the memory prior starts silent
+            self.aggregate.weight[:, pooled * c2:].zero_()   # the memory prior starts silent
         self.context = nn.Conv1d(c2, c2, 3, padding=1)
         self.bottleneck = _stage(c2, bottleneck_blocks, kernel_size, expansion, block)
         self.merge = nn.ModuleList([nn.Conv1d(2 * c2, c2, 1), nn.Conv1d(c2 + c1, c1, 1), nn.Conv1d(c1 + c0, c0, 1)])
@@ -715,7 +771,8 @@ class CalibrationNetwork(nn.Module):
             x = block(x)
             skips.append(x)
             x = down(x)
-        bottom = [x, x.amax(dim=-1, keepdim=True).expand_as(x)] + ([prior] if self.prior_channels else [])
+        bottom = [x] + ([x.amax(dim=-1, keepdim=True).expand_as(x)] if self.aggregator else []) \
+            + ([prior] if self.prior_channels else [])
         return skips, self.aggregate(cat(bottom, dim=1))
 
     def _decode(self, bottom: Tensor, skips: List[Tensor]) -> Tuple[Tensor, Tensor, Tensor]:

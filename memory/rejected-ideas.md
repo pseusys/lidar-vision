@@ -24,6 +24,61 @@ is not the limit -- it reaches essentially everybody, and the curve is flat acro
 frame, or a frame rate low enough that a person moves further than the gate between scans (DROW at 12.5 Hz is 3.2x
 FROG's period, so A63 is where to look).
 
+## Hungarian association, and four stage-2 shape knobs (TODO.md items 43 and 45)
+
+*keywords: item 43, item 45, hungarian, linear_sum_assignment, mutual nearest-neighbour, kernel_size, expansion, blocks, bottleneck_blocks, batch 1*
+
+**Item 43, Hungarian association.** The standard primitive against the adopted mutual-nearest-neighbour rule, over the
+gated sub-problem per stream. **86.08% against the control's 86.40%**, -0.32 pp inside the 1.32 pp bar, and **+0.08 ms**
+on a 19.46 ms CPU total, inside the noise its identical `stage2` control phase measures. It differs only in operating
+point: recall **88.94%** against 84.33%, at FP 1.330 against 0.911, because a globally optimal assignment keeps more
+slots matched.
+
+**Why it is dropped:** it changes nothing, not because it is expensive. **This project predicted it would cost on the
+CPU and was wrong** -- 4.3x per training epoch on 1 s chunks does not transfer to batch-1 inference
+(`interpreting-evaluation.md`). Training total was 1.4x (13.99 h against 10.06, 58 epochs against 64), and the arm
+survived two OOMs on `--resume`.
+
+**Item 45, four shape knobs** -- all already `CalibrationNetwork` arguments, chosen once and never varied. Averaged
+weights through `nms-mean`, control mean 82.19 (range 82.08-82.28): `expansion2` **82.27**, `kernel11` **82.15**,
+`kernel5` **82.11**, `deeper` **81.87**. All inside or at the range. **Depth is flat just as item 19 found width flat**,
+and halving ConvNeXt's inverted bottleneck changes nothing.
+
+**Not run from the same item, deliberately:** `--neighbours` changes `N_BEAM_FEATURES` and the stem's input width, and
+`--top-p` is a candidate-cache key whose rebuild costs more than the arm.
+
+**Where they live.** `--association hungarian` in `SlotRules` with `_assign` in the detector; `--kernel-size`,
+`--expansion`, `--blocks`, `--bottleneck-blocks` on `step2`, all four in `network_shape`. Off by default.
+
+## Ablating stage 2's whole-scan aggregator, and dropping stage 3's curriculum (TODO.md items 40 and 41)
+
+*keywords: item 40, item 41, --no-aggregator, whole-scan max, --chunk-s 10, curriculum, averaged weights, best checkpoint, 1.40 pp*
+
+Both were **flat**, and both are kept in the tree because each would simplify the architecture at no measured cost if
+the owner wants it.
+
+**Item 40, the whole-scan max aggregator.** `--no-aggregator` drops `x.amax(dim=-1).expand_as(x)` from the bottleneck's
+concatenation, halving `aggregate`'s input width and saving 16,384 parameters. On the averaged weights through
+`nms-mean`: **82.24% against the control's 82.19% mean and 82.08-82.28 range**, with the highest recall of the four
+(94.7%). Nothing lost.
+
+**And the trap it set.** Its best *single* checkpoint scored 80.84%, which is -1.12 pp and reads as a real effect.
+Weight averaging gained this arm **+1.40 pp** where the controls gain +0.1 to +0.4, so the two readings disagree by more
+than a point and only the averaged one describes what stage 3 loads. **Score stage-2 arms on averaged weights**; the
+best-checkpoint column in `step2_results.json` is not a substitute and can invert the verdict.
+
+**What it leaves open.** A59 put about half the lead over LFE-Peaks in the output head; items 19a, 19b and 40 have now
+found the block interchangeable, the widths flat and the aggregator free. The other half of stage 2's lead has **no
+identified owner**, and the aggregator is described as a defining feature in `../docs/RESEARCH.md` §5.2.
+
+**Item 41, the 1 s curriculum stage.** `--chunk-s 10` alone: **85.97% against the control's 86.40%**, -0.43 pp inside
+the 1.32 pp bar, reached in **7.66 h against 10.06** and 38 epochs against 64. The operating point moved (FP 0.678
+against 0.911, recall 79.3% against 84.3%) for the same integrated AP, so the two are not interchangeable at a fixed
+threshold.
+
+**Where they live.** `--no-aggregator` on `step2` with an `aggregator` key in `network_shape`; `--chunk-s 10` needs no
+code at all. Both off by default and bit-identical when off.
+
 ## Sensor-frame vote targets in stage 2's head (TODO.md item 18)
 
 *keywords: item 18, --vote-frame sensor, swap_vote_frame, make_targets frame, a67_sensor, beam-relative offsets, across along*

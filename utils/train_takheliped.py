@@ -47,7 +47,7 @@ sys.path.insert(0, str(_HERE))
 from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from takheliped.detectors import LFEPeaksDetector
 from takheliped.detectors.takheliped import (
-    BLOCKS, MAX_RANGE_M, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
+    ASSOCIATIONS, BLOCKS, MAX_RANGE_M, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
     world_to_sensor,
 )
 from takheliped.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
@@ -649,8 +649,10 @@ def decode_candidates(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, vo
 def network_shape(args: Dict[str, str]) -> Dict[str, object]:
     """The `CalibrationNetwork` arguments a stage-2 run's `args` (stored as strings) fix, because they change what the input means
     or which weights exist: the range limit, the input (`--input-features`), the widths (`--channels`), the metric gather
-    (`--gather-width-m`, `--gather-samples`), the head's target frame (`--vote-frame`) and the block (`--block`) -- the middle
-    two for the attribution arms F1 and W (`TODO.md` A59), then items 15, 18 and 19. A flag left unset, or written before it
+    (`--gather-width-m`, `--gather-samples`), the head's target frame (`--vote-frame`), the block (`--block`), the
+    whole-scan aggregator (`--aggregator`) and the four shape knobs of item 45 (`--kernel-size`, `--expansion`,
+    `--blocks`, `--bottleneck-blocks`) -- the widths and input for the attribution arms F1 and W (`TODO.md` A59), then
+    items 15, 18, 19, 40 and 45. A flag left unset, or written before it
     existed, falls back to the constructor's own default rather than to a second copy of it here."""
     parameters = signature(CalibrationNetwork).parameters
     unset = (None, "None")
@@ -660,7 +662,13 @@ def network_shape(args: Dict[str, str]) -> Dict[str, object]:
             "gather_width_m": parameters["gather_width_m"].default if args.get("gather_width_m") in unset else float(args["gather_width_m"]),
             "gather_samples": parameters["gather_samples"].default if args.get("gather_samples") in unset else int(args["gather_samples"]),
             "vote_frame": parameters["vote_frame"].default if args.get("vote_frame") in unset else args["vote_frame"],
-            "block": parameters["block"].default if args.get("block") in unset else args["block"]}
+            "block": parameters["block"].default if args.get("block") in unset else args["block"],
+            "aggregator": parameters["aggregator"].default if args.get("aggregator") in unset else literal_eval(args["aggregator"]),
+            "kernel_size": parameters["kernel_size"].default if args.get("kernel_size") in unset else int(args["kernel_size"]),
+            "expansion": parameters["expansion"].default if args.get("expansion") in unset else int(args["expansion"]),
+            "blocks": parameters["blocks"].default if args.get("blocks") in unset else tuple(literal_eval(args["blocks"])),
+            "bottleneck_blocks": parameters["bottleneck_blocks"].default if args.get("bottleneck_blocks") in unset
+            else int(args["bottleneck_blocks"])}
 
 
 def calibration_network(checkpoint: dict, angles: np.ndarray, **overrides) -> CalibrationNetwork:
@@ -701,7 +709,8 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
              "visibility": parameters["visibility"].default if args.get("visibility") is None else literal_eval(args["visibility"])}
     slots = capacity if capacity else (parameters["rules"].default.capacity if args.get("slots") is None else int(args["slots"]))
     rules = SlotRules(capacity=slots,
-                      latest_value=SlotRules().latest_value if args.get("latest_value") is None else literal_eval(args["latest_value"]))
+                      latest_value=SlotRules().latest_value if args.get("latest_value") is None else literal_eval(args["latest_value"]),
+                      association=SlotRules().association if args.get("association") is None else args["association"])
     memory = ObjectMemory(rules, feature_dim=feature_dim, **{**shape, **overrides})
     state = checkpoint["model"]
     if memory.rescore is None:                           # A51 E12a drops the head, so its trained weights have nowhere to go
@@ -1026,7 +1035,7 @@ def train_memory(args) -> None:
     resume_path = args.out_dir / f"{args.mode}_resume.pth"
     resumed = load_resume(resume_path, args.resume)
 
-    model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value), feature_dim=splits["train"].data.features.shape[-1],
+    model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value, association=args.association), feature_dim=splits["train"].data.features.shape[-1],
                          rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame, coast=args.coast,
                          recurrence=args.recurrence, global_state=args.global_state,
                          fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value, exchange=args.exchange,
@@ -1786,6 +1795,13 @@ def build_parser() -> argparse.ArgumentParser:
                                 "textbook gated recurrent unit. mingru: Feng et al.'s minimal variant, no reset gate. "
                                 "**Neither gru nor mingru sees dt**, which is the comparison rather than an oversight: they "
                                 "take a step, and a robot's frames are not uniformly spaced")
+        step1.add_argument("--association", choices=ASSOCIATIONS, default="mutual",
+                           help="how slots are paired to candidates (TODO.md item 43). mutual, the adopted rule: a "
+                                "slot's nearest candidate and that candidate's nearest slot must agree. hungarian: the "
+                                "globally optimal one-to-one assignment under the same gate -- the standard primitive, "
+                                "which differs from mutual only under contention, and which S4 suggests has about 0.8% "
+                                "of people left to recover. Solved over the gated sub-problem per stream, so it costs a "
+                                "scipy call per frame inside the phase that dominates the CPU budget")
         step1.add_argument("--global-state", action=argparse.BooleanOptionalAction, default=False,
                            help="replace the addressable per-object slots with ONE scene-level recurrent state (TODO.md "
                                 "item 36): no association, no spawn, no eviction, no per-slot decay. The frame's "
@@ -1861,6 +1877,26 @@ def build_parser() -> argparse.ArgumentParser:
                             "target for every beam that sees it. sensor: the one Cartesian frame every beam shares. The two "
                             "name the same point, so only the decoders' input is rotated and the comparison is purely what is "
                             "easier to learn")
+    # Item 45's cheap half. All four are already `CalibrationNetwork` arguments chosen once and never varied, so each
+    # costs a flag, a shape key and one ~20 minute run. `--neighbours` and `--top-p` from the same item are *not* here:
+    # the first changes `N_BEAM_FEATURES` and the stem's input width, and the second is a candidate-cache key.
+    step2.add_argument("--kernel-size", type=int, default=None, metavar="K",
+                       help="the depthwise kernel every block spends its receptive field on; unset is the "
+                            "constructor's 7 (TODO.md item 45)")
+    step2.add_argument("--expansion", type=int, default=None, metavar="E",
+                       help="ConvNeXt's inverted-bottleneck ratio; unset is the constructor's 4. Ignored by "
+                            "--block residual, which has nothing to widen (TODO.md item 45)")
+    step2.add_argument("--blocks", type=int, nargs=3, default=None, metavar="B",
+                       help="how many blocks at N, N/2 and N/4 beams; unset is the constructor's (2 2 2). Depth, "
+                            "where --channels is width and item 19 found width flat (TODO.md item 45)")
+    step2.add_argument("--bottleneck-blocks", type=int, default=None, metavar="B",
+                       help="how many blocks at the N/8 bottleneck; unset is the constructor's 2 (TODO.md item 45)")
+    step2.add_argument("--aggregator", action=argparse.BooleanOptionalAction, default=True,
+                       help="give the bottleneck the whole-scan max beside its own features, which is the one path by "
+                            "which one end of the field of view reaches the other end's logits (TODO.md item 40). "
+                            "--no-aggregator ablates it and halves `aggregate`'s input width. Named as a defining "
+                            "feature of this architecture in docs/RESEARCH.md 5.2 and never tested, which matters now "
+                            "that item 19 has shown the widths flat and the block interchangeable")
     step2.add_argument("--block", choices=sorted(BLOCKS), default="convnext",
                        help="which block carries the U-Net's depth (TODO.md item 19). convnext: depthwise large kernel, "
                             "inverted bottleneck. residual: two full convolutions with a GELU between, no depthwise "
