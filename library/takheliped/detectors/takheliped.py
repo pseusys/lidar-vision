@@ -307,6 +307,9 @@ class MemoryOutput:
     `events` carries no gradient and changes nothing about the step; it is here so a diagnostic can read **which slot backs a
     rescored candidate**, which is what a creation or confirmation rule would act on (`TODO.md` Â§A item 14)."""
     candidate_logit: Tensor
+    #: Where each candidate is reported, `[B, P, 2]`. Equal to the input `cand_xy` unless the memory has a position
+    #: refinement head (`TODO.md` item 46), so everything downstream reads one field rather than branching on a flag.
+    candidate_xy: Tensor
     slot_logit: Tensor
     slot_xy: Tensor
     coasting: Tensor
@@ -353,8 +356,15 @@ class ObjectMemory(nn.Module):
                  feature_dim: int = 0, rescore_gate: bool = True, rescore_limit: float = 0.0, room_frame: bool = True,
                  fixed_decay_s: float = 0.0, learn_value: bool = False, exchange: bool = True, learned_match: bool = True,
                  recurrent: bool = True, rescore: bool = True, visibility: bool = False, coast: bool = False,
-                 recurrence: str = "selective", global_state: bool = False):
+                 recurrence: str = "selective", global_state: bool = False, refine: bool = False):
         super().__init__()
+        # `TODO.md` item 46 (A51's O3). Item 35 found the memory net negative on *coverage* -- 203 recovered against
+        # 2,990 lost at its own threshold -- so all of its gain is ranking. This is the only head that could move a
+        # detection rather than rescore it. It needs `rescore`, because without it `recalled` has nowhere else to go
+        # and the arm would silently become A51 E12a's experiment instead of this one.
+        if refine and not rescore:
+            raise ValueError("refine needs rescore: without it the recalled state reaches nothing else, which is "
+                             "A51 E12a's arm rather than item 46's")
         # `TODO.md` item 36: one scene-level state in place of `rules.capacity` addressable per-object slots. The three
         # refusals are not conservatism -- each of those features reads a slot's *position*, which this arm does not have.
         if global_state:
@@ -407,6 +417,11 @@ class ObjectMemory(nn.Module):
             self.value_fade = nn.Parameter(tlog(expm1(full((), rules.fade_time_s))))
         self.recall = _BiasedAttention(dim, heads) if recurrent and addressable else None
         self.rescore = nn.Sequential(nn.Linear(2 * dim, dim), nn.GELU(), nn.Linear(dim, 1)) if rescore else None
+        # Zero-initialised last layer, so an untrained arm reports exactly the candidate's own position and its first
+        # epochs are the control's. Without that, "refinement" and "a randomly displaced detection" are the same thing.
+        self.refine = nn.Sequential(nn.Linear(2 * dim, dim), nn.GELU(), nn.Linear(dim, 2)) if refine else None
+        if self.refine is not None:
+            nn.init.zeros_(self.refine[-1].weight), nn.init.zeros_(self.refine[-1].bias)
         if rescore and rescore_gate:
             self.rescore_gate = nn.Parameter(zeros(()))
         else:
@@ -500,10 +515,23 @@ class ObjectMemory(nn.Module):
         state = self._recur(slots.state, cat([pooled, stats], dim=-1), dt)
         slots = Slots(ones_like(slots.alive), slots.value, slots.position, slots.velocity, slots.origin,
                       slots.age_s + dt[:, None], slots.since_match_s, slots.hit_rate, state)
-        candidate_logit = self._rescored(encoded, state.expand(-1, p, -1), cand_score)
+        recalled = state.expand(-1, p, -1)
+        candidate_logit = self._rescored(encoded, recalled, cand_score)
         empty = full_like(slots.alive, -1, dtype=long)
-        return MemoryOutput(candidate_logit, full_like(slots.value, SILENT_COAST_LOGIT), slots.position,
+        return MemoryOutput(candidate_logit, self._refined(encoded, recalled, cand_xy),
+                            full_like(slots.value, SILENT_COAST_LOGIT), slots.position,
                             zeros_like(slots.alive), slots, SlotEvents(zeros_like(slots.alive), empty, empty))
+
+    def _refined(self, encoded: Tensor, recalled: Tensor, cand_xy: Tensor) -> Tensor:
+        """Where each candidate is reported: its own position, plus the memory's correction when it has one.
+
+        The head predicts an **offset**, not an absolute position (`TODO.md` item 46): a displaced detection has to stay
+        near its candidate, and a head predicting absolute coordinates would start at the origin and have to learn the
+        whole room's geometry before it beat the control.
+        """
+        if self.refine is None:
+            return cand_xy
+        return cand_xy + self.refine(cat([encoded, recalled], dim=-1))
 
     def _rescored(self, encoded: Tensor, recalled: Tensor, cand_score: Tensor) -> Tensor:
         """A candidate's logit after the memory's correction, or its own logit untouched when `rescore` is false (A51 E12a),
@@ -584,7 +612,7 @@ class ObjectMemory(nn.Module):
             candidate_logit = self._rescored(encoded, recalled, cand_score)
             slot_logit, coasting = self._coasting(state, stats, slots, events, refill)
             slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
-            return MemoryOutput(candidate_logit, slot_logit, slot_xy, coasting, slots, events)
+            return MemoryOutput(candidate_logit, self._refined(encoded, recalled, cand_xy), slot_logit, slot_xy, coasting, slots, events)
 
         queried = state + self.statistics(stats)
         if self.match is None:                               # the slot reads only what the hand-coded association gave it
@@ -601,7 +629,7 @@ class ObjectMemory(nn.Module):
         candidate_logit = self._rescored(encoded, recalled, cand_score)
         slot_logit, coasting = self._coasting(state, stats, slots, events, refill)
         slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
-        return MemoryOutput(candidate_logit, slot_logit, slot_xy, coasting, slots, events)
+        return MemoryOutput(candidate_logit, self._refined(encoded, recalled, cand_xy), slot_logit, slot_xy, coasting, slots, events)
 
 
 class ConvNeXtBlock(nn.Module):

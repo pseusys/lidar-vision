@@ -21,7 +21,7 @@ from train import make_targets
 from train_takheliped import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, coast_targets, decode_votes, evaluate, evaluation_segments,
     FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
-    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, coasting_hits, exponential_schedule, network_shape, select_test_weights, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
+    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, matched_person_xy, coasting_hits, exponential_schedule, network_shape, select_test_weights, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
     union_decode,
 )
 
@@ -1535,6 +1535,66 @@ class TestTheCoastingHeadIsGone:
         checkpoint = {"model": trained.state_dict(), "args": {"coast": "True"}}
 
         assert object_memory(checkpoint, feature_dim=0).coast is not None
+
+
+class TestTheMatchedPersonSPosition:
+    """Item 46's L1 target: where the person a candidate matched actually is.
+
+    `candidate_targets` already runs the gated Hungarian match but returns only booleans, and eleven call sites unpack
+    its two values -- so rather than churn nine of them, both it and `matched_person_xy` now call one shared
+    `_gated_assignment`. These tests pin that the two agree, because a silent divergence between "which candidates are
+    people" and "which person each candidate regresses towards" would train the head against the wrong target.
+    """
+
+    RADIUS = 0.5
+
+    def test_an_unmatched_candidate_has_no_target(self):
+        """NaN rather than zeros: a zero would be a real position near the sensor and the L1 would chase it."""
+        xy = np.array([[0.0, 1.0], [3.0, 3.0]])
+        out = matched_person_xy(xy, np.ones(2, bool), np.array([[0.0, 1.1]]), self.RADIUS)
+
+        assert np.allclose(out[0], [0.0, 1.1])
+        assert np.isnan(out[1]).all()
+
+    def test_it_returns_the_person_the_same_assignment_picked(self):
+        """Two candidates, two people, crossed so a greedy rule would pair them differently from the optimal one."""
+        xy = np.array([[0.0, 1.0], [0.0, 1.4]])
+        gt = np.array([[0.0, 1.45], [0.0, 1.05]])
+
+        target, _ = candidate_targets(xy, np.ones(2, bool), gt, self.RADIUS)
+        out = matched_person_xy(xy, np.ones(2, bool), gt, self.RADIUS)
+
+        assert target.tolist() == [True, True]
+        assert np.allclose(out[0], [0.0, 1.05]) and np.allclose(out[1], [0.0, 1.45])
+
+    def test_the_two_functions_agree_on_which_candidates_matched(self):
+        """The invariant that lets them share a matching rule rather than drift apart."""
+        rng = np.random.default_rng(0)
+        for _ in range(20):
+            xy = rng.normal(scale=2.0, size=(6, 2))
+            gt = rng.normal(scale=2.0, size=(4, 2))
+            valid = rng.random(6) > 0.3
+
+            target, _ = candidate_targets(xy, valid, gt, self.RADIUS)
+            out = matched_person_xy(xy, valid, gt, self.RADIUS)
+
+            assert np.array_equal(target, ~np.isnan(out[:, 0]))
+
+    def test_an_invalid_candidate_never_gets_a_target(self):
+        xy = np.array([[0.0, 1.0], [0.0, 1.05]])
+        out = matched_person_xy(xy, np.array([False, True]), np.array([[0.0, 1.0]]), self.RADIUS)
+
+        assert np.isnan(out[0]).all() and np.allclose(out[1], [0.0, 1.0])
+
+    def test_a_frame_with_nobody_in_it_gives_every_candidate_nothing(self):
+        out = matched_person_xy(np.array([[0.0, 1.0]]), np.ones(1, bool), np.empty((0, 2)), self.RADIUS)
+
+        assert out.shape == (1, 2) and np.isnan(out).all()
+
+    def test_nothing_beyond_the_radius_is_matched(self):
+        out = matched_person_xy(np.array([[0.0, 1.0]]), np.ones(1, bool), np.array([[0.0, 9.0]]), self.RADIUS)
+
+        assert np.isnan(out).all()
 
 
 class TestEveryStage3FlagReachesTheModel:

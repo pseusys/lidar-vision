@@ -88,19 +88,42 @@ ES_CONTINUOUS = 0x80000000
 ES_SYSTEM_REQUIRED = 0x00000001
 
 
+def _gated_assignment(cand_xy: np.ndarray, cand_valid: np.ndarray, gt_xy: np.ndarray, radius: float) -> List[Tuple[int, int]]:
+    """The one-to-one gated Hungarian pairs `(candidate index, person index)` within `radius`.
+
+    Shared by `candidate_targets` and `matched_person_xy` so the two cannot drift: a divergence between *which*
+    candidates count as people and *which* person each one regresses towards would train item 46's head against a
+    target the classification loss disagrees with.
+    """
+    idx = np.nonzero(cand_valid)[0]
+    if not len(idx) or not len(gt_xy):
+        return []
+    cost = np.linalg.norm(cand_xy[idx, None, :] - gt_xy[None, :, :], axis=-1)
+    gated = np.where(cost > radius, 1e6, cost)
+    return [(int(idx[i]), int(j)) for i, j in zip(*linear_sum_assignment(gated)) if gated[i, j] < 1e6]
+
+
 def candidate_targets(cand_xy: np.ndarray, cand_valid: np.ndarray, gt_xy: np.ndarray, radius: float) -> Tuple[np.ndarray, np.ndarray]:
     """One-to-one gated Hungarian match of valid candidates to annotated people within `radius`:
     (which candidates are people, which people a candidate covers)."""
     target = np.zeros(len(cand_xy), dtype=bool)
     covered = np.zeros(len(gt_xy), dtype=bool)
-    idx = np.nonzero(cand_valid)[0]
-    if len(idx) and len(gt_xy):
-        cost = np.linalg.norm(cand_xy[idx, None, :] - gt_xy[None, :, :], axis=-1)
-        gated = np.where(cost > radius, 1e6, cost)
-        for i, j in zip(*linear_sum_assignment(gated)):
-            if gated[i, j] < 1e6:
-                target[idx[i]] = covered[j] = True
+    for i, j in _gated_assignment(cand_xy, cand_valid, gt_xy, radius):
+        target[i] = covered[j] = True
     return target, covered
+
+
+def matched_person_xy(cand_xy: np.ndarray, cand_valid: np.ndarray, gt_xy: np.ndarray, radius: float) -> np.ndarray:
+    """Where the person each candidate matched actually is `[P, 2]`, NaN where it matched nobody (`TODO.md` item 46).
+
+    **NaN rather than zeros**, because a zero is a real position a metre in front of the sensor and an L1 loss would
+    chase it. The matching uses the candidate's **own** position, not its refined one, so the head regresses towards a
+    fixed anchor instead of drifting to whichever person it has already moved closest to.
+    """
+    out = np.full((len(cand_xy), 2), np.nan)
+    for i, j in _gated_assignment(cand_xy, cand_valid, gt_xy, radius):
+        out[i] = gt_xy[j]
+    return out
 
 
 @dataclass
@@ -700,6 +723,7 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
              "coast": ("coast.weight" in checkpoint.get("model", {})) if args.get("coast") is None else literal_eval(args["coast"]),
              "recurrence": parameters["recurrence"].default if args.get("recurrence") is None else args["recurrence"],
              "global_state": parameters["global_state"].default if args.get("global_state") is None else literal_eval(args["global_state"]),
+             "refine": parameters["refine"].default if args.get("refine") is None else literal_eval(args["refine"]),
              "fixed_decay_s": parameters["fixed_decay_s"].default if args.get("fixed_decay_s") is None else float(args["fixed_decay_s"]),
              "learn_value": parameters["learn_value"].default if args.get("learn_value") is None else literal_eval(args["learn_value"]),
              "exchange": parameters["exchange"].default if args.get("exchange") is None else literal_eval(args["exchange"]),
@@ -787,6 +811,32 @@ def gather(split: Split, seq: np.ndarray, frame: np.ndarray, device) -> Dict[str
 
 def detach(slots: Slots) -> Slots:
     return Slots(**{f.name: getattr(slots, f.name).detach() for f in fields(Slots)})
+
+
+def refinement_loss(candidate_xy: torch.Tensor, cand_xy: torch.Tensor, cand_valid: torch.Tensor,
+                    gt_xy: torch.Tensor, gt_valid: torch.Tensor, annotated: torch.Tensor, radius: float) -> torch.Tensor:
+    """L1 from each candidate's refined position to the person it matched, averaged over matched candidates.
+
+    **Computed here rather than cached.** `batch["target"]` is precomputed into the candidate cache by
+    `frames_from_dataset`, which would be the natural home for this too -- but adding a field to `SequenceCandidates`
+    changes the cache format and forces a rebuild that cost over 1,000 s for val alone. The batch already carries
+    `gt_xy` and `gt_valid`, so one gated Hungarian per frame buys the target with no rebuild, and it only runs when the
+    head exists.
+
+    **Matched on the candidate's own position**, not its refined one (`matched_person_xy`): the target must be a fixed
+    anchor, or the head drifts towards whichever person it has already moved closest to and the loss chases itself.
+    """
+    anchors = cand_xy.detach().cpu().numpy()
+    valid = (cand_valid & annotated).cpu().numpy()
+    people = gt_xy.detach().cpu().numpy()
+    present = gt_valid.cpu().numpy()
+    targets = np.stack([matched_person_xy(anchors[i], valid[i], people[i][present[i]], radius) for i in range(len(anchors))])
+    matched = ~np.isnan(targets[..., 0])
+    if not matched.any():
+        return torch.zeros((), device=candidate_xy.device)
+    target = torch.from_numpy(np.nan_to_num(targets)).to(candidate_xy.device, candidate_xy.dtype)
+    keep = torch.from_numpy(matched).to(candidate_xy.device)
+    return ((candidate_xy - target).abs().sum(-1) * keep).sum() / keep.sum()
 
 
 def focal_loss(logit: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -942,6 +992,10 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                 cand_p = torch.sigmoid(out.candidate_logit)[rows].cpu().numpy()
                 slot_p = torch.sigmoid(out.slot_logit)[rows].cpu().numpy()
                 valid, xy, coasting = batch["valid"][rows, i].cpu().numpy(), batch["xy"][rows, i].cpu().numpy(), out.coasting[rows].cpu().numpy()
+                # Where the memory reports each candidate (`TODO.md` item 46). Identical to `xy` unless the memory has
+                # a refinement head, and the `raw` row below keeps `xy` either way -- the candidates baseline has to
+                # keep its own positions or the comparison measures the arm against itself.
+                refined = out.candidate_xy[rows].cpu().numpy()
                 slot_xy, score = out.slot_xy[rows].cpu().numpy(), batch["score"][rows, i].cpu().numpy()
                 match_index, matched_slot = out.events.match_index[rows].cpu().numpy(), out.events.matched[rows].cpu().numpy()
                 age_s = out.slots.age_s[rows].cpu().numpy()
@@ -961,7 +1015,7 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                     taken = matched_slot[j]
                     backing[match_index[j][taken]] = age_s[j][taken]
                     slot_age.append(backing[valid[j]])
-                    memory.append((np.concatenate([cand_p[j][valid[j]], slot_p[j][report]]), np.concatenate([xy[j][valid[j]], slot_xy[j][report]]), gt[j]))
+                    memory.append((np.concatenate([cand_p[j][valid[j]], slot_p[j][report]]), np.concatenate([refined[j][valid[j]], slot_xy[j][report]]), gt[j]))
                     shift_person.append(shift[j][valid[j] & target[j]]), shift_other.append(shift[j][valid[j] & ~target[j]])
                     confident = coasting[j] & (slot_p[j] >= OPERATING_THRESHOLD)
                     coast_reports += int(confident.sum())
@@ -1037,7 +1091,7 @@ def train_memory(args) -> None:
 
     model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value, association=args.association), feature_dim=splits["train"].data.features.shape[-1],
                          rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame, coast=args.coast,
-                         recurrence=args.recurrence, global_state=args.global_state,
+                         recurrence=args.recurrence, global_state=args.global_state, refine=args.refine,
                          fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value, exchange=args.exchange,
                          learned_match=args.learned_match, recurrent=args.recurrent, visibility=args.visibility).to(device)
     print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}"
@@ -1110,6 +1164,10 @@ def train_memory(args) -> None:
                     annotated = batch["annotated"][:, t, None]
                     missed = batch["gt_valid"][:, t] & ~batch["gt_covered"][:, t]
                     loss = loss + focal_loss(out.candidate_logit, batch["target"][:, t], batch["valid"][:, t] & annotated)
+                    if model.refine is not None:          # `TODO.md` item 46; no cost at all when the head is absent
+                        loss = loss + args.refine_weight * refinement_loss(
+                            out.candidate_xy, batch["xy"][:, t], batch["valid"][:, t], batch["gt_xy"][:, t],
+                            batch["gt_valid"][:, t], annotated, MATCH_RADIUS_M)
                     coast = coast_targets(out.slot_xy, out.coasting, batch["gt_xy"][:, t], missed, MATCH_RADIUS_M)
                     loss = loss + args.coast_weight * focal_loss(out.slot_logit, coast, out.coasting & annotated)
                 loss = loss / batch["annotated"].sum().clamp(min=1)
@@ -1795,6 +1853,15 @@ def build_parser() -> argparse.ArgumentParser:
                                 "textbook gated recurrent unit. mingru: Feng et al.'s minimal variant, no reset gate. "
                                 "**Neither gru nor mingru sees dt**, which is the comparison rather than an oversight: they "
                                 "take a step, and a robot's frames are not uniformly spaced")
+        step1.add_argument("--refine", action=argparse.BooleanOptionalAction, default=False,
+                           help="let each slot regress a correction to its candidate's reported position, trained with "
+                                "an L1 loss against the person it matched (TODO.md item 46, A51's O3). The only head on "
+                                "the list that moves a detection rather than rescoring it, which is why item 35 gives it "
+                                "a reason: at its own threshold the memory recovers 203 person-observations and loses "
+                                "2,990, so all of its gain is ranking. Starts silent -- the last layer is zero "
+                                "initialised -- so an untrained arm reports exactly the candidate's own position")
+        step1.add_argument("--refine-weight", type=float, default=1.0,
+                           help="weight on item 46's L1 refinement loss, relative to the candidate focal loss")
         step1.add_argument("--association", choices=ASSOCIATIONS, default="mutual",
                            help="how slots are paired to candidates (TODO.md item 43). mutual, the adopted rule: a "
                                 "slot's nearest candidate and that candidate's nearest slot must agree. hungarian: the "

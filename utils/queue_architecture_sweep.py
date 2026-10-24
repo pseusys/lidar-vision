@@ -110,6 +110,12 @@ JOBS = [
                               ("deeper", ("--blocks", "3", "3", "3")),
                               ("expansion2", ("--expansion", "2")))
       for job in stage2_arm(name, *flags)),
+    # Item 46 (A51's O3). The one arm on this list whose metric is **not** AP: item 35 measured the memory as net
+    # negative on coverage -- 203 person-observations recovered against 2,990 lost at its own threshold -- so all of its
+    # gain is ranking, and a position correction is the only mechanism here that could turn carried state into recall.
+    # Score it on item 35's coverage columns beside AP; an AP-neutral result with better coverage is still a finding.
+    stage3("refine", "--refine", "--chunk-s", "1", "10"),
+
     Job(name="item45_probe", outputs=(RESULTS / "stage2_probe_item45.json",),
         needs=tuple(f"{name}_avg" for name in ("kernel5", "kernel11", "deeper", "expansion2")),
         cli=("stage2_probe.py", "--out", str(RESULTS / "stage2_probe_item45.json"), "--stage2",
