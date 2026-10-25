@@ -38,6 +38,64 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 46 ties, the sweep closes, and the architecture is simplified twice (2026-10-25)
+
+*keywords: item 46, O3, position refinement, candidate_xy, matched_person_xy, recall at matched FP, aggregator removed, curriculum removed, slice_frames 256*
+
+**Item 46 -- slots regress a correction to the candidate's position.** The one arm whose metric was never AP: item 35
+measured the memory recovering 203 person-observations and losing 2,990 at its own threshold, so all of its gain is
+ranking, and a position correction was the only mechanism left that could turn carried state into coverage.
+
+| arm | AP | gain | FP/frame | recall | **recall at matched FP** |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| control (`mingru`) | **86.40%** | +4.18 | 0.911 | 84.33% | **95.84%** |
+| `refine` | 86.24% | +4.03 | 1.065 | **86.38%** | **95.45%** |
+
+**-0.16 pp on AP, inside the bar -- and the column that mattered went the wrong way.** Raw recall rose 2.05 pp, but
+only by moving the operating point (FP 1.065 against 0.911); at *matched* false positives recall is **95.45% against
+95.84%**. Moving detections did not recover people the memory was losing. The answer to item 35's question is no.
+
+Training cost nothing: ~605 s per 10 s epoch against the control's ~700, because the head's Hungarian runs once per
+frame over a `[P, G]` of roughly 64x3 -- unlike item 43's, which ran per stream inside `manage_slots`.
+
+**The sweep is closed: ten architectural questions measured, one load-bearing.**
+
+| tested | verdict |
+| --- | --- |
+| **per-object addressability** (36, 39) | **load-bearing -- the mechanism, as a contrast and as a dose-response curve** |
+| recurrence rule: GRU, minGRU (16) | ties |
+| association: Hungarian (43) | ties on AP *and* CPU |
+| the curriculum (41) | ties, 24% cheaper |
+| whole-scan aggregator (40) | ties |
+| block, widths (19a, 19b) | ties |
+| depth, kernel, expansion (45) | ties |
+| **position refinement (46)** | **ties; coverage unchanged** |
+| sensor-frame vote targets (18) | **worse** |
+
+**Two simplifications adopted (owner, 2026-10-25).** Both tie, so E13's standing principle -- propose the most
+efficient solution and the simplest of the ones that work -- takes them:
+
+* **no whole-scan aggregator** in stage 2 (`--no-aggregator`): 16,384 parameters, 82.24% against the control's 82.19.
+* **no 1 s curriculum stage** in stage 3 (`--chunk-s 10`): 24% of training time, 85.97% against 86.40%.
+
+**What adoption costs, stated rather than discovered later.** The aggregator lives in stage 2, so the control every arm
+in this sweep was measured against (`a66_mingru_s0`, trained on the aggregator-*ful* stage 2) no longer matches the
+adopted architecture. The simplified recipe therefore needs its own baseline before anything else is measured on it --
+one stage-3 run, ~4 h with the curriculum gone. **And the constructor defaults are deliberately NOT flipped**:
+`network_shape` falls back to a constructor default for checkpoints written before a flag existed, so defaulting
+`aggregator=False` would make every existing stage-2 checkpoint rebuild without it and refuse to load. The adopted
+recipe lives in the queue modules and `commands.md`, exactly as A59's does.
+
+**And `evaluate`'s `slice_frames` drops from 512 to 256.** `gather` fancy-indexes `d.features[flat]`, copying a fresh
+`eval_batch x slice_frames x TOP_P x feature_dim` array -- 128 MiB at 512, and the site of **three of this sweep's five
+out-of-memory failures**. Halving it halves that peak and cannot change a number, because the evaluation loop carries
+`slots` across slices: this is purely how evaluation is chunked. Verified by reading the loop, after an earlier guess
+that the `.astype` was the culprit proved wrong -- `d.features` is already float32.
+
+**The other two failures are fixed by the curriculum removal itself.** One was a host allocation in `run_backward` and
+one a GPU out-of-memory at the curriculum transition; both were driven by the 1 s stage's **26 streams**. The 10 s stage
+runs 2. Dropping the curriculum removes the configuration that caused them.
+
 ## Items 43 and 45: Hungarian association ties on both axes, and four more shape knobs are flat (2026-10-24)
 
 *keywords: item 43, item 45, hungarian, mutual nearest-neighbour, linear_sum_assignment, kernel_size, expansion, blocks, bottleneck_blocks, training cost vs inference cost, batch 1*

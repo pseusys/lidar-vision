@@ -70,8 +70,32 @@ def stage3(name: str, *flags: str) -> Job:
 
 
 AGGREGATOR = CHECKPOINTS / "a69_no_aggregator_s0"
+#: The architecture after the owner's two simplifications of 2026-10-25, both adopted because they tie: stage 2 without
+#: the whole-scan aggregator (item 40, 16,384 parameters) and stage 3 without the 1 s curriculum stage (item 41, 24% of
+#: training time). Dropping the curriculum also removes the 26-stream configuration behind two of this sweep's five
+#: out-of-memory failures, so it buys reliability as well as time.
+SIMPLE_STAGE2 = AGGREGATOR / AVERAGED
+SIMPLE = (*ADOPTED, "--chunk-s", "10")
+
+
+def simplified(name: str, *flags: str) -> Job:
+    """One arm of the **simplified** architecture, seed 0, against `a70_simple_baseline_s0`.
+
+    Separate from `stage3` on purpose rather than changing it: the arms already finished were run on the aggregator-ful
+    stage 2 with the 1 s curriculum, and a job is judged by its output file, so editing `stage3`'s flags would leave
+    this module claiming those arms ran with settings they never saw.
+    """
+    out = CHECKPOINTS / f"a70_{name}_s0"
+    return Job(name=f"simple_{name}", outputs=(out / "step3a_results.json",),
+               cli=("train_takheliped.py", "step3a", "--stage2", str(SIMPLE_STAGE2), *SIMPLE, *flags,
+                    "--seed", "0", "--out-dir", str(out), "--resume"))
+
 
 JOBS = [
+    # The simplified architecture's own baseline, and everything after the 2026-10-25 simplifications is measured
+    # against it rather than against `a66_mingru_s0`, whose stage 2 still had the aggregator.
+    simplified("baseline"),
+
     # Item 41. The only arm on the list that needed no new code: drop the 1 s warm-up and train on 10 s chunks alone.
     # minGRU spent 1.16 h of its 10.06 h in the 1 s stage, so if this ties, every later arm gets ~12% cheaper and the
     # recipe loses a described component that does nothing.

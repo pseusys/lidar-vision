@@ -24,6 +24,32 @@ is not the limit -- it reaches essentially everybody, and the curve is flat acro
 frame, or a frame rate low enough that a person moves further than the gate between scans (DROW at 12.5 Hz is 3.2x
 FROG's period, so A63 is where to look).
 
+## Position refinement: slots regressing a correction to the candidate's position (TODO.md item 46, A51's O3)
+
+*keywords: item 46, O3, position refinement, --refine, candidate_xy, matched_person_xy, recall at matched FP, coverage*
+
+**Idea.** The only mechanism on the architecture list that moves a detection rather than rescoring it. Item 35 gave it
+the reason it had lacked for a year: at its own operating point the memory recovers 203 person-observations and loses
+2,990, so its entire +3.9 pp of AP is ranking, and a position correction was the one way carried state might become
+coverage.
+
+**What was measured** (2026-10-25, one seed, against `a66_mingru_s0`): AP **86.24% against 86.40%**, -0.16 pp inside
+the 1.32 pp bar. Raw recall rose to **86.38%** from 84.33% -- but only by moving the operating point, FP 1.065 against
+0.911. **At matched false positives recall is 95.45% against 95.84%**, i.e. slightly worse. The coverage question item
+35 posed is answered negatively.
+
+**Why rejected: it changes the operating point, not the coverage.** And it cost nothing to find out -- ~605 s per 10 s
+epoch against the control's ~700, because its Hungarian runs once per frame over a `[P, G]` of about 64x3.
+
+**Where it lives.** `--refine` and `--refine-weight` on `step3a`; `MemoryOutput.candidate_xy` (equal to the input
+positions when the head is absent, so the evaluation path never branches on a flag); `matched_person_xy` and
+`refinement_loss` in `utils/train_takheliped.py`. Off by default and bit-identical when off.
+
+**What would reopen it.** A dataset where candidate *positions* are the limiting error rather than candidate *scores*.
+FROG's stage 2 already places 98.1-98.5% of people inside the 0.5 m match radius (item 34), so there is almost no
+position error for a correction to remove; DROW at 12.5 Hz, where a person moves 3.2x further between scans, is where
+to look (A63).
+
 ## Hungarian association, and four stage-2 shape knobs (TODO.md items 43 and 45)
 
 *keywords: item 43, item 45, hungarian, linear_sum_assignment, mutual nearest-neighbour, kernel_size, expansion, blocks, bottleneck_blocks, batch 1*

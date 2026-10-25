@@ -940,7 +940,12 @@ def evaluation_segments(split, windows: int, window_frames: int, warmup_frames: 
 
 @torch.no_grad()
 def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: int, segments: List[Tuple[int, int, int, int]],
-             slice_frames: int = 512, extra_radii: Sequence[float] = (), reset_every_s: Optional[float] = None,
+             # 256, not 512, since 2026-10-25. `gather` fancy-indexes `d.features[flat]`, which copies a fresh
+    # `eval_batch x slice_frames x TOP_P x feature_dim` array -- 128 MiB at 512 frames, and the site of **three** of
+    # this sweep's five out-of-memory failures (`memory/gotchas.md`). Halving it halves that peak and **cannot change
+    # any number**: the loop below carries `slots` across slices, so this is purely how evaluation is chunked. Verified
+    # by reading the loop rather than assumed -- an earlier guess that the `.astype` was the culprit was wrong.
+    slice_frames: int = 256, extra_radii: Sequence[float] = (), reset_every_s: Optional[float] = None,
              drift_m_per_s: float = 0.0, heading_deg_per_s: float = 0.0, frames_out: Optional[Dict[str, list]] = None,
              compute_metrics: bool = True) -> Dict[str, Dict[str, float]]:
     """Play each segment (recording, first frame, frames, warm-up) from empty memory, `streams` at a time, and score every
@@ -1105,6 +1110,10 @@ def train_memory(args) -> None:
           # bias-free `decay` plus its own `decay_bias` is exactly minGRU's `gate` with bias -- so the count cannot
           # tell two arms apart and a sweep's logs have to say it outright (`TODO.md` item 38).
           f", {args.recurrence} recurrence"
+          # Every arm of the sweep has to be identifiable from its own log line. This print has now hidden three of
+          # them -- the recurrence, the global state and this head -- and a reader should not have to subtract
+          # parameter counts to tell an arm from its control (`TODO.md` items 38, 36, 46).
+          f"{f', position refinement at weight {args.refine_weight:g}' if args.refine else ''}"
           f"{'' if args.exchange else ', no slot exchange'}{'' if args.learned_match else ', no learned matching'}"
           f"{'' if args.recurrent else ', no slot state at all'}"
           f"{', ONE GLOBAL SCENE STATE and no addressable slots (item 36)' if args.global_state else ''}", flush=True)
