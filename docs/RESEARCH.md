@@ -500,11 +500,11 @@ FROG writes a missing return as `+inf` or 61.0 m, DROW as 29.96 m; both arrive a
 dataset it is reading. That was the owner's constraint, not an implementation convenience: **the model should be feedable
 with raw data**, with noise handled inside the model rather than in a per-dataset cleaning step.
 
-### 5.2 Stage 2 -- a single-scan ConvNeXt U-Net with a whole-scan aggregator
+### 5.2 Stage 2 -- a single-scan ConvNeXt U-Net
 
 A 1-D U-Net over the beam axis, built from ConvNeXt blocks, with widths (32, 64, 128) at `N`, `N/2` and `N/4` beams and a
-bottleneck over `N/8` sectors; a 3-tap convolution across bottleneck sectors and a global max pooled back to every sector;
-a DROW-style head giving each beam a person logit and a 2-D vote toward the person's centre. 976,707 parameters.
+bottleneck over `N/8` sectors; a 3-tap convolution across bottleneck sectors; a DROW-style head giving each beam a
+person logit and a 2-D vote toward the person's centre. 960,323 parameters.
 **It reads one scan. It has no state and no pose**, which is what makes the temporal claim in Section 7.4 attributable to
 stage 3 rather than shared between them.
 
@@ -513,7 +513,7 @@ stage 3 rather than shared between them.
 | ConvNeXt block: depthwise `k=7`, norm, 1x1 widen by 4, GELU, 1x1 narrow, residual | Liu et al., *A ConvNet for the 2020s*, CVPR 2022 | **Faithful in 1-D.** The block order, the inverted bottleneck and the expansion ratio are as published; the only change is `Conv1d` over beams in place of `Conv2d` over pixels, and `GroupNorm(1, C)` in place of LayerNorm, which is the same normalisation computed over the same axes for a 1-D tensor. |
 | Encoder-decoder with skip connections at each scale | Ronneberger, Fischer, Brox, *U-Net*, MICCAI 2015 | **Faithful in structure**, with strided convolutions for downsampling rather than max-pooling and `interpolate` + concatenate on the way up. |
 | Per-beam classification plus a 2-D vote to the person's centre | Beyer et al., *DROW*, RA-L 2018 / *Deep Person Detection in 2D Range Data*, IROS 2018 | **The head is DROW's**, and so is the voting formulation -- this is the one piece of the proposed detector that is deliberately not novel, because it is what makes the comparison against DROW3 and DR-SPAAM an architecture comparison rather than a head comparison. What differs is what feeds it: a whole scan rather than a per-beam cutout. |
-| Whole-scan global max concatenated to every bottleneck sector | -- | **No source claimed.** A cutout detector cannot do this at all: it never sees the whole scan. It is the cheapest way to give every sector the context that a room is crowded or empty, and `TODO.md` A59 measures what it is worth. |
+| ~~Whole-scan global max concatenated to every bottleneck sector~~ -- **removed 2026-10-25** | -- | **Measured and dropped** (`TODO.md` item 40). It was the one component here with no source claimed and the one a cutout detector cannot have at all, so it was the natural candidate for "what does seeing the whole scan buy?" The answer is nothing measurable: **82.24% against the three control seeds' 82.19%**, and the whole detector on its candidates scores 86.20% against 86.40%, inside the 1.32 pp bar, for 16,384 parameters. The full-scan input still matters -- a fixed-beam kernel over a whole scan beats a resampled cutout by 1.42 pp (item 15) -- but *explicit* whole-scan context does not. `--aggregator` still builds it, because older checkpoints load with it. |
 | Weight averaging over a validation-chosen window of periodic checkpoints | Izmailov et al., *Averaging Weights Leads to Wider Optima and Better Generalization*, UAI 2018 (SWA) | **Faithful in spirit, simplified in practice.** SWA's cyclical learning-rate schedule is not used; the average is taken over consecutive periodic checkpoints from a single plateau-scheduled trajectory, and the window is chosen on validation. It gained in 15 of 18 A59 runs, +0.66 pp mean. |
 
 **A fixed-beam first layer, on measured grounds.** The obvious objection is that a person subtends 42 beams at 2 m and 9 at
@@ -528,8 +528,14 @@ over costs. **The honest statement is that the fixed window is not a simplificat
 256 slots. Each carries a world position and velocity, where it started, its age, the time since it last matched, a recent
 match rate, an accumulated **value**, and a learned state vector. Per call: the robot's pose puts the candidates into room
 coordinates, rule-based bookkeeping decides which slot each candidate belongs to and which slots live or die, a
-`dt`-aware selective recurrence updates each surviving slot's state, and a rescoring head adjusts every candidate's score
+minGRU updates each surviving slot's state, and a rescoring head adjusts every candidate's score
 using the slot matched to it. 173,442 parameters.
+
+**`dt` reaches the bookkeeping, not the state update.** The recurrence was a `dt`-aware selective cell until
+2026-10-23 and is now minGRU, which takes a *step*. Elapsed seconds still drive the rule-based half -- slot
+positions, velocities, ages, time since match, and the value fade -- so the design is still rate-aware; what it no
+longer claims is a *learned* function of elapsed time. Section 5.3's table says why, and `TODO.md` steps 1-2 (DROW at
+12.5 Hz against FROG's 40.01) are where the distinction can finally be measured.
 
 **The bookkeeping is not learned, and that is the design.** Spawning, matching, eviction and retirement run under
 `no_grad` as explicit rules, because they are discrete decisions with no gradient to give. Only the slot state, the
@@ -539,7 +545,8 @@ recurrence and the rescoring head are trained. A51's S4 tested whether a learned
 | component | borrowed from | how faithfully |
 | --- | --- | --- |
 | A fixed set of slots, each a vector, competing to explain the current observations | Locatello et al., *Object-Centric Learning with Slot Attention*, NeurIPS 2020 | **The abstraction, not the mechanism.** Slot Attention assigns observations to slots by iterated competitive soft attention within a frame; here assignment is a hand-coded one-to-one match in metric space across frames, and the slots persist between calls rather than being re-initialised per input. The debt is the idea that a scene is a set of addressable object states, not the attention routine. |
-| `dt`-aware selective diagonal recurrence, decay learned per slot over 1-60 s | Gu & Dao, *Mamba: Linear-Time Sequence Modeling with Selective State Spaces*, arXiv 2023 | **The selectivity and the diagonal state, not the architecture.** What is taken is the shape -- a diagonal state whose decay is a *function of the input* rather than a fixed constant -- which is what lets one slot forget in a second and another hold for a minute. There is no Mamba block here: no SSM scan over a sequence dimension, no convolution, no gated MLP. **The real-time `dt` term is not in Mamba at all**: a robot's frames are not uniformly spaced, so decay is `exp(-dt * rate)` in seconds rather than per step. A51's D3 shows the learned rate is load-bearing -- fixing it costs 1.04 pp. |
+| Per-slot recurrence: **minGRU** | Feng et al., *Were RNNs All We Needed?*, arXiv 2024 | **Faithful.** The minimal GRU: one input-dependent forget gate, no reset gate, no dependence of the gate on the previous state. It is used as published, per slot, with the slot's own statistics concatenated to its input. **Adopted 2026-10-23 over the bespoke alternative described in the row below**, on the grounds that the two tie and a citable cell is more defensible than a re-implemented one. |
+| ~~`dt`-aware selective diagonal recurrence, decay learned per slot over 1-60 s~~ -- **not adopted**, kept as `--recurrence selective` | Gu & Dao, *Mamba: Linear-Time Sequence Modeling with Selective State Spaces*, arXiv 2023 | **Measured against minGRU and the plain GRU, and it ties** (`TODO.md` item 16: 0.52 pp across five runs against a 1.32 pp bar). What it took from Mamba was the shape -- a diagonal state whose decay is a *function of the input* -- plus a real-time term that is not in Mamba at all, `exp(-dt * rate)` in seconds rather than per step. **The real-time term has never acted on FROG, and that is the honest statement:** `frame_periods` feeds stage 3 a running average of stamped intervals whose 5-95% spread is 24.50-25.53 ms, so the input the mechanism exists to read is a constant to within 1%, and A51's D3's 1.04 pp for fixing the rate priced the *learned decay*, not the `dt`. Item 37 then found the dt-aware rule the **most** fragile of the three under dropped frames (-1.16 pp against minGRU's -0.40). It stays principled and untested: a 12.5 Hz dataset is the test, and `TODO.md` step 2 is it. |
 | Slots in **room** coordinates rather than the sensor frame | -- | **No source claimed**, and it is the choice the whole design rests on: a static object stays put in room coordinates and drifts with the robot in sensor coordinates, so "has this thing been here for a minute?" is answerable in one frame and not the other. It needs odometry, which is the cost. |
 
 **What stage 3 does not have, each removed by its own measurement**: no cross-attention association (E7), no slot-to-slot

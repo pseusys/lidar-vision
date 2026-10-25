@@ -42,6 +42,14 @@ It breaks the lifecycle above in two places: there is no `T`-scan window (one sc
 
 ### The frozen architecture (2026-10-18; the recurrence changed 2026-10-23)
 
+**The architecture was simplified twice on 2026-10-25** (`TODO.md` items 40 and 41, the owner's call): stage 2 has
+**no whole-scan aggregator** and stage 3 has **no 1 s curriculum stage**. Measured together as `a70_baseline_s0`:
+**86.20%** against the previous 86.40%, inside the 1.32 pp bar, for 16,384 fewer parameters and 28% less training
+time -- and with recall at matched false positives *up*, 96.43% against 95.84%. The recipe lives in
+`utils/queue_architecture_sweep.py`'s `simplified()` helper, **not** in constructor defaults: `network_shape` falls back
+to a constructor default for checkpoints written before a flag existed, so defaulting `aggregator=False` would make
+every older stage-2 checkpoint rebuild without it and refuse to load.
+
 **The per-slot recurrence is minGRU as of 2026-10-23** (`TODO.md` item 38, the owner's call), not the bespoke selective
 diagonal decay. Item 16 found the three recurrences tie on AP, item 37 found the dt-aware rule the *most* fragile under
 dropped frames and the `dt` it reads a 1%-spread constant, and item 36 found that the **slots** are what carries the
@@ -65,8 +73,9 @@ coasting's weight, coasting's existence. Only the **learned decay** and the **un
 change. That robustness is worth stating in the paper rather than hiding: the memory's performance does not rest on its
 knobs.
 
-**The headline, measured on the *selective* variant and not yet on the adopted one** (2026-10-19, three seeds, FROG
-`official` test every 5th annotated frame): **wp-AUC 86.01%** (86.08 / 86.08 / 85.88), **0.958 false positives per frame** (0.885 / 0.903 / 1.086), recall
+**The headline, measured on an architecture that has since been superseded twice** -- it is the *selective* variant's,
+on the aggregator-ful stage 2, with the curriculum, while the adopted model is slots + minGRU with neither and has
+**one** seed at 86.20% (2026-10-19, three seeds, FROG `official` test every 5th annotated frame): **wp-AUC 86.01%** (86.08 / 86.08 / 85.88), **0.958 false positives per frame** (0.885 / 0.903 / 1.086), recall
 84.03%, over candidates of 82.19% -- so the memory is worth **+3.82 pp** over its own input. On the CPU at four threads
 it costs **19.15 ms per frame, p99 22.07** -- 88% of FROG's 25 ms period (item 30).
 

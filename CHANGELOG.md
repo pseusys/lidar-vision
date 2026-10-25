@@ -38,6 +38,70 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The simplified architecture measured: both simplifications compose (2026-10-25)
+
+*keywords: a70_baseline_s0, simplified architecture, no aggregator, no curriculum, recall at matched FP, headline provenance, three seeds pending*
+
+Items 40 and 41 were each measured as a tie against their own control, but **never together**, and the two touch
+different stages -- so "both at once" is a third configuration that needed its own number. It has one.
+
+| arm | AP | candidates | gain | FP/frame | recall | **recall at matched FP** |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| old control (`a66_mingru_s0`) | **86.40%** | 82.22% | +4.18 | 0.911 | 84.33% | 95.84% |
+| **simplified** (`a70_baseline_s0`) | **86.20%** | 82.24% | +3.96 | 1.117 | **86.70%** | **96.43%** |
+
+**-0.20 pp, comfortably inside the 1.32 pp bar.** Dropping the whole-scan aggregator *and* the 1 s curriculum together
+costs nothing measurable and buys **16,384 parameters** and **28% of training time** (507 s per epoch against ~700).
+
+Two details that matter for how this is read. The simplified stage 2's candidates are marginally *better* (82.24%
+against 82.22%), so the slightly smaller gain is not the memory doing less. And **recall at matched false positives is
+96.43% against 95.84%** -- the one column that is directly comparable rather than an operating-point artefact, and the
+first time in this sweep an arm has improved it. One seed, so +0.59 pp is not a result; it is, however, the opposite
+direction from item 46's -0.39 and it argues the simplified model is not a compromise.
+
+**A note on how this run was reported while it ran, because the mistake was repeated.** Its validation gain went
++0.32 -> +2.49 -> +2.70 -> +3.68 -> +4.44 -> +5.09 pp across six hourly checks, and three times a flat hour was
+reported as a possible plateau, with a diagnostic arm proposed to separate the two simplifications. The arm set bests
+at epochs 13, 23, 24, 30, 34, 43 and 44 -- it improves in steps with long pauses, which is exactly the shape
+`--patience 12` exists to tolerate. **A pause shorter than the patience window is not evidence of a ceiling**, and
+mid-run validation should not be narrated as if it were.
+
+**The headline's provenance moves again, and now needs restating twice over.** The published **86.01%** is the
+*selective* model's three seeds, on the aggregator-ful stage 2, with the curriculum. The adopted architecture is slots
++ minGRU, **no aggregator, no curriculum**, and has **one** seed at 86.20%. Nothing may be quoted as a three-seed
+number until the freeze run.
+
+**And the freeze now needs new stage-2 seeds.** Only seed 0 of the aggregator-free stage 2 exists, so the run is three
+stage-2 arms (~1 h with averaging) before three stage-3 arms (~12 h at the new pace) -- about **13 h**, against the 20 h
+quoted when minGRU was pinned. The curriculum removal more than pays for the extra stage-2 runs.
+
+**The write-ups follow the architecture, in the same step.** `docs/RESEARCH.md` section 5 had described a model that no
+longer exists: 5.2 was named after the whole-scan aggregator and claimed it gives every sector the context that a room is
+crowded or empty, and 5.3 credited Mamba for a `dt`-aware selective cell. Both rows are now struck through and kept
+*with their results*, because a component measured and dropped is a finding and deleting the row would discard it. The
+recurrence row is Feng et al.'s minGRU, cited and faithful. And the `dt` claim is restated rather than removed: elapsed
+seconds still drive the rule-based half -- positions, velocities, ages, the value fade -- but **minGRU takes a step and
+never sees `dt`**, so the design is rate-aware without claiming a *learned* function of elapsed time. Stage 2's
+parameter count drops to **960,323** from 976,707, read off the checkpoint rather than subtracted.
+
+**`docs/PAPER.md` is marked stale rather than edited.** Its table is the selective model's three seeds, on the
+aggregator-ful stage 2, with the curriculum -- a correct measurement of a model the project no longer proposes. The
+numbers stay as they are, with a note naming all three supersessions and pointing at **item 47**, the three-seed freeze
+that replaces the table wholesale. Rewriting the figures to match the adopted architecture without running it would be
+inventing them.
+
+**And half of stage 2's lead over LFE-Peaks now has no identified owner.** A59's decomposition split it into the output
+head (votes, aggregation over beams, NMS) and "the network's form and the training recipe". Every nameable piece of
+that form has now been varied and tied -- block and widths (19a, 19b), depth, kernel and expansion (45), the aggregator
+(40) -- so the residue is the recipe, or the form in a way none of these knobs isolates. Corrected in
+`memory/static-detector-diagnosis.md` and `memory/performance-log.md`, both of which still named the aggregator as part
+of it.
+
+**One cost of switching stage 2 that was not in the estimate:** `candidate_cache_path` keys on the checkpoint's
+directory, name and modification time, so the aggregator-free stage 2 invalidated every cached candidate and the run
+spent ~40 minutes rebuilding train, val and test caches before its first epoch. Any future change of stage-2 checkpoint
+pays this again -- item 44's heatmap head will.
+
 ## Item 46 ties, the sweep closes, and the architecture is simplified twice (2026-10-25)
 
 *keywords: item 46, O3, position refinement, candidate_xy, matched_person_xy, recall at matched FP, aggregator removed, curriculum removed, slice_frames 256*

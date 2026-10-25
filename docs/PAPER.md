@@ -61,6 +61,15 @@ and a DROW-style vote head (**stage 2**), and an object memory of 256 slots in r
 state (**stage 3**). **Stage 2 reads one scan per call** — it has no temporal input of any kind — so every temporal claim below
 belongs to the memory.
 
+> **STALE AS OF 2026-10-25: this table's architecture has been superseded three times and its numbers have not been
+> re-measured.** The draft describes the **selective** per-slot recurrence, a stage 2 **with** the whole-scan aggregator,
+> and stage-3 training **with** the 1 s curriculum. The adopted architecture is **minGRU, no aggregator, no curriculum**
+> (`TODO.md` items 38, 40, 41; `CHANGELOG.md` 2026-10-23 and 2026-10-25). Every change tied inside the 1.32 pp bar, so
+> the numbers below are not *wrong* -- they are a correct measurement of a model this project no longer proposes, and the
+> adopted one has **one** seed, at 86.20%. **Nothing here may be quoted until the three-seed freeze** (`TODO.md` item 47),
+> which replaces this table wholesale: three stage-2 seeds and three stage-3 seeds, ~13 h. The architecture sentence above
+> is left as written for the same reason -- it describes what was measured, not what is proposed.
+
 > **The architecture was frozen on 2026-10-18 and this table describes it.** Our detector's wp-AUC is the frozen
 > model's three-seed mean -- **86.01%** (86.08 / 86.08 / 85.88) -- measured after step 1 removed the coasting head.
 > The **85.87%** quoted before 2026-10-19 described the same model *with* that head: the means are 0.14 pp apart,
