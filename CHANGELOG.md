@@ -38,6 +38,73 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 42: Slot Attention's own update, as published (2026-10-25)
+
+*keywords: item 42, Slot Attention, Locatello, --iterations, softmax over slots, null slot, competitive attention, iterated refinement*
+
+**The conclusion of item 38's own logic.** `docs/RESEARCH.md` credits Slot Attention for the *abstraction* -- a scene as a
+set of addressable object states -- and explicitly **not** the mechanism, because the association here is a hand-coded
+one-to-one metric match. Item 36 then proved the abstraction is exactly what carries the gain, and item 38 established
+that a citable cell beats a re-implemented one. So the remaining question is whether the published *update* also works:
+if it does, the architecture becomes **"Slot Attention over LiDAR candidates"**, which is a far easier claim to defend
+than a bespoke pipeline.
+
+**What the arm replaces, stated narrowly, because the plan could be read more broadly.** `manage_slots` **still runs**.
+It has to: it is what gives a slot its room-frame position, and the room frame is the choice the whole design rests on.
+What the iterated attention replaces is the association's role in the **state update** -- the `match_index` gather, or
+`self.match` where that is on -- and the separate `recall` attention, because Slot Attention's own matrix is already a
+distribution over slots per candidate and so is the recall. Reading both off one matrix is the point: a second,
+differently normalised attention over the same pairs would mean the thing being measured is no longer the published
+update rule.
+
+**The softmax axis is the mechanism, and the test for it does not depend on an untrained draw.** Normalising over
+*slots* makes the weights a fixed budget per candidate, so slots compete; a transformer's cross-attention normalises
+over candidates and lets every slot read the same one at full weight. The first draft of that test asserted two
+co-located slots would *split* a candidate, which is true only of the random initialisation -- the same mistake that
+deleted an aggregator test in item 40. What replaced it is a guarantee: waking a second slot must take weight away from
+the first, because the denominator grows. Under a candidate-axis softmax slot 0's weight would not move at all.
+
+**One deliberate deviation from the paper: the proximity bias stays.** Published Slot Attention has no spatial prior.
+Item 39 measured ours as load-bearing with a dose-response curve over `sigma_m`, so removing it would change two things
+at once and make a negative result uninterpretable. The arm asks "does the published update rule work here?", not "does
+the spatial prior matter?" -- that one is answered.
+
+**And one addition the paper does not need: a null slot.** Slot Attention re-initialises its slots from a learned
+Gaussian on every input, so at least one always fits. Here slots persist across frames and **a stream's first frame has
+none alive at all** -- a softmax over an entirely masked axis is NaN. An always-attendable null slot holds the weight of
+a candidate no slot explains; its weight is dropped from the update, since it has no state to carry, and it gets a
+learned value so the recall has a defined answer too. Four tests pin the degenerate frames: no live slot, no valid
+candidate, an empty memory, and a twelve-frame run.
+
+**`dt` is spent on the first iteration only.** Elapsed time passes once per frame, not once per refinement step, so a
+`selective` arm at three iterations would otherwise decay three frames' worth of state in one frame. The adopted
+recurrence is minGRU, which never sees `dt`, so this would have been silent until someone ran the combination --
+pinned by a test that spies on `_recur` and asserts it is called with `0.4, 0.0, 0.0`.
+
+**Four refusals**, each a feature the published mechanism duplicates or cannot be given: `--learned-match` (it already
+associates), `--exchange` (the published update has none), `--no-recurrent` (there would be no state to update) and
+`--global-state` (there would be no slots to compete). All four are tested.
+
+**Off by default, and bit-identical when off** -- a test pins that `--iterations 0` and a model built without the flag
+produce equal logits and equal slot states, so no published number moves. 24 new tests, **1041 pass**, `ruff` clean, and
+a two-recording smoke on real data runs end to end. The arm itself is queued in
+`utils/queue_architecture_sweep.py` at three iterations, the paper's own setting.
+
+**The smoke's parameter count is the check worth keeping.** Stage 3 goes from 173,442 to **223,234**, and `+49,792`
+is exactly `116,096 - 66,304`: the attention's three projections, two norms, two null parameters and the MLP, minus the
+`recall` attention's four projections and its two null parameters. The arithmetic only closes if `recall` really is gone
+and the new module really is built, which no unit test asserts as directly. The smoke also confirms the arm starts as
+its control -- memory AP **93.56%** against the candidates' 93.56%, rescoring shift **-0.001** logits, gate -0.002 --
+so its first epochs measure the control rather than a random displacement, which is the property item 46's smoke was
+written to check.
+
+**The one risk this arm carries is CPU latency, and the smoke cannot speak to it.** Three iterations means three
+attention passes and three recurrence steps per frame where the control has one, and the memory phase is already the
+larger half of the CPU budget (item 36). The smoke's 5.77 ms per frame is `step3a_results.json`'s
+`memory_ms_per_frame`, timed on the GPU that trained it, so it is **not** an answer -- item 29's protocol is
+(`tracking_baselines.py latency --device cpu --threads 4`, 2,000 consecutive scans, batch 1, matched and interleaved
+against the control on an idle host). An arm that wins on AP and loses on CPU has not won.
+
 ## The simplified architecture measured: both simplifications compose (2026-10-25)
 
 *keywords: a70_baseline_s0, simplified architecture, no aggregator, no curriculum, recall at matched FP, headline provenance, three seeds pending*

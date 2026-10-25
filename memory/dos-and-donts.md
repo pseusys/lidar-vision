@@ -109,6 +109,24 @@ A tried-and-rejected idea goes in [`rejected-ideas.md`](rejected-ideas.md) with 
 Name what would have failed if it were wrong, and run that.
 A synthetic unit test passing has already been mistaken for "the logic is correct" twice in this project's real history — once for a scan-alignment sign error, once for the odometry timestamp-gap bug — and both were only caught by checking against real recorded FROG data, not by any test that was green beforehand.
 
+**DON'T write a test that asserts a property of an untrained network's random draw.**
+It measures the draw, not the behaviour, and the seed decides whether it passes.
+This has happened three times here and cost a test each time: item 40's aggregator test asserted that concatenating a
+whole-scan max would change a specific output, which an untrained draw does not guarantee (two versions were written and
+both were wrong, so the test was deleted rather than tuned); item 42's first version asserted that two co-located slots
+would *split* a candidate's attention, true only of the particular initialisation.
+**Assert the guarantee instead.** For item 42 that is "waking a second slot takes weight away from the first", which
+holds for any weights because a softmax's denominator grows — and which is also the property that *discriminates* the
+mechanism, since a candidate-axis softmax would leave the first slot's weight untouched.
+
+**DON'T measure a gradient through a head that starts silent.**
+Two of this project's heads are deliberately inert at initialisation — the rescoring gate starts at zero, and item 46's
+refinement head has a zero-initialised last layer — so `0 * correction` gives every parameter behind them a gradient of
+**exactly zero** and `abs()` has no subgradient at a zero residual.
+A connectivity test written against that passes on a disconnected graph.
+Wake the head first (`rescore_gate.fill_(1.0)`, or a target offset from the prediction), and say in the test why.
+Both mistakes were made and caught here, in items 46 and 42.
+
 **DON'T change a calibrated constant without re-running every table downstream of it.**
 Nothing in this repo notices, and the tables do not say which constant they were measured under.
 `LFEPPNDetector.nms_radius` moved from 0.8 m to 0.30 m in the working tree — a *correct* recalibration, against the published AP at both association distances — and for as long as nobody re-ran the false-positive passes, `PAPER.md`, `performance-log.md`, `dataset-properties.md` and `CHANGELOG.md` all kept quoting LFE-PPN figures from before the move. They were wrong by up to 2x. It surfaced only because two documents disagreed with each other and someone chased it (`CHANGELOG.md` 2026-09-11).

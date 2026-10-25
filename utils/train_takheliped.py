@@ -724,6 +724,7 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
              "recurrence": parameters["recurrence"].default if args.get("recurrence") is None else args["recurrence"],
              "global_state": parameters["global_state"].default if args.get("global_state") is None else literal_eval(args["global_state"]),
              "refine": parameters["refine"].default if args.get("refine") is None else literal_eval(args["refine"]),
+             "iterations": parameters["iterations"].default if args.get("iterations") is None else int(args["iterations"]),
              "fixed_decay_s": parameters["fixed_decay_s"].default if args.get("fixed_decay_s") is None else float(args["fixed_decay_s"]),
              "learn_value": parameters["learn_value"].default if args.get("learn_value") is None else literal_eval(args["learn_value"]),
              "exchange": parameters["exchange"].default if args.get("exchange") is None else literal_eval(args["exchange"]),
@@ -1097,6 +1098,7 @@ def train_memory(args) -> None:
     model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value, association=args.association), feature_dim=splits["train"].data.features.shape[-1],
                          rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame, coast=args.coast,
                          recurrence=args.recurrence, global_state=args.global_state, refine=args.refine,
+                         iterations=args.iterations,
                          fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value, exchange=args.exchange,
                          learned_match=args.learned_match, recurrent=args.recurrent, visibility=args.visibility).to(device)
     print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}"
@@ -1114,6 +1116,7 @@ def train_memory(args) -> None:
           # them -- the recurrence, the global state and this head -- and a reader should not have to subtract
           # parameter counts to tell an arm from its control (`TODO.md` items 38, 36, 46).
           f"{f', position refinement at weight {args.refine_weight:g}' if args.refine else ''}"
+          f"{f', SLOT ATTENTION at {args.iterations} iterations (item 42) in place of the hand-coded update and the recall' if args.iterations else ''}"
           f"{'' if args.exchange else ', no slot exchange'}{'' if args.learned_match else ', no learned matching'}"
           f"{'' if args.recurrent else ', no slot state at all'}"
           f"{', ONE GLOBAL SCENE STATE and no addressable slots (item 36)' if args.global_state else ''}", flush=True)
@@ -1871,6 +1874,19 @@ def build_parser() -> argparse.ArgumentParser:
                                 "initialised -- so an untrained arm reports exactly the candidate's own position")
         step1.add_argument("--refine-weight", type=float, default=1.0,
                            help="weight on item 46's L1 refinement loss, relative to the candidate focal loss")
+        step1.add_argument("--iterations", type=int, default=0,
+                           help="run Slot Attention's own update (Locatello et al., NeurIPS 2020) for this many "
+                                "iterations per frame, in place of the hand-coded state update and the separate recall "
+                                "attention (TODO.md item 42); 0, the default, keeps the adopted path. Slots compete for "
+                                "the frame's candidates through a softmax over SLOTS, each slot's update is the "
+                                "attention-weighted mean of what it won, and --recurrence folds that into its state. "
+                                "The conclusion of item 38's logic: item 36 proved the slot abstraction load-bearing "
+                                "and item 38 preferred a citable cell to a re-implemented one, so if the published "
+                                "update also works the architecture becomes 'Slot Attention over LiDAR candidates'. "
+                                "manage_slots still runs -- it is what gives a slot its room-frame position -- and the "
+                                "proximity bias stays, because item 39 priced it as load-bearing and dropping it would "
+                                "change two things at once. Refuses --learned-match, --exchange, --no-recurrent and "
+                                "--global-state")
         step1.add_argument("--association", choices=ASSOCIATIONS, default="mutual",
                            help="how slots are paired to candidates (TODO.md item 43). mutual, the adopted rule: a "
                                 "slot's nearest candidate and that candidate's nearest slot must agree. hungarian: the "

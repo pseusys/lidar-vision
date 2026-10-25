@@ -298,6 +298,58 @@ class _BiasedAttention(nn.Module):
         return self.out(mixed.transpose(1, 2).reshape(b, q, d))
 
 
+class _SlotAttention(nn.Module):
+    """Slot Attention's attention and its post-update MLP, for one iteration (Locatello et al., NeurIPS 2020) -- item 42.
+
+    The defining detail is the softmax **axis**: over slots, so slots compete to explain each candidate and the weights
+    are a fixed budget per candidate. A transformer's cross-attention normalises over candidates instead, which lets
+    every slot read the same candidate at full weight -- that is `_BiasedAttention`, and it is what this replaces.
+    Single-head, as published, and the paper's second normalisation over candidates turns the competition into a
+    weighted *mean* rather than a sum.
+
+    **A null slot is always attendable** and holds the weight of a candidate no slot explains. It is not in the paper,
+    because the paper does not have this problem: Slot Attention re-initialises its slots from a learned Gaussian on
+    every input, so at least one always fits, while here slots persist across frames and a stream's first frame has
+    none alive -- and a softmax over an entirely masked axis is NaN. Its weight is dropped from the update, since it
+    has no state to carry, and `read` gives it a learned value so the recall has a defined answer too.
+    """
+
+    def __init__(self, dim: int):
+        super().__init__()
+        self.norm_slots, self.norm_items = nn.LayerNorm(dim), nn.LayerNorm(dim)
+        self.to_q, self.to_k, self.to_v = (nn.Linear(dim, dim, bias=False) for _ in range(3))
+        # A query in projected space rather than a state put through `to_q`: the null slot has no state, and at zero it
+        # competes at logit 0, which is a neutral starting point the loss can move either way.
+        self.null_query = nn.Parameter(zeros(1, 1, dim))
+        self.null_value = nn.Parameter(zeros(1, 1, dim))
+        self.mlp = nn.Sequential(nn.LayerNorm(dim), nn.Linear(dim, 2 * dim), nn.GELU(), nn.Linear(2 * dim, dim))
+
+    def forward(self, state: Tensor, items: Tensor, bias: Tensor, valid: Tensor, alive: Tensor) -> Tuple[Tensor, Tensor]:
+        """`state [B, K, D]`, candidates `items [B, P, D]`, their pairwise `bias [B, P, K]`, `valid [B, P]`, `alive [B, K]`.
+
+        Returns the per-slot update `[B, K, D]` and the candidate-to-slot attention `[B, P, K + 1]`, the null slot last.
+        """
+        batch, dim = state.shape[0], state.shape[-1]
+        items = self.norm_items(items)
+        queries = cat([self.to_q(self.norm_slots(state)), self.null_query.expand(batch, -1, -1)], dim=1)
+        logits = self.to_k(items) @ queries.transpose(-1, -2) / sqrt(dim)
+        logits = logits + cat([bias, zeros(batch, bias.shape[1], 1, device=bias.device)], dim=-1)
+        attendable = cat([alive, ones_like(alive[:, :1])], dim=1)
+        attention = softmax(logits.masked_fill(~attendable[:, None, :], float("-inf")), dim=-1)
+        weights = attention[..., :-1] * valid[..., None]
+        weights = weights / weights.sum(dim=1, keepdim=True).clamp(min=PROBABILITY_EPS)
+        return weights.transpose(-1, -2) @ self.to_v(items), attention
+
+    def read(self, attention: Tensor, state: Tensor) -> Tensor:
+        """The recall, through the same matrix: each candidate reads the slots that competed for it, `[B, P, D]`.
+
+        This is why the arm removes `self.recall` rather than keeping it beside the update. A separate attention would
+        be a second, differently normalised association over the same pairs, and then "the published update rule" would
+        no longer be what is being measured.
+        """
+        return attention @ cat([state, self.null_value.expand(state.shape[0], -1, -1)], dim=1)
+
+
 @dataclass
 class MemoryOutput:
     """One object-memory step: rescored candidate logits `[B, P]`; person logits of slots `[B, K]` and their positions in the
@@ -356,8 +408,23 @@ class ObjectMemory(nn.Module):
                  feature_dim: int = 0, rescore_gate: bool = True, rescore_limit: float = 0.0, room_frame: bool = True,
                  fixed_decay_s: float = 0.0, learn_value: bool = False, exchange: bool = True, learned_match: bool = True,
                  recurrent: bool = True, rescore: bool = True, visibility: bool = False, coast: bool = False,
-                 recurrence: str = "selective", global_state: bool = False, refine: bool = False):
+                 recurrence: str = "selective", global_state: bool = False, refine: bool = False,
+                 iterations: int = 0):
         super().__init__()
+        # `TODO.md` item 42: Slot Attention's own update in place of the association's role in the state update. Each
+        # refusal is a feature the published mechanism either duplicates or cannot be given.
+        if iterations:
+            if learned_match:
+                raise ValueError("iterations already associates candidates to slots, so learned_match must be False "
+                                 "(TODO.md item 42)")
+            if exchange:
+                raise ValueError("iterations: published Slot Attention has no slot-to-slot exchange, so exchange must "
+                                 "be False (TODO.md item 42)")
+            if not recurrent:
+                raise ValueError("iterations updates a slot state, so recurrent must be True (TODO.md item 42)")
+            if global_state:
+                raise ValueError("iterations needs addressable slots to compete, so global_state must be False "
+                                 "(TODO.md item 42)")
         # `TODO.md` item 46 (A51's O3). Item 35 found the memory net negative on *coverage* -- 203 recovered against
         # 2,990 lost at its own threshold -- so all of its gain is ranking. This is the only head that could move a
         # detection rather than rescore it. It needs `rescore`, because without it `recalled` has nowhere else to go
@@ -415,7 +482,10 @@ class ObjectMemory(nn.Module):
         if learn_value:                                      # the value rule's two constants, as parameters the loss can reach
             self.value_gain = nn.Parameter(tlog(full((), rules.gain / (1.0 - rules.gain))))
             self.value_fade = nn.Parameter(tlog(expm1(full((), rules.fade_time_s))))
-        self.recall = _BiasedAttention(dim, heads) if recurrent and addressable else None
+        self.iterations = iterations
+        self.attend = _SlotAttention(dim) if iterations else None
+        # Item 42 reads the recall off its own attention matrix, so the separate one is not built at all.
+        self.recall = _BiasedAttention(dim, heads) if recurrent and addressable and not iterations else None
         self.rescore = nn.Sequential(nn.Linear(2 * dim, dim), nn.GELU(), nn.Linear(dim, 1)) if rescore else None
         # Zero-initialised last layer, so an untrained arm reports exactly the candidate's own position and its first
         # epochs are the control's. Without that, "refinement" and "a randomly displaced detection" are the same thing.
@@ -461,6 +531,29 @@ class ObjectMemory(nn.Module):
             return (1.0 - z) * state + z * tanh(self.update(u))
         candidate = tanh(self.update(u) + self.gru_state(sigmoid(self.reset(u)) * state))
         return (1.0 - z) * state + z * candidate
+
+    def _slot_attention(self, state: Tensor, encoded: Tensor, world: Tensor, cand_valid: Tensor, slots: Slots,
+                        stats: Tensor, dt: Tensor) -> Tuple[Tensor, Tensor]:
+        """`TODO.md` item 42: iterated competitive attention in place of the association's role in the state update.
+
+        Per iteration: slots compete for the frame's candidates, each slot's update is the attention-weighted mean of
+        what it won, the recurrence folds that into its state, and the MLP refines it. The slot statistics ride along in
+        the recurrence's input, exactly as they do in the hand-coded path, so `_recur` keeps its width and item 16's
+        recurrence family stays orthogonal to this ablation.
+
+        **`dt` is spent on the first iteration only.** Elapsed time passes once per frame, not once per refinement step,
+        so a `selective` arm at three iterations would otherwise decay three frames' worth of state in one frame.
+
+        The returned attention is the last iteration's, which read the state before that iteration's update. That is
+        the paper's arrangement -- the matrix is a by-product of the update, and the decoder reads the final slots.
+        """
+        bias = _proximity(world, slots.position, self.sigma_m)
+        attention = None
+        for iteration in range(self.iterations):
+            update, attention = self.attend(state, encoded, bias, cand_valid, slots.alive)
+            state = self._recur(state, cat([update, stats], dim=-1), dt if iteration == 0 else zeros_like(dt))
+            state = state + self.attend.mlp(state)
+        return state, attention
 
     def _coasting(self, state: Tensor, stats: Tensor, slots: Slots, events: SlotEvents, refill: Tensor):
         """Which slots may report a person no candidate covers, and how loudly -- or neither, when the head is ablated.
@@ -614,18 +707,24 @@ class ObjectMemory(nn.Module):
             slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
             return MemoryOutput(candidate_logit, self._refined(encoded, recalled, cand_xy), slot_logit, slot_xy, coasting, slots, events)
 
-        queried = state + self.statistics(stats)
-        if self.match is None:                               # the slot reads only what the hand-coded association gave it
-            matched_encoding = encoded.gather(1, events.match_index.clamp(min=0)[..., None].expand(-1, -1, self.dim))
-            found = queried + matched_encoding * (events.matched | refill)[..., None]
+        if self.attend is None:
+            queried = state + self.statistics(stats)
+            if self.match is None:                           # the slot reads only what the hand-coded association gave it
+                matched_encoding = encoded.gather(1, events.match_index.clamp(min=0)[..., None].expand(-1, -1, self.dim))
+                found = queried + matched_encoding * (events.matched | refill)[..., None]
+            else:
+                found = self.match(queried, encoded, _proximity(slots.position, world, self.sigma_m), cand_valid)
+            mixed = found if self.exchange is None else self.exchange_norm(found + self.exchange(found, found, _proximity(slots.position, slots.position, self.sigma_m), slots.alive))
+            u = cat([mixed, stats], dim=-1)
+            state = self._recur(state, u, dt) * slots.alive[..., None]
+            attention = None
         else:
-            found = self.match(queried, encoded, _proximity(slots.position, world, self.sigma_m), cand_valid)
-        mixed = found if self.exchange is None else self.exchange_norm(found + self.exchange(found, found, _proximity(slots.position, slots.position, self.sigma_m), slots.alive))
-        u = cat([mixed, stats], dim=-1)
-        state = self._recur(state, u, dt) * slots.alive[..., None]
+            state, attention = self._slot_attention(state, encoded, world, cand_valid, slots, stats, dt)
+            state = state * slots.alive[..., None]
         slots = Slots(slots.alive, slots.value, slots.position, slots.velocity, slots.origin, slots.age_s, slots.since_match_s, slots.hit_rate, state)
 
-        recalled = self.recall(encoded, state, _proximity(world, slots.position, self.sigma_m), slots.alive)
+        recalled = self.attend.read(attention, state) if self.attend is not None \
+            else self.recall(encoded, state, _proximity(world, slots.position, self.sigma_m), slots.alive)
         candidate_logit = self._rescored(encoded, recalled, cand_score)
         slot_logit, coasting = self._coasting(state, stats, slots, events, refill)
         slot_xy = world_to_sensor(slots.position, pose) if self.room_frame else slots.position
