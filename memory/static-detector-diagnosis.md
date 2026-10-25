@@ -248,6 +248,15 @@ The centre vote is worth ~3 pp over a surface point (peaks at the vote against p
 **The gap to LFE-Peaks, decomposed on fixed weights:** LFE-Peaks 65.11% -> our network through LFE-Peaks' own decoder 71.26 (+6.15, the network and its training) -> peaks at the vote 74.10 (+2.84, centre regression) -> the vote grid 77.27 (+3.17, aggregation over beams) -> NMS 79.88 (+2.61).
 About half of the lead is the output head and half the network; the network's +6.15 is a lower bound, since our probability map was trained for votes, not for peaks.
 
+**What this bounds for `TODO.md` item 44** (read 2026-10-25, and it changed that row's premise). The row called the vote
+head "the least tested component"; it is not -- the *decoder* half is measured right here, on fixed weights, and the peak
+decoder loses **8.62 pp** overall and **50.3% against 81.6%** at 8-10 m at a tight operating point. Of that 8.62, the
+**-2.84 for centre regression is structurally unavailable** to a head that emits no vote. So the open question is not
+the parameterisation but the **objective**, which is exactly what the lower-bound caveat above says: nobody has trained
+this network *for* peaks. Item 44 is therefore split -- (a) the Gaussian heatmap objective with the vote head and
+`nms-mean` kept, which isolates the untested variable, then (b) the full LFE head as a confirmation. A fixed-weight
+decomposition can bound a decoder swap; it cannot bound a training objective, and the two should not be conflated.
+
 ### Where it wins and where it loses
 
 Recall at LFE's own false positives per frame at its published 0.3 threshold, no-temporal mean of three seeds (the default architecture agrees within ~2 pp in every row):
