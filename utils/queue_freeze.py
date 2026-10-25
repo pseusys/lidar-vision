@@ -12,9 +12,12 @@ seed 0 of the aggregator-free stage 2 exists (`a69_no_aggregator_s0`), so seeds 
 averaged over the val-chosen window, because **the averaged weights are what stage 3 loads** -- averaging gained 15 of
 18 A59 runs, +0.66 pp mean, and one arm +1.40 pp.
 
-**Cost.** Three stage-2 arms at ~20 min plus averaging, then three stage-3 arms at ~4 h each on the simplified recipe:
-about **13 h**, against the 20 h quoted when minGRU was pinned. Dropping the curriculum more than pays for the extra
-stage-2 runs.
+**Cost: about 24 h, not the 13 h first quoted here.** That estimate put a stage-3 arm at ~4 h; the simplified
+baseline actually ran **7.34 h** (52 epochs at 404 s train + 103 s eval). The 507 s figure in `CHANGELOG.md` is the
+per-epoch *total*, and reading it as train time is what produced the error. So: two new stage-2 arms at ~20 min plus
+averaging (~1 h), two candidate-cache rebuilds (~1.3 h, below), then **three stage-3 arms at ~7.3 h** = **~24 h**.
+Dropping the curriculum still pays for the extra stage-2 runs -- it is why an arm is 7.3 h and not 10 -- but this is a
+full day of GPU, so it is worth being sure the architecture is final before starting.
 
 **One cost that is easy to forget:** `candidate_cache_path` keys on the stage-2 checkpoint's directory, name and
 modification time, so seeds 1 and 2 each rebuild train, val and test candidate caches the first time their stage 3
