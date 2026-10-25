@@ -119,6 +119,15 @@ would *split* a candidate's attention, true only of the particular initialisatio
 holds for any weights because a softmax's denominator grows — and which is also the property that *discriminates* the
 mechanism, since a candidate-axis softmax would leave the first slot's weight untouched.
 
+**DON'T read "the forward is finite" as evidence that the backward is.**
+They are different properties, and for masked attention the backward is the fragile one.
+Item 42 shipped four degenerate-frame tests -- no live slot, no valid candidate, an empty memory, a twelve-frame run --
+and **all four asserted `isfinite` on the forward only**.
+The arm then died at epoch 20 with finite outputs, finite parameters and NaN gradients in every parameter, which is a
+failure mode none of those four tests could have seen.
+Where a `softmax` over a masked axis, a `clamp`ed denominator or an `amax` can be degenerate, assert on `.grad` after a
+`backward()`, not just on the output.
+
 **DON'T measure a gradient through a head that starts silent.**
 Two of this project's heads are deliberately inert at initialisation — the rescoring gate starts at zero, and item 46's
 refinement head has a zero-initialised last layer — so `0 * correction` gives every parameter behind them a gradient of

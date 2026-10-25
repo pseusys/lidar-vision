@@ -18,7 +18,7 @@ with what each one still needs:
     45  kernel_size / bottleneck_blocks / neighbours    stage-2 flags; `dim`/`heads` are stage-3 and wait on the cheap half
     43  Hungarian association                           moderate: replace the greedy match in `manage_slots`
     46  O3 position refinement                          moderate: a correction head and an L1 loss
-    42  Slot Attention's own update                     LANDED 2026-10-25 as `--iterations N`; arm queued below
+    42  Slot Attention's own update                     ABANDONED -- 19 epochs, then a NaN-gradient guard, cause unfound
     44  an LFE-style Gaussian heatmap head              substantial: changes the loss and the whole decode path
     21  training stage 2 and stage 3 together           a joint arm; the feedback path is closed (E12), this is not
     22  a learned grid over the room                    substantial, and a sanity check rather than a candidate
@@ -96,12 +96,14 @@ JOBS = [
     # against it rather than against `a66_mingru_s0`, whose stage 2 still had the aggregator.
     simplified("baseline"),
 
-    # Item 42. The conclusion of item 38's own logic: item 36 proved the slot abstraction load-bearing, item 38 preferred
-    # a citable cell to a re-implemented one, so the remaining question is whether Slot Attention's *own* update also
-    # works -- in which case the architecture becomes "Slot Attention over LiDAR candidates". Three iterations, the
-    # paper's own setting. `manage_slots` still runs, because it is what gives a slot its room-frame position, and the
-    # proximity bias stays because item 39 priced it: this arm varies the update rule and nothing else.
-    simplified("slot_attention", "--iterations", "3"),
+    # Item 42's arm is **deliberately absent**, and this comment is the reason so nobody re-adds it. It ran 19 epochs on
+    # 2026-10-25 and died at epoch 20 on the non-finite-gradient guard -- finite outputs, finite parameters, NaN
+    # gradients in all 30 -- and the cause was never found: a degenerate frame, the clamped normalisation and the
+    # compounded MLP residual were each tested against the failing run's own weights and each refuted. The owner's call
+    # was to abandon it rather than buy a debugging session plus a fresh 10.5 h arm, because at epoch 18 it was tracking
+    # *behind* its own control (+2.22 pp val gain against ~+2.70). A job here would make every relaunch retry it, and a
+    # guard failure means the run is wrong rather than interrupted, so retrying is exactly what must not happen. The
+    # code survives as `--iterations N`; `memory/rejected-ideas.md` carries the write-up.
 
     # Item 41. The only arm on the list that needed no new code: drop the 1 s warm-up and train on 10 s chunks alone.
     # minGRU spent 1.16 h of its 10.06 h in the 1 s stage, so if this ties, every later arm gets ~12% cheaper and the

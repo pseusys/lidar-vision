@@ -38,6 +38,123 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 44(a)'s target and loss land, because its tests were blocking the gate (2026-10-25)
+
+*keywords: item 44a, beam_heatmap, soft_labels, compute_loss, Gaussian beam target, metric sigma, pos_weight*
+
+`tests/test_beam_heatmap.py` was authored while the item 42 arm held the GPU and deliberately left unrun. Once item 42
+closed, its import of a function that did not exist became a **collection error** -- which fails the `gate` job in both
+queue modules and would have blocked the freeze launch. The code is sixteen lines and the owner had already chosen
+arm (a), so it landed rather than being deleted.
+
+**`beam_heatmap`** gives each beam `exp(-d^2 / 2 sigma^2)` in **metres**, summed over people and clipped to 1 as LFE's
+own target does. Two choices carry the experiment. Its **support is identical to `make_targets`' positives**, because
+it reuses the same geometry and the same `vote_collect_radius` -- only the values change, hard 1 to smooth falloff,
+which is what makes the arm vary one thing. And the width is **metric, not LFE's fixed `sigma_beams=2.0`**: a person
+subtends 42 beams at 2 m and 9 at 9 m, so a fixed beam width is scale-wrong nearly everywhere, the same objection
+Section 5.2 records against a fixed `k=7` kernel. LFE's beam-unit form belongs with the published head in arm (b).
+
+**`compute_loss(..., soft_labels=)`** reads it for the classification term only. Three things deliberately do not move,
+so one variable changes: the **vote** term still masks on `labels > 0`; **`pos_weight` is still counted from the hard
+labels**, since it is a count of positive beams and drawing it from a soft target would shift the class balance too;
+and with `soft_labels=None` the function is bit-identical to what produced every stage-2 number on record, pinned by a
+test.
+
+**A false assertion of my own, caught by the suite and worth recording.** The first version of one test claimed a
+perfect prediction of the soft target minimises the soft objective. It does not: **weighted** BCE is minimised at
+`w*t / (w*t + 1 - t)`, so at this project's real ~50:1 `pos_weight` a hard 1 inside the footprint is *closer* to the
+optimum than the Gaussian. The claim is now made where it holds -- balanced classes, `pos_weight` 1 -- and the
+imbalance's shift is left documented as a real property of the objective the arm will train under. It also says
+something about the arm: a soft target fights the class weighting, which is a reason it might tie.
+
+19 tests, **1060 pass**, `ruff` clean. **No arm was queued and nothing was trained** -- item 44 stays an open row.
+
+## The freeze is prepared, and two architecture questions are left on the table (2026-10-25)
+
+*keywords: item 47, queue_freeze.py, three-seed freeze, item 48, rescore calibration, item 49, stage-3 dim heads, sweep closed*
+
+**`utils/queue_freeze.py` is item 47, written and deliberately not launched.** It reuses the existing aggregator-free
+stage 2 as seed 0 in place, trains seeds 1 and 2, averages each -- the averaged weights are what stage 3 loads -- then
+runs the three stage-3 arms of the adopted recipe. About **13 h**. `--list` prints the plan without running anything,
+and it resolves correctly today: `stage2_s0` and its average `done`, everything else `to run`.
+
+It contains **no latency job**, deliberately. Item 29's protocol is a *matched, interleaved* sweep on an idle host, and
+a sequential queue runs every job in its own session -- which is precisely how item 16's wrong `gru_cpu` row was
+produced (23.87 ms against a true 20.57, because that job's `stage2` control phase read 10.49 ms instead of ~8.6 under
+session load). The same goes for `empty_scene.py`'s phantom column. Both are hand-run after the arms exist.
+
+**`memory/commands.md` now carries the adopted recipe explicitly**, because it is five flags on stage 3 plus one on
+stage 2 and none of them are defaults -- with the reason they are not: `network_shape` falls back to a constructor
+default for any flag a checkpoint predates, so defaulting `aggregator=False` would make every older stage-2 checkpoint
+rebuild without it and refuse its own weights.
+
+**Two questions are left on the table rather than closed silently**, both proposed and awaiting the owner:
+
+**Item 48, calibrating the rescore head -- this project's own conclusion, never acted on.** A51 phase 1b ends with the
+sentence "the fix is calibration of the rescore head, not slots, association or architecture", and phase 0c still lists
+calibration as unmeasured. The measurement behind it is strong: the head does not selectively suppress true positives,
+it **shifts the whole score distribution down** (median -3.292 logits on the people it keeps against -1.497 on those it
+loses), which improves rank-based AP while silently decalibrating a fixed threshold. At **0.22 stage 3 strictly
+dominates stage 2** -- 135,520 people against 134,196 at 1.767 false positives per frame against 1.910, better on both
+axes at once. So the capability is already there and only the operating point hides it. What was done about it was a
+*reporting* change; nothing in the model was ever built. And it is deployment-relevant in a way AP is not, because
+`deploy/conf.env` runs a fixed threshold and the ROS node cannot choose an operating point per recording.
+
+**Item 49, stage 3's `dim` and `heads` -- the last shape knobs never varied.** Item 45 swept stage 2's four and said so
+in as many words: "`dim`/`heads` are stage-3 and wait on the cheap half". The cheap half is done and they are still
+unrun, so the adopted 128/4 is a choice nobody has priced. A tie is the expectation -- A59's W arm priced stage-2 widths
+at 1.4 pp with no speed gain, and capacity was flat -- but `dim` sets the width of every slot's state, the component
+item 36 proved load-bearing, and it is also the one knob that could cut CPU cost. **A tie at `--dim 64` would itself be
+a win**, on the axis that decides deployment.
+
+## Item 42 abandoned on a numerical guard, and the architecture sweep ends (2026-10-25)
+
+*keywords: item 42, Slot Attention, NaN gradients, training guard, step3a_nan.pth, not pursued, sweep closed, eleven questions*
+
+**The arm ran 19 epochs and died at epoch 20, iteration 79, and the owner's call is to leave it there.** The guard's
+diagnosis was unusual enough to be worth recording: **outputs finite, parameters finite, gradients NaN in every one of
+the 30 parameters** -- including `rescore_gate` and `rescore.2.bias`, the last in the graph -- with finite losses
+(2.119, 1.346, 0.789, 1.235) on each of 11 consecutive attempts. Largest weights were unremarkable
+(`attend.mlp.0.weight` 1.125, `norm_slots` 0.996, `norm_items` 0.964), so this was not divergence.
+
+| epoch | val AP | candidates | gain |
+| ---: | ---: | ---: | ---: |
+| 17 | 78.67% | 77.07% | +1.60 |
+| 18 | **79.29%** | 77.07% | **+2.22** |
+| 19 | 78.60% | 77.07% | +1.53 |
+| 20 | -- | -- | **guard: NaN gradients** |
+
+**Three hypotheses were tested against the failing run's own weights and all three are refuted.** Recording them
+matters more than recording the failure, because each one is a plausible story someone will reach for again:
+
+| hypothesis | how it was tested | verdict |
+| --- | --- | --- |
+| a degenerate frame -- no live slot, no valid candidate, zero state, an 80 m proximity bias | 8 probes under the saved weights | **refuted**, forward *and* backward finite in all |
+| the `clamp(min=1e-6)` normalisation amplifying gradients at a near-zero denominator | measured `\|grad\|` at 256 / 3 / 1 / 0 live slots | **refuted** -- 2.1e1 -> 1.7e0 -> 8.4e-1 -> **exactly 0**; no amplification |
+| the MLP residual compounding ~1200x per chunk, since slots persist where the paper re-initialises them | a full 399-frame chunk replayed on the saved weights | **refuted** -- state bounded at 70-80, loss finite, **0 of 30** gradients non-finite |
+
+The third deserves a note: the persistence mismatch against published Slot Attention is real -- 3 iterations per input
+there, 3 x 399 within one truncated-backprop chunk here -- but **minGRU's gate is a convex combination**, which is what
+keeps the state bounded over 1,200 sequential applications. So the obvious structural objection is not the failure.
+
+**Why it was not pursued, which is a judgement and not a measurement.** Reproducing the exact batch is possible --
+`step3a_nan.pith` stores `seq`, `frame` and `reset` beside the weights -- but it needs the candidate cache, the
+`StreamSampler`'s position and the real focal loss, and then a fresh 10.5 h arm on an unconfirmed fix. Against that:
+at epoch 18 this arm's val gain was **+2.22 pp** where the simplified baseline was at roughly **+2.70 pp** at a
+comparable point and finished at +5.09, so it was tracking slightly *behind* its own control. There was no sign of the
+sudden substantial gain the owner's run-everything-once rule exists to catch, and ten arms into the sweep nine had
+already tied. **The code stays** (`--iterations N`, `_SlotAttention`, 24 tests) so the arm is one flag away if a later
+dataset gives a reason; the queue entry is removed so no relaunch retries a known-broken arm.
+
+**One honest limitation to carry into the write-up:** item 42 is the single idea on the list that was *implemented and
+never scored*. Every other arm has a number. This one has 19 epochs of validation and a crash, and should be described
+that way rather than as a tie.
+
+**The transferable lesson is in the tests, not the model.** Four of the 24 tests covered exactly these degenerate
+frames and every one asserted `isfinite` on the **forward**. None checked a gradient. For masked attention the backward
+is the fragile direction, and "the forward is finite" is not evidence about it -- now a rule in
+`memory/dos-and-donts.md`.
+
 ## Item 42: Slot Attention's own update, as published (2026-10-25)
 
 *keywords: item 42, Slot Attention, Locatello, --iterations, softmax over slots, null slot, competitive attention, iterated refinement*

@@ -430,6 +430,42 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
     return labels, _in_vote_frame(vote_targets, angles, frame)
 
 
+def beam_heatmap(scan: np.ndarray, angles: np.ndarray, gt_per_class: dict,
+                 sigma_m: float = 0.3, vote_collect_radius: float = 0.6) -> np.ndarray:
+    """A soft Gaussian per-beam target, `exp(-d^2 / 2 sigma^2)` in **metres** (`TODO.md` item 44(a)).
+
+    The classification half of an LFE-style heatmap objective, for use with the vote head and `nms-mean` **kept**. Item
+    44 was split because `memory/static-detector-diagnosis.md` already measured the *decoder*: our own network read
+    through LFE-Peaks' own decoder scores 71.26% against `nms-mean`'s 79.88%, and 50.3% against 81.6% at 8-10 m, and
+    2.84 pp of that gap is centre regression a voteless head cannot recover. What that page cannot bound is its own
+    caveat -- "the network's +6.15 is a lower bound, since our probability map was trained for votes, not for peaks" --
+    so the objective is the open question and this is the target that tests it.
+
+    **The support is identical to `make_targets`' positives**, because it reuses the same geometry and the same
+    `vote_collect_radius`: only the values change, from a hard 1 to a smooth falloff. That is what makes the arm vary
+    one thing. **And the width is metric, not LFE's fixed `sigma_beams=2.0`**: a person subtends 42 beams at 2 m and 9
+    at 9 m, so a fixed beam width is scale-wrong nearly everywhere -- the objection Section 5.2 records against a fixed
+    `k=7` kernel, and the reason `--label-radius` is already in metres. LFE's beam-unit form belongs with the published
+    head in arm (b), where faithfulness is the point.
+
+    Overlapping people sum and then clip to 1, as LFE's own `make_heatmap_target` does, so a crowd saturates cleanly
+    instead of exceeding the range a sigmoid can reach.
+    """
+    scan = np.asarray(scan, dtype=np.float64)
+    angles = np.asarray(angles, dtype=np.float64)
+    heat = np.zeros(len(scan), dtype=np.float32)
+    beam_x = scan * -np.sin(angles)
+    beam_y = scan * np.cos(angles)
+
+    for anns in gt_per_class.values():
+        for r_gt, phi_gt in anns:
+            dist = np.hypot(r_gt * -np.sin(phi_gt) - beam_x, r_gt * np.cos(phi_gt) - beam_y)
+            inside = dist < vote_collect_radius
+            heat[inside] += np.exp(-0.5 * (dist[inside] / sigma_m) ** 2).astype(np.float32)
+
+    return np.clip(heat, 0.0, 1.0)
+
+
 # ---------------------------------------------------------------------------
 # Heatmap target generation
 # ---------------------------------------------------------------------------
@@ -499,7 +535,7 @@ def compute_heatmap_loss(heatmap_pred: torch.Tensor,
 
 def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
                  labels: torch.Tensor, vote_targets: torch.Tensor,
-                 vote_weight: float = 0.02):
+                 vote_weight: float = 0.02, soft_labels: torch.Tensor = None):
     """
     logits       : (N, C)  raw class logits; C=4 for multi-class, C=1 for binary
     votes        : (N, 2)  predicted vote offsets
@@ -508,13 +544,23 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
 
     Binary mode (C=1, e.g. Li2Former): any non-background beam is treated as
     positive; loss is binary cross-entropy with class-balanced pos_weight.
+
+    `soft_labels` (N,) in [0, 1] replaces the hard 0/1 classification target with a soft one -- `beam_heatmap`'s
+    Gaussian, for `TODO.md` item 44(a). Three things deliberately do **not** change with it, so the arm varies one
+    thing: the **vote** term still masks on `labels > 0`, so localisation is untouched; `pos_weight` is still counted
+    from the hard labels, because it is a count of positive beams and taking it from a soft target would move the class
+    balance as well as the target; and with `soft_labels=None` this function is bit-identical to what produced every
+    stage-2 number on record.
     """
     n_pos = int((labels > 0).sum())
     n_neg = int((labels == 0).sum())
+    if soft_labels is not None and logits.shape[-1] != 1:
+        raise ValueError("soft_labels is a binary target, so it needs C=1 logits, not "
+                         f"{logits.shape[-1]} classes (TODO.md item 44)")
 
     if logits.shape[-1] == 1:
-        # Binary classification: background (0) vs. any person (1)
-        binary_labels = (labels > 0).float()
+        # Binary classification: background (0) vs. any person (1), or a soft target over the same beams
+        binary_labels = (labels > 0).float() if soft_labels is None else soft_labels.float()
         pos_weight = (
             torch.tensor([float(n_neg) / float(n_pos)], device=logits.device)
             if n_pos > 0 and n_neg > 0 else None

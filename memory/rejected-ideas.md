@@ -24,6 +24,37 @@ is not the limit -- it reaches essentially everybody, and the curve is flat acro
 frame, or a frame rate low enough that a person moves further than the gate between scans (DROW at 12.5 Hz is 3.2x
 FROG's period, so A63 is where to look).
 
+## Slot Attention's own update, abandoned on a numerical guard (TODO.md item 42)
+
+*keywords: item 42, Slot Attention, Locatello, --iterations, NaN gradients, training guard, abandoned unmeasured*
+
+**Idea.** `docs/RESEARCH.md` credited Slot Attention for the *abstraction* and not the mechanism. Item 36 proved the
+abstraction load-bearing and item 38 preferred a citable cell to a re-implemented one, so the published *update* --
+iterated competitive attention, softmax over slots, with a GRU state step -- was the conclusion of that logic.
+
+**What happened** (2026-10-25). Implemented as `--iterations N` with 24 tests and a clean two-recording smoke. The arm
+trained **19 epochs** and hit the non-finite guard at epoch 20, iteration 79: **finite outputs, finite parameters, NaN
+gradients in all 30 parameters**, 11 consecutive times, losses finite throughout. Not divergence.
+
+**Three refuted hypotheses, tested on the failing run's own weights** -- worth keeping so nobody re-derives them: a
+degenerate frame (8 probes: no live slot, no valid candidate, zero state, an 80 m bias) has a finite backward; the
+`clamp(min=1e-6)` normalisation does **not** amplify gradients (2.1e1 -> 1.7e0 -> 8.4e-1 -> exactly 0 as live slots go
+256 -> 3 -> 1 -> 0); and the MLP residual compounded over a full 399-frame chunk leaves the state bounded at 70-80 with
+**0 of 30** gradients non-finite, because minGRU's gate is a convex combination.
+
+**Why rejected: a judgement, not a measurement, and it should be read as such.** The cause was never identified. At
+epoch 18 the arm's val gain was +2.22 pp against the simplified baseline's ~+2.70 pp at a comparable point, so it was
+tracking behind its control with no hint of a hidden gem, and the alternative was a debugging session plus a fresh
+10.5 h arm. **It is the one idea on the architecture list that was implemented and never scored.**
+
+**Where it lives.** `--iterations N` on `step3a`; `_SlotAttention` in
+`library/takheliped/detectors/takheliped.py`; `tests/test_slot_attention.py`. Off by default and bit-identical when
+off. The failing state is kept at `checkpoints_three_horizon/a70_slot_attention_s0/step3a_nan.pth`.
+
+**What would reopen it.** A dataset where the hand-coded association actually fails -- S4 put its headroom at ~0.8% of
+people on FROG, which is part of why the arm was not worth a second night. DROW at 12.5 Hz, where a person moves 3.2x
+further between scans, is the place to look.
+
 ## Position refinement: slots regressing a correction to the candidate's position (TODO.md item 46, A51's O3)
 
 *keywords: item 46, O3, position refinement, --refine, candidate_xy, matched_person_xy, recall at matched FP, coverage*
