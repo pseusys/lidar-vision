@@ -53,7 +53,7 @@ from takheliped.detectors.takheliped import (
 from takheliped.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
 from takheliped.utils.drow_utils import (_prec_rec_2d, _win2global, frame_period_s, project_cartesian_from_polar,
                                          swap_vote_frame, votes_to_detections)
-from train import _safe_auc, compute_loss, detect_device, make_targets
+from train import _safe_auc, beam_heatmap, compute_loss, detect_device, make_targets
 
 VOTE_DECODING = dict(blur_sigma=2.0, blur_win=11, bin_size=0.1, vote_collect_radius=0.5, min_thresh=1e-3)
 MATCH_RADIUS_M = 0.5
@@ -725,6 +725,10 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
              "global_state": parameters["global_state"].default if args.get("global_state") is None else literal_eval(args["global_state"]),
              "refine": parameters["refine"].default if args.get("refine") is None else literal_eval(args["refine"]),
              "iterations": parameters["iterations"].default if args.get("iterations") is None else int(args["iterations"]),
+             # Item 49. A shape key, not an option: a resumed `--dim 64` arm that rebuilt at 128 would refuse its
+             # own weights, and a checkpoint predating the flags has to keep loading at the adopted 128/4.
+             "dim": parameters["dim"].default if args.get("dim") is None else int(args["dim"]),
+             "heads": parameters["heads"].default if args.get("heads") is None else int(args["heads"]),
              "fixed_decay_s": parameters["fixed_decay_s"].default if args.get("fixed_decay_s") is None else float(args["fixed_decay_s"]),
              "learn_value": parameters["learn_value"].default if args.get("learn_value") is None else literal_eval(args["learn_value"]),
              "exchange": parameters["exchange"].default if args.get("exchange") is None else literal_eval(args["exchange"]),
@@ -1098,7 +1102,7 @@ def train_memory(args) -> None:
     model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value, association=args.association), feature_dim=splits["train"].data.features.shape[-1],
                          rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame, coast=args.coast,
                          recurrence=args.recurrence, global_state=args.global_state, refine=args.refine,
-                         iterations=args.iterations,
+                         iterations=args.iterations, dim=args.dim, heads=args.heads,
                          fixed_decay_s=args.fixed_decay_s, learn_value=args.learn_value, exchange=args.exchange,
                          learned_match=args.learned_match, recurrent=args.recurrent, visibility=args.visibility).to(device)
     print(f"stage 3 parameters: {sum(p.numel() for p in model.parameters()):,}"
@@ -1465,7 +1469,14 @@ def train_calibration(args) -> None:
                                     frame=net.vote_frame) for s, g in zip(scans, people, strict=True)]
             labels = torch.from_numpy(np.stack([t[0] for t in targets])).to(device)
             vote_targets = torch.from_numpy(np.stack([t[1] for t in targets])).to(device)
-            loss, _, _ = compute_loss(logit.reshape(-1, 1), votes.reshape(-1, 2), labels.reshape(-1), vote_targets.reshape(-1, 2))
+            # `TODO.md` item 44(a). The same geometry and the same radius as `make_targets`, so the positive beams are
+            # identical and only their *values* change -- hard 1 to a metric Gaussian. The vote target is untouched.
+            soft = None if not args.label_sigma_m else torch.from_numpy(np.stack([
+                beam_heatmap(anchor_ranges(s, net.max_range_m), angles, {3: [tuple(p) for p in g]},
+                             sigma_m=args.label_sigma_m, vote_collect_radius=args.label_radius)
+                for s, g in zip(scans, people, strict=True)])).to(device)
+            loss, _, _ = compute_loss(logit.reshape(-1, 1), votes.reshape(-1, 2), labels.reshape(-1), vote_targets.reshape(-1, 2),
+                                      soft_labels=None if soft is None else soft.reshape(-1))
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), GRAD_CLIP)
@@ -1874,6 +1885,16 @@ def build_parser() -> argparse.ArgumentParser:
                                 "initialised -- so an untrained arm reports exactly the candidate's own position")
         step1.add_argument("--refine-weight", type=float, default=1.0,
                            help="weight on item 46's L1 refinement loss, relative to the candidate focal loss")
+        step1.add_argument("--dim", type=int, default=128,
+                           help="width of a slot's state vector (TODO.md item 49). Never varied: item 45 swept stage "
+                                "2's four shape knobs and deferred this one and --heads to the stage-3 half, which "
+                                "then never ran, so the adopted 128 is a choice nobody has priced. It is also the one "
+                                "knob that could cut CPU cost, and CPU is the axis that decides deployment -- so a tie "
+                                "at 64 is itself a win")
+        step1.add_argument("--heads", type=int, default=4,
+                           help="attention heads in the recall (and in the match and exchange where those are on) -- "
+                                "TODO.md item 49, deferred by item 45 and never varied. Same parameter count at any "
+                                "head split, so expect nothing; it is here because 'never varied' is not evidence")
         step1.add_argument("--iterations", type=int, default=0,
                            help="run Slot Attention's own update (Locatello et al., NeurIPS 2020) for this many "
                                 "iterations per frame, in place of the hand-coded state update and the separate recall "
@@ -2005,6 +2026,16 @@ def build_parser() -> argparse.ArgumentParser:
                        "run before it did (TODO.md A59)")
     step2.add_argument("--label-radius", type=float, default=LABEL_RADIUS_M, help="distance from a person's centre within which a beam is "
                        "a positive and votes for them; DR-SPAAM uses 0.35 m, FROG's circles are 0.4 m")
+    step2.add_argument("--label-sigma-m", type=float, default=0.0,
+                       help="replace the hard per-beam label with a Gaussian of this width in METRES, keeping the vote "
+                            "head and nms-mean (TODO.md item 44(a)); 0, the default, keeps the hard label and every "
+                            "stage-2 number on record. The decoder half of item 44 is already measured on fixed "
+                            "weights and the peak decoder loses 8.62 pp, 2.84 of which a voteless head cannot recover "
+                            "-- what is untested is the OBJECTIVE, which is this flag. Support is identical to the "
+                            "hard label's, since it reuses --label-radius, so the arm varies one thing. Metric rather "
+                            "than LFE's fixed 2 beams because a person subtends 42 beams at 2 m and 9 at 9 m. Note it "
+                            "fights the ~50:1 pos_weight: weighted BCE bottoms out at w*t/(w*t+1-t), not at t"
+                       )
     step2.add_argument("--mirror", action=argparse.BooleanOptionalAction, default=True, help="reverse half the training clips beam for beam, "
                        "with their people and poses mirrored to match: exact on any uniform beam grid; on by default since 2026-10-06 (TODO.md A59)")
     step2.add_argument("--batch", type=int, default=32)

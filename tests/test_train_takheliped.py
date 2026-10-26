@@ -1607,7 +1607,7 @@ class TestEveryStage3FlagReachesTheModel:
     """
 
     #: Constructor parameters that deliberately do not come from a same-named CLI flag.
-    NOT_FLAGS = {"rules", "dim", "heads", "sigma_m", "decay_init_s", "feature_dim", "rescore"}
+    NOT_FLAGS = {"rules", "sigma_m", "decay_init_s", "feature_dim", "rescore"}
 
     def test_every_constructor_switch_with_a_matching_flag_is_passed_at_the_construction_site(self):
         import inspect
@@ -1699,3 +1699,63 @@ class TestTheSensorFrameTargets:
     def test_an_unknown_target_frame_is_refused(self):
         with pytest.raises(ValueError, match="frame"):
             make_targets(np.full(8, 4.0), self.ANGLES[:8], {3: []}, frame="world")
+
+
+class TestStage3SShapeFlags:
+    """`TODO.md` item 49: `--dim` and `--heads`, the last shape knobs in the project never varied.
+
+    Item 45 swept stage 2's four and deferred these two in as many words -- "`dim`/`heads` are stage-3 and wait on the
+    cheap half". The cheap half is done, so the adopted 128/4 is a choice nobody has priced, and `dim` is the one knob
+    that could cut CPU cost: it sets the width of every slot's state, the component item 36 proved load-bearing.
+    """
+
+    def test_the_flags_exist_and_default_to_the_adopted_shape(self):
+        flags = {a.dest: a for a in build_parser()._subparsers._group_actions[0].choices["step3a"]._actions}
+
+        assert flags["dim"].default == 128
+        assert flags["heads"].default == 4
+
+    def test_a_checkpoint_round_trips_its_own_width(self):
+        """The trap this guards: without a shape key a resumed `--dim 64` arm rebuilds at 128 and refuses its own weights."""
+        narrow = ObjectMemory(SlotRules(capacity=8), dim=64, heads=8, feature_dim=3)
+        checkpoint = {"model": narrow.state_dict(), "args": {"dim": "64", "heads": "8", "slots": "8"}}
+
+        rebuilt = object_memory(checkpoint, feature_dim=3)
+
+        assert rebuilt.dim == 64
+        assert rebuilt.recall.heads == 8
+
+    def test_a_checkpoint_predating_the_flags_still_rebuilds_at_the_adopted_shape(self):
+        """Every stage-3 checkpoint on disk was written before these flags existed and must keep loading."""
+        wide = ObjectMemory(SlotRules(capacity=8), dim=128, heads=4, feature_dim=3)
+        checkpoint = {"model": wide.state_dict(), "args": {"slots": "8"}}
+
+        rebuilt = object_memory(checkpoint, feature_dim=3)
+
+        assert rebuilt.dim == 128
+        assert rebuilt.recall.heads == 4
+
+
+class TestTheSoftBeamTargetReachesStage2STraining:
+    """`TODO.md` item 44(a): the Gaussian beam target is wired into `step2`, or the flag is decoration.
+
+    This is the bug class that cost item 36 a whole run -- `--global-state` was parsed, stored and restored but never
+    passed, so the arm trained the control and reported it as the arm. `--label-sigma-m` is the same shape of risk one
+    stage earlier, and the loss is the only place it can act.
+    """
+
+    def test_the_flag_exists_and_is_off_by_default(self):
+        flags = {a.dest: a for a in build_parser()._subparsers._group_actions[0].choices["step2"]._actions}
+
+        assert flags["label_sigma_m"].default == 0.0, "every stage-2 number on record was trained with hard labels"
+
+    def test_the_training_loop_builds_the_target_and_hands_it_to_the_loss(self):
+        import inspect
+
+        from train_takheliped import train_calibration
+
+        source = inspect.getsource(train_calibration)
+
+        assert "beam_heatmap(" in source, "the flag cannot act without building the target"
+        assert "soft_labels=" in source, "the target cannot act without reaching compute_loss"
+        assert "args.label_sigma_m" in source, "the target must be built from the flag, not a constant"

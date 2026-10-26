@@ -107,6 +107,49 @@ at 1.4 pp with no speed gain, and capacity was flat -- but `dim` sets the width 
 item 36 proved load-bearing, and it is also the one knob that could cut CPU cost. **A tie at `--dim 64` would itself be
 a win**, on the axis that decides deployment.
 
+## Items 49 and 44(a) wired, and a pre-freeze chain launched (2026-10-26)
+
+*keywords: item 49, --dim, --heads, item 44a, --label-sigma-m, queue_prefreeze.py, pre-freeze, invalidation, freeze 24 h*
+
+**The organising rule, and it is the lesson of item 40.** Anything that could change the architecture the freeze
+measures has to settle **before** the freeze, because adopting it afterwards wastes the whole ~24 h. That mistake was
+already paid once this week: item 40 removed the whole-scan aggregator *after* `a66_mingru_s0` existed, which
+invalidated it as a control and forced an entire new baseline run. Three arms answer "yes, this could change the
+architecture", so `utils/queue_prefreeze.py` runs them first.
+
+**Item 44(a) was forgotten in the plan and belongs here most of all** -- it changes stage 2's *weights*, so adopting it
+after the freeze would invalidate all three stage-2 seeds and every stage-3 arm built on them. It is also the cheapest
+thing on the list: because arm (a) keeps the vote head and `nms-mean`, stage 2 alone is directly comparable through
+`stage2_probe.py`, so **~1 h** settles it and no stage-3 arm is needed unless it wins. Its control is
+`a69_no_aggregator_s0` and not A59's three seeds, because the adopted stage 2 has no aggregator and probing against the
+aggregator-ful controls would conflate two changes.
+
+**Item 49 needed plumbing before it could run at all.** `--dim` and `--heads` were `ObjectMemory` constructor arguments
+with no CLI, and the fix is the same shape `--iterations` got -- argparse, the construction site, and a
+`network_shape`/`object_memory` **shape key**, without which a resumed `--dim 64` arm rebuilds at 128 and refuses its
+own weights. The RED step was free: `TestEveryStage3FlagReachesTheModel` lists constructor parameters that deliberately
+have no flag, so **deleting `dim` and `heads` from that exclusion list** made the suite demand the wiring -- the same
+test that caught `--global-state` being parsed and never passed.
+
+**A `needs` edge that is about ordering, not data.** `run_queue.ordered()` is layered and keeps declaration order
+*within* a layer, so the two dependency-free stage-3 arms outranked the probe -- putting 14 h of training ahead of a
+10-minute verdict. Making them `needs=("soft_label_probe",)` is the only lever that fixes it. The cost is that a failed
+probe leaves them BLOCKED, which is the right trade: a probe that cannot run is something to look at before spending a
+night of GPU, not after.
+
+**One risk accepted knowingly.** The two stage-3 arms run on the *current* stage 2, so a win for 44(a) would mean
+re-running them -- item 40's mistake in miniature. It is accepted because the soft target has a reason to lose that was
+found while writing it: it **fights the ~50:1 `pos_weight`**, since weighted BCE is minimised at `w*t / (w*t + 1 - t)`
+rather than at `t`, so a hard 1 inside the footprint sits closer to the weighted optimum than the Gaussian. If it wins
+anyway, that is a bigger rethink than a re-run.
+
+**And the freeze's own estimate was corrected from 13 h to ~24 h**, because it had priced a stage-3 arm at ~4 h where
+the simplified baseline actually ran **7.34 h** (52 epochs at 404 s train + 103 s eval). The 507 s in the previous
+entry is the per-epoch *total*; reading it as train time is what produced the error.
+
+Chain: `soft_label` -> average -> probe -> `dim64` -> `heads8`, about **15 h**. 5 new tests, **1065 pass**, `ruff`
+clean.
+
 ## Item 42 abandoned on a numerical guard, and the architecture sweep ends (2026-10-25)
 
 *keywords: item 42, Slot Attention, NaN gradients, training guard, step3a_nan.pth, not pursued, sweep closed, eleven questions*
