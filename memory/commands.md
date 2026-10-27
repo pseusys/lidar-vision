@@ -126,6 +126,32 @@ cd utils
 back to a constructor default for any flag a checkpoint predates, so defaulting `aggregator=False` would make every
 older stage-2 checkpoint rebuild without it and refuse its own weights.
 
+**The matched CPU latency sweep** (`TODO.md` item 29's protocol), which has now been needed four times and got
+done wrongly once:
+
+```powershell
+cd utils
+$s2 = "../checkpoints_three_horizon/a69_no_aggregator_s0/step2_calibration.averaged.pth"
+foreach ($r in 1..3) { foreach ($a in @("dim128:a70_baseline_s0", "dim64:a71_dim64_s0")) {
+  $n, $d = $a -split ":"
+  .\..\.venv\Scripts\python.exe tracking_baselines.py latency --device cpu --threads 4 `
+    --stage2 $s2 --memory "../checkpoints_three_horizon/$d/step3a_object_memory.best.pth" `
+    --out "../results/lat_${n}_r${r}"
+} }
+```
+
+**Four things make it valid, and dropping any one invalidates it.** The arms must be **interleaved within one
+session**, because rows from different sessions drift ~3% and that is how item 16's wrong `gru_cpu` row (23.87 ms
+against a true 20.57) was produced. The host must be **idle** -- do not run the sweep while anything trains, and do
+not run anything else while the sweep runs. Each run needs **its own `--out`**, because the tool names its file
+`latency_cpu_t4.json` from the device and thread count only and silently overwrites otherwise. And the **`stage2`
+phase is read first**: it is byte-identical work across arms, so its spread *is* the session's noise floor, and it also
+catches ordering bias -- in the 2026-10-27 sweep it showed `dim 64` running 0.31 ms slower on identical work purely
+because it went second.
+
+**Never** use `step3a_results.json`'s `memory_ms_per_frame` instead. It is timed on whatever device trained the arm,
+which is the GPU here.
+
 **`queue_freeze.py` is the three-seed freeze** (`TODO.md` item 47), prepared and **not launched** -- it trains stage-2
 seeds 1 and 2 (seed 0 already exists as `a69_no_aggregator_s0`), averages each, then runs the three stage-3 arms, about
 13 h. `--list` shows what it would do without running anything. It deliberately contains **no latency job**: item 29's

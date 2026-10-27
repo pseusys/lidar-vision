@@ -107,6 +107,91 @@ at 1.4 pp with no speed gain, and capacity was flat -- but `dim` sets the width 
 item 36 proved load-bearing, and it is also the one knob that could cut CPU cost. **A tie at `--dim 64` would itself be
 a win**, on the axis that decides deployment.
 
+## The pre-freeze results: dim 64 wins on CPU, soft labels are suggestive, 44(b) is dropped (2026-10-27)
+
+*keywords: item 49, dim 64, CPU latency, matched interleaved sweep, item 44a, soft label probe, item 44b dropped, heads8, noise floor*
+
+### Item 49, `--dim 64`: ties on accuracy and cuts the memory phase by 28%
+
+**Accuracy, test stride 5, memory column** -- a tie by any reading, deep inside E13's 1.32 pp bar:
+
+| arm | memory AP | candidates | gain | FP/frame | recall at matched FP |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| control `a66_mingru_s0` | 86.40% | 82.22% | +4.18 | 0.911 | 95.84% |
+| simplified baseline, `dim 128` | 86.20% | 82.24% | +3.96 | 1.117 | 96.43% |
+| **`dim64`** | **86.12%** | 82.24% | +3.88 | 0.963 | **96.5%** |
+
+**CPU latency, the matched interleaved sweep** (item 29's protocol: `--device cpu --threads 4`, 2,000 consecutive
+scans, batch 1, three rounds alternating the two arms **in one session on an idle host**, each run to its own output
+directory because the tool's filename ignores the checkpoint and would otherwise overwrite):
+
+| phase | `dim 128` (3 runs) | `dim 64` (3 runs) | delta |
+| --- | ---: | ---: | ---: |
+| **`stage2`** -- the noise floor | 9.17 / 8.96 / 9.00 | 9.49 / 9.24 / 9.32 | +0.31 (see below) |
+| `decode` | 1.65 / 1.67 / 1.67 | 1.70 / 1.65 / 1.68 | ~0 |
+| **`memory`** -- what `dim` touches | 9.32 / 9.31 / 9.26 | **6.69 / 6.68 / 6.73** | **-2.60 ms, -28%** |
+| **total** | 20.18 / 19.98 / 20.01 | **17.88 / 17.58 / 17.74** | **-2.33 ms, -11.6%** |
+| total p99 | 22.22 / 22.74 / 22.73 | **20.67 / 20.18 / 20.49** | **-2.25 ms** |
+
+**Read the `stage2` phase first, as the rule says, and it does two jobs here.** It is byte-identical work in both
+arms, so its spread *is* this session's noise floor: **0.53 ms** across all six runs. Against that floor a 2.60 ms
+drop in the memory phase is **5x the noise**, and the within-arm spread of the memory phase itself is only 0.05-0.06 ms
+-- so the effect is roughly 50 sigma of its own measurement. There is no ambiguity to resolve.
+
+**And the floor reveals a systematic bias that runs *against* `dim 64`.** Its `stage2` phase is consistently 0.31 ms
+slower (9.35 mean against 9.04) although the work is identical, because it always ran second in each round. So the true
+total saving is slightly *larger* than the 2.33 ms measured. Noting it because the same ordering artefact, left
+unexamined, is what makes a latency table untrustworthy.
+
+**What this buys in real-time terms**, against FROG's 25 ms frame period: median headroom goes from 4.94 ms to
+**7.27 ms**, and the number that actually matters for a real-time loop -- **p99** -- goes from 2.3-2.8 ms of margin to
+**4.3-4.8 ms**, nearly doubling the worst case. Stage 3's checkpoint also drops from 706 KB to **195 KB**, 3.6x fewer
+parameters.
+
+**This is the clearest efficiency result in the sweep**, and it is on the axis the owner declared decisive on
+2026-10-19: an architecture that wins on accuracy and loses on CPU has not won, so one that ties on accuracy and takes
+28% off the dominant phase has. *Pending the owner's adoption call.*
+
+### Item 44(a), the soft Gaussian beam target: suggestive, not established
+
+Matched probe, one pass, both checkpoints, 14 decoders. At the adopted `nms-mean`: **82.24% -> 82.78%, +0.54 pp**, up
+in 13 of 14 (only `vote-grid` down, -0.08), with the gain much larger at tight suppression radii (`nms-mean-0.3`
++5.20, `nms-mean-0.4` +1.79). At the fixed 0.3 threshold **false positives fall 3.662 -> 2.901 per frame, -21%**, for
+0.8 pp of recall.
+
+**The "13 of 14 decoders agree" framing is not independent corroboration, and an earlier report of mine over-stated
+it.** All fourteen decoders read the *same* probability map from the *same single seed*, so a lucky seed moves them
+together. The honest reading is **one** measurement of +0.54 pp against a stage-2 run-to-run spread of ~0.30 pp: about
+1.8x the noise. Suggestive, not established.
+
+**Confirming it is nearly free, which is why it should be confirmed rather than adopted.** The freeze trains three
+stage-2 seeds regardless; training three soft-label *and* three hard-label seeds gives a 3-vs-3 comparison for about
+**1 h of extra GPU**, and three of the six are the freeze's own inputs either way. *Pending, with the 3-vs-3 run
+recommended.*
+
+**A prediction of mine that was wrong, recorded because it is committed in two documents:** I argued the soft target
+should *lose* because it fights the ~50:1 `pos_weight` (weighted BCE is minimised at `w*t / (w*t + 1 - t)`, not at
+`t`). It does not lose. The mechanism is real -- it is why a hard 1 sits closer to the weighted optimum -- but it is
+evidently not decisive.
+
+### Item 44(b), the full voteless LFE head: DROPPED, answered by the same probe
+
+Under the heatmap objective the `peaks` decoder improves **+2.81 pp** (72.54% -> 75.35%), exactly as
+`memory/static-detector-diagnosis.md`'s "the +6.15 is a lower bound, our map was trained for votes not peaks" caveat
+predicted. **And it still sits 7.4 pp behind `nms-mean`'s 82.78% on the very objective that favours it.** The
+decomposition's bound holds, the voteless head loses on its own home ground, and an arm would confirm what is already
+measured. Dropped by the owner 2026-10-27; `memory/rejected-ideas.md` carries the write-up.
+
+### `heads 8`: paused twice, then resumed to completion
+
+Best val AP **81.69%** at epoch 44 (+4.62 over candidates) against `dim64`'s +4.96 -- converging on the same tie,
+which is what a knob that redistributes attention without adding any should do. It was paused at epoch 33 and again at
+epoch 45 to free the host for the CPU sweep, and **both pauses cost nothing**: the runner was ended before the trainer
+each time, so `run_queue` could not score the job as failed and retry it, and `--resume` picked up from the last
+epoch. The second pause taught one thing worth recording: **a resume restarts the patience counter from the
+checkpoint's state**, so an arm that is 8 of 8 patience used before a pause can set a best on its first epoch back and
+reset the whole window -- which is why "this will take 20 minutes" became a multi-hour arm twice.
+
 ## Items 49 and 44(a) wired, and a pre-freeze chain launched (2026-10-26)
 
 *keywords: item 49, --dim, --heads, item 44a, --label-sigma-m, queue_prefreeze.py, pre-freeze, invalidation, freeze 24 h*

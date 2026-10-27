@@ -24,6 +24,37 @@ is not the limit -- it reaches essentially everybody, and the curve is flat acro
 frame, or a frame rate low enough that a person moves further than the gate between scans (DROW at 12.5 Hz is 3.2x
 FROG's period, so A63 is where to look).
 
+## The full voteless LFE head: a Gaussian heatmap with a peak decoder (TODO.md item 44(b))
+
+*keywords: item 44b, LFE head, peaks decoder, heatmap, no vote regression, dropped without an arm, fixed-weight decomposition*
+
+**Idea.** Replace DROW's per-beam vote head with LFE's published parameterisation: a Gaussian heatmap over beams, a
+peak decoder in place of `nms-mean`, and no vote regression at all. The vote head is the one piece this project took
+deliberately unchanged, so "did you try the published alternative?" is a fair reviewer question.
+
+**Why it was dropped without its own arm (owner, 2026-10-27), and why that is a measurement rather than a shrug.**
+Two independent results bound it:
+
+1. **The decoder half was already measured on fixed weights** (`static-detector-diagnosis.md`): our own network read
+   through LFE-Peaks' own decoder scores **71.26% against `nms-mean`'s 79.88%**, and **50.3% against 81.6%** at 8-10 m
+   at a tight operating point. Of that 8.62 pp gap, **2.84 pp is centre regression a voteless head cannot recover at
+   all**.
+2. **The objective half was then measured by item 44(a)'s probe**, which is the part a fixed-weight decomposition
+   *cannot* bound -- that page says so itself: "the network's +6.15 is a lower bound, since our probability map was
+   trained for votes, not for peaks". Trained *for* a Gaussian target, `peaks` improves **+2.81 pp** (72.54% ->
+   75.35%) -- and still trails `nms-mean`'s **82.78%** by **7.4 pp**.
+
+So the published head loses by 7.4 pp **on the objective that favours it**, with its single largest deficit
+structurally unavailable to it. An arm would spend a stage-2 run plus a stage-3 arm to confirm a conclusion two
+existing measurements already reach from opposite directions.
+
+**What would reopen it.** A dataset where candidate *positions* are not the limiting factor, or a deployment that
+cannot afford the vote head's decode. Neither describes FROG, where stage 2 already places 98.1-98.5% of people inside
+the 0.5 m match radius (item 34).
+
+**What survives.** Item 44(a)'s half -- `beam_heatmap` and `compute_loss(soft_labels=)` -- is independent of this and
+remains a live candidate on its own evidence.
+
 ## Slot Attention's own update, abandoned on a numerical guard (TODO.md item 42)
 
 *keywords: item 42, Slot Attention, Locatello, --iterations, NaN gradients, training guard, abandoned unmeasured*

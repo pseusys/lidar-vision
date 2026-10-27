@@ -203,6 +203,27 @@ What it is instead — the network's form, a ConvNeXt U-Net with a whole-scan ag
 **So the width is the whole cost — and it is small.** At LFE's own 64k parameters, with LFE's own input, our network still scores **80.62% against LFE-Peaks' 65.1%**: a 15.5 pp gap that no ingredient in this table explains.
 Width's 1.5 pp is also entirely on far people, which is what makes range anchors the best-motivated experiment left (`TODO.md` §A item 13).
 
+**CPU latency, `dim 128` against `dim 64`, matched and interleaved (2026-10-27, `TODO.md` item 49).** Item 29's
+protocol: `tracking_baselines.py latency --device cpu --threads 4`, 2,000 consecutive scans, batch 1, three rounds
+alternating the two arms **in one session on an idle host**. Both load the same stage 2
+(`a69_no_aggregator_s0`), so the `stage2` phase is byte-identical work.
+
+| phase | `dim 128` | `dim 64` | delta |
+| --- | ---: | ---: | ---: |
+| `stage2` (the noise floor) | 9.17 / 8.96 / 9.00 | 9.49 / 9.24 / 9.32 | +0.31, an ordering bias **against** `dim 64` |
+| `decode` | 1.65 / 1.67 / 1.67 | 1.70 / 1.65 / 1.68 | ~0 |
+| **`memory`** | 9.32 / 9.31 / 9.26 | **6.69 / 6.68 / 6.73** | **-2.60 ms, -28%** |
+| **total** | 20.18 / 19.98 / 20.01 | **17.88 / 17.58 / 17.74** | **-2.33 ms, -11.6%** |
+| **total p99** | 22.22 / 22.74 / 22.73 | **20.67 / 20.18 / 20.49** | **-2.25 ms** |
+
+**How to read it, in the order the rule demands.** The `stage2` spread across all six runs is **0.53 ms** and that is
+the session's noise floor; the memory phase's own within-arm spread is **0.05-0.06 ms**. A 2.60 ms drop is therefore 5x
+the floor and ~50x its own measurement spread. The `stage2` phase also exposes a **systematic bias against `dim 64`**
+-- 0.31 ms slower on identical work, because it always ran second in each round -- so the true saving is marginally
+larger than measured. Against FROG's **25 ms** period, median headroom goes 4.94 -> **7.27 ms** and p99 margin goes
+2.3-2.8 -> **4.3-4.8 ms**. Accuracy ties: 86.12% against 86.20%, recall at matched false positives 96.5% against
+96.43%.
+
 **What the ladder leaves.** With phase 1's decomposition — about half the lead over LFE-Peaks is the output head: centre votes, aggregation, NMS — what remains is **the network's form and the training recipe**, and those two have not been separated. **Nor has any part of the form been shown to carry it** (2026-10-25): block and widths (items 19a, 19b), depth, kernel and expansion (item 45) and the whole-scan aggregator (item 40) all tie, so this half of the lead currently has no identified owner. Doing so needs LFE's architecture trained the way ours is, which was attempted and dropped (`TODO.md` §A item 7): 29 convolutions reproduce in order from the released graph, but two blocks' dataflow did not resolve without a shape-inference pass. **The pre-print states this as a limitation rather than a result.**
 
 ## TAKHeLiPeD's cost, end to end, one scan at a time
