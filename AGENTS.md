@@ -142,7 +142,7 @@ Anything less important goes *below* it, clearly marked as detail.
 | **Results** | The numbers — **as a table or chart** wherever one fits. |
 | **Needs attention** | What is wrong, risky, or awaiting a decision from the owner. Say plainly if there is nothing. |
 | **Next** | What you suggest doing, and why that and not something else. |
-| **Running** | **One line.** Every background job in flight at the moment of writing, with its progress. `none` if there are none. |
+| **Running** | **One line.** Every background job in flight at the moment of writing, with its progress. `none` if there are none. **In an observer/cron report, give two clocks with it -- `now` and the `next` thing due** (owner, 2026-10-27), as times rather than durations, so a hang shows up in the session history as a `now` that ran past a `next` which never arrived: [`memory/long-running-tasks.md`](memory/long-running-tasks.md#reporting). |
 
 **2b. `wp-AUC` (person-class AUC at 0.5 m matching radius) leads any accuracy answer.**
 Never substitute the agnostic/any-class AUC column for it — that exact substitution once inflated native-DROW results by 15-20pp (`train_all.py`'s mislabeled summary column).

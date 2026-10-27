@@ -136,6 +136,21 @@ is what the restart check below is for.
   would now cost.
 - **The `Running` line of every answer** already carries the same duty (`../AGENTS.md`): one line, every job in flight, with its
   progress.
+- **Every observer report carries two clocks: `now` and `next`** (owner, 2026-10-27). `now` is the wall-clock time the check
+  was taken; `next` is when the report itself says the next thing is due -- the next epoch line, the arm's earliest stop, the
+  chain's expected finish. Give both as times, not as durations.
+
+  *Why two and not one.* A single check can only say "the log is N minutes old", which is meaningless without knowing the
+  cadence -- and the cadence changes per arm (582 s an epoch for `dim 64`, 1,888 s during one unexplained excursion, 25 minutes
+  while a candidate cache rebuilds). A **reader scrolling the session history** sees a column of `now` stamps against a column
+  of `next` predictions, and a hang shows up as the moment `now` runs past a `next` that never arrived. That is a property of
+  the *sequence* of reports, which no single report can carry, and it is why the pair has to be in every one of them rather
+  than only in the ones that look interesting.
+
+  It also disciplines the writer: predicting `next` forces an explicit model of what the job should do, so a missed prediction
+  is visible rather than absorbed. Three times in the 2026-10-26/27 sweep an estimate was wrong -- a "50-epoch ceiling" that
+  was 100, a patience of 8 read as 12, a "twenty minute" resume that reset its own patience window and ran for hours -- and
+  each would have been caught a check earlier by a `next` that did not come true.
 
 ## After a session restart
 
