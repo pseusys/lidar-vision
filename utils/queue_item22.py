@@ -51,10 +51,29 @@ def arm(name: str, *flags: str) -> Job:
 
 
 JOBS = [
-    # The headline: 1 m cells, one person per cell in the ordinary case.
+    # The headline: 1 m cells, one person per cell in the ordinary case. Full run -- it carries the conclusion.
     arm("grid1m", "--cell-m", "1.0"),
-    # The sensitivity check, so a loss cannot be blamed on the cell size alone.
-    arm("grid2m", "--cell-m", "2.0"),
+
+    # The owner's second question (2026-10-27), and it needs no new code. The adopted model and this arm differ in two
+    # things rather than one -- binding *and* frame -- which completes a 2x2 whose other cells are already known:
+    #
+    #                      room frame      sensor frame
+    #     object binding   83.88%          82.57%   (A51 D1/E2, old architecture: the frame is worth +1.31 pp)
+    #     cell binding     grid1m          THIS
+    #
+    # Those two are stale in absolute terms but the *contrast* is what matters, and this arm says what the frame is
+    # worth once binding is spatial. **Prediction, recorded before the run:** more, not less. A cell's entire meaning
+    # is its location, while a slot carries object identity through the association whatever the frame -- so losing
+    # the world anchor should hurt a grid more than it hurts slots. If it collapses by much more than 1.31 pp that is
+    # a deployment finding, because odometry drift is this design's known weak point and E2 put the room frame's
+    # crossover at 0.01-0.02 m/s against a robot that drifts 0.005-0.025.
+    arm("grid1m_sensor", "--cell-m", "1.0", "--no-room-frame"),
+
+    # Cell-size sensitivity, so a loss cannot be blamed on the cell size alone -- but as a **screening** arm at 20
+    # epochs (~2 h) rather than a full one. These arms do not need convergence to rank: `dim64` sat at +4.15 by epoch
+    # 20 against its eventual +4.96, and the ordering was already plain. A screening number is never quoted as final;
+    # it decides only whether an arm is promoted to a full run.
+    arm("grid2m_screen", "--cell-m", "2.0", "--max-epochs", "20"),
 ]
 
 
