@@ -107,6 +107,68 @@ at 1.4 pp with no speed gain, and capacity was flat -- but `dim` sets the width 
 item 36 proved load-bearing, and it is also the one knob that could cut CPU cost. **A tie at `--dim 64` would itself be
 a win**, on the axis that decides deployment.
 
+## Item 44(a) replicates at three seeds and is adopted; `heads 8` ties; item 49 closes (2026-10-27)
+
+*keywords: item 44a, soft Gaussian beam target, three seeds, replication, adopted, heads 8, item 49 closed, stage-2 seed spread*
+
+### Item 44(a): the soft Gaussian beam target, three seeds against three
+
+One probe pass, six checkpoints, one decoder, one process -- the comparison the single-seed result could not make:
+
+| trio | seed 0 | seed 1 | seed 2 | **mean** | spread |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| hard labels | 82.24% | 81.90% | 82.15% | **82.10%** | 0.34 |
+| **soft Gaussian** | 82.78% | 82.70% | 82.88% | **82.79%** | 0.18 |
+
+**+0.69 pp, and the two trios do not overlap at all**: the *worst* soft seed (82.70%) beats the *best* hard seed
+(82.24%) by 0.46 pp. The decision rule was written into `queue_item44a_confirm.py` before the numbers existed --
+adopt only if the mean gap exceeds the within-trio spread -- and the gap is twice the larger spread. **Adopted.**
+
+The fixed-threshold column replicates just as cleanly, and it is the one deployment cares about:
+
+| trio | FP/frame at 0.3 | recall at 0.3 | AP@0.3 |
+| --- | ---: | ---: | ---: |
+| hard labels | 3.662 / 3.432 / 3.371 -> **3.488** | **94.43%** | 80.82% |
+| **soft Gaussian** | 2.901 / 2.827 / 2.796 -> **2.841** | 93.97% | **81.66%** |
+
+**False positives fall 18.5% for 0.46 pp of recall**, with non-overlapping ranges again (2.796-2.901 against
+3.371-3.662). `deploy/conf.env` runs a fixed threshold and the ROS node cannot pick an operating point per recording,
+so this is the column that reaches the robot.
+
+**What the replication is really worth, beyond the verdict.** The hard trio's own spread is **0.34 pp** -- almost
+exactly the ~0.30 pp A50 recorded, and *two thirds of the single-seed gain* that started this. Had 44(a) been adopted
+on that one seed it would have been adopted on evidence indistinguishable from noise; it happens to have been right,
+which is not the same as having been justified. The hour this cost was the difference between a lucky call and a
+measured one.
+
+**And the earlier over-reading is now fully corrected.** The single-seed report leaned on "up in 13 of 14 decoders",
+which is one measurement rather than fourteen because every decoder reads the same probability map. The three-seed
+result rests on three independent draws instead, and says the same thing more strongly: +0.54 pp became **+0.69 pp**.
+
+**A prediction of mine that was wrong, and stays in the record.** I argued in two committed documents that the soft
+target should *lose* because it fights the ~50:1 `pos_weight` -- weighted BCE is minimised at `w*t / (w*t + 1 - t)`,
+not at `t`, so a hard 1 sits closer to the weighted optimum. The mechanism is real and the conclusion was wrong at
+every seed.
+
+### Item 49 closes: `dim 64` adopted, `heads 8` dropped
+
+| arm | memory AP (test stride 5) | vs its own baseline | verdict |
+| --- | ---: | ---: | --- |
+| baseline `dim 128`, `heads 4` | 86.20% | -- | -- |
+| **`dim 64`** | **86.12%** | -0.08 | **adopted** -- ties, and -28% on the CPU memory phase |
+| `heads 8` | 85.99% | -0.21 | **dropped** -- ties, and changes neither parameters nor cost |
+
+`heads 8` ran 64 epochs across three sessions with two pauses, best val 81.91% at epoch 55 (+4.84 against `dim64`'s
++4.96). A head split redistributes attention without adding any, so there was never an efficiency case to rescue a
+tie. **`heads` stays at 4.** Like `dim64` it exited 1 after writing its results -- the ROCm teardown signature again,
+absorbed by `run_queue` judging jobs on outputs rather than exit codes.
+
+### The freeze's stage-2 half is already built
+
+`queue_item44a_confirm.py` was named so that whichever target won, its trio would be the freeze's input rather than a
+retrain. Soft labels won, so the freeze now reads `a71_soft_label_s0` / `a72_soft_s1` / `a72_soft_s2`, all trained and
+averaged. **Only the three stage-3 arms remain, about 22 h.**
+
 ## The pre-freeze results: dim 64 wins on CPU, soft labels are suggestive, 44(b) is dropped (2026-10-27)
 
 *keywords: item 49, dim 64, CPU latency, matched interleaved sweep, item 44a, soft label probe, item 44b dropped, heads8, noise floor*

@@ -61,13 +61,20 @@ ADOPTED = ("--no-exchange", "--no-learned-match", "--no-coast", "--recurrence", 
 GATE = Job(name="gate", cli=("-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"), cwd=REPO)
 
 
+#: The adopted stage-2 trio: aggregator-free **and** trained against item 44(a)'s soft Gaussian beam target, adopted
+#: 2026-10-27 after replicating at three seeds (82.79% against 82.10%, non-overlapping ranges, 18.5% fewer false
+#: positives at the fixed threshold). All three are already trained and averaged by `queue_item44a_confirm.py`, so
+#: every stage-2 job below reads `done` and only the stage-3 arms remain.
+STAGE2_DIRS = {0: "a71_soft_label_s0", 1: "a72_soft_s1", 2: "a72_soft_s2"}
+
+
 def stage2(seed: int) -> list:
-    """One aggregator-free stage-2 seed and its weight average. Seed 0 already exists and is reused by name."""
-    out = CHECKPOINTS / ("a69_no_aggregator_s0" if seed == 0 else f"a71_stage2_s{seed}")
+    """One stage-2 seed of the adopted recipe and its weight average. All three exist; the flags document the recipe."""
+    out = CHECKPOINTS / STAGE2_DIRS[seed]
     return [
         Job(name=f"stage2_s{seed}", outputs=(out / "step2_results.json",),
             cli=("train_takheliped.py", "step2", "--checkpoint-every", "0.25", "--no-aggregator",
-                 "--seed", str(seed), "--out-dir", str(out), "--resume")),
+                 "--label-sigma-m", "0.3", "--seed", str(seed), "--out-dir", str(out), "--resume")),
         Job(name=f"stage2_s{seed}_avg", outputs=(out / AVERAGED,), needs=(f"stage2_s{seed}",),
             cli=("average_checkpoints.py", str(out))),
     ]
@@ -75,7 +82,7 @@ def stage2(seed: int) -> list:
 
 def stage3(seed: int) -> Job:
     """One stage-3 seed of the frozen architecture, on the matching stage-2 seed's averaged weights."""
-    stage2_dir = CHECKPOINTS / ("a69_no_aggregator_s0" if seed == 0 else f"a71_stage2_s{seed}")
+    stage2_dir = CHECKPOINTS / STAGE2_DIRS[seed]
     out = CHECKPOINTS / f"a71_freeze_s{seed}"
     return Job(name=f"freeze_s{seed}", outputs=(out / "step3a_results.json",), needs=(f"stage2_s{seed}_avg",),
                cli=("train_takheliped.py", "step3a", "--stage2", str(stage2_dir / AVERAGED), *ADOPTED,

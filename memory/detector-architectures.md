@@ -42,6 +42,15 @@ It breaks the lifecycle above in two places: there is no `T`-scan window (one sc
 
 ### The frozen architecture (2026-10-18; the recurrence changed 2026-10-23)
 
+**Stage 2 trains against a soft Gaussian beam target as of 2026-10-27** (`TODO.md` item 44(a)): each beam's
+classification target is `exp(-d^2 / 2 sigma^2)` in **metres** with `sigma = 0.3 m`, clipped to 1 where people overlap,
+over exactly the beams the hard label marked positive (`--label-radius`, 0.6 m). Only the values change, hard 1 to a
+smooth falloff; the vote head, `nms-mean` and the class balance are untouched, so the arm varied one thing.
+**Replicated at three seeds against three**: mean `nms-mean` AP **82.79% against 82.10%** with non-overlapping ranges
+(worst soft seed 82.70% beats best hard seed 82.24%), and false positives at the fixed 0.3 threshold down **18.5%**
+(2.841 against 3.488) for 0.46 pp of recall. The width is metric and not LFE's fixed two beams because a person
+subtends 42 beams at 2 m and 9 at 9 m. Costs nothing at inference -- same architecture, same 960,323 parameters.
+
 **The slot state is 64-wide as of 2026-10-27** (`TODO.md` item 49, the owner's call), not 128. It ties on accuracy
 -- test stride 5 memory AP **86.12%** against `dim 128`'s 86.20% and the older control's 86.40%, with recall at matched
 false positives **96.5%** against 96.43%, all well inside the 1.32 pp bar -- and it takes **28% off the memory phase**
@@ -49,10 +58,9 @@ on the CPU, 9.30 -> 6.70 ms in a matched interleaved sweep whose own noise floor
 20.06 -> 17.73 ms and p99 margin against FROG's 25 ms frame period nearly doubles (2.3-2.8 -> 4.3-4.8 ms); stage 3's
 checkpoint drops from 706 KB to **195 KB**. It is the clearest efficiency result of the whole architecture sweep, and
 it is on the axis the owner made decisive on 2026-10-19: an architecture that wins on accuracy and loses on CPU has not
-won, so one that ties on accuracy and takes a quarter off the dominant phase has. **`heads` stays at 4 pending its arm's own number** -- `heads 8` was still
-training when this was written, at val +4.62 against `dim64`'s +4.96, and it cannot change the `dim` decision either
-way: a head split redistributes attention without adding any, so it leaves the parameter count and the CPU cost
-untouched.
+won, so one that ties on accuracy and takes a quarter off the dominant phase has. **`heads` stays at 4**, measured: the `heads 8` arm scored **85.99%** against the
+baseline's 86.20%, a tie inside the bar, and a head split redistributes attention without adding any -- so it leaves
+the parameter count and the CPU cost untouched and has no efficiency case to rescue a tie.
 
 **The architecture was simplified twice on 2026-10-25** (`TODO.md` items 40 and 41, the owner's call): stage 2 has
 **no whole-scan aggregator** and stage 3 has **no 1 s curriculum stage**. Measured together as `a70_baseline_s0`:
