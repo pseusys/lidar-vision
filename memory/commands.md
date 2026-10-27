@@ -112,14 +112,14 @@ one written before a flag existed falls back to the adopted default.
 Their queues: `queue_item16.py` (the recurrences, each with its own CPU latency job) and `queue_items1819.py` (three stage-2
 arms at three seeds, each followed by its weight average, then one `stage2_probe.py` pass over all twelve checkpoints).
 
-**The adopted architecture, as of 2026-10-25** -- slots + minGRU, **no aggregator, no curriculum** (`TODO.md` items 38,
-40, 41). Stage 2 needs `--no-aggregator`; stage 3 needs these five flags and nothing else:
+**The adopted architecture, as of 2026-10-27** -- slots + minGRU, **no aggregator, no curriculum, `dim 64`**
+(`TODO.md` items 38, 40, 41, 49). Stage 2 needs `--no-aggregator`; stage 3 needs these six flags and nothing else:
 
 ```powershell
 cd utils
 .\..\.venv\Scripts\python.exe train_takheliped.py step2 --checkpoint-every 0.25 --no-aggregator --seed 0 --out-dir ../checkpoints_three_horizon/<name>
 .\..\.venv\Scripts\python.exe average_checkpoints.py ../checkpoints_three_horizon/<name>          # stage 3 loads the AVERAGED weights
-.\..\.venv\Scripts\python.exe train_takheliped.py step3a --stage2 ../checkpoints_three_horizon/<name>/step2_calibration.averaged.pth --no-exchange --no-learned-match --no-coast --recurrence mingru --chunk-s 10 --seed 0 --out-dir ../checkpoints_three_horizon/<arm>
+.\..\.venv\Scripts\python.exe train_takheliped.py step3a --stage2 ../checkpoints_three_horizon/<name>/step2_calibration.averaged.pth --no-exchange --no-learned-match --no-coast --recurrence mingru --chunk-s 10 --dim 64 --seed 0 --out-dir ../checkpoints_three_horizon/<arm>
 ```
 
 **The defaults are deliberately NOT the adopted recipe**, and flipping them would be a mistake: `network_shape` falls

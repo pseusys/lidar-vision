@@ -12,6 +12,12 @@ seed 0 of the aggregator-free stage 2 exists (`a69_no_aggregator_s0`), so seeds 
 averaged over the val-chosen window, because **the averaged weights are what stage 3 loads** -- averaging gained 15 of
 18 A59 runs, +0.66 pp mean, and one arm +1.40 pp.
 
+**The stage-2 target is the one thing still open**, and it decides which checkpoints this chain reads. `TODO.md`
+item 44(a) -- the soft Gaussian beam target -- is being confirmed at three seeds by `queue_item44a_confirm.py`, which
+deliberately names its hard-label arms `a71_stage2_s1/s2`, the very names below. So **if hard labels win, this chain's
+stage-2 half is already done** and only the three stage-3 arms remain (~22 h); if soft labels win, point `stage2()` at
+`a71_soft_label_s0` / `a72_soft_s1` / `a72_soft_s2` and add `--label-sigma-m 0.3` to the stage-2 jobs.
+
 **Cost: about 24 h, not the 13 h first quoted here.** That estimate put a stage-3 arm at ~4 h; the simplified
 baseline actually ran **7.34 h** (52 epochs at 404 s train + 103 s eval). The 507 s figure in `CHANGELOG.md` is the
 per-epoch *total*, and reading it as train time is what produced the error. So: two new stage-2 arms at ~20 min plus
@@ -44,9 +50,14 @@ from run_queue import CHECKPOINTS, REPO, Job, main
 
 AVERAGED = "step2_calibration.averaged.pth"
 SEEDS = (0, 1, 2)
-#: The adopted stage-3 recipe, 2026-10-25: minGRU per slot, no slot exchange, no learned matching, no coasting head,
-#: and no 1 s curriculum stage. Item 38 pinned the recurrence; items 40 and 41 removed the other two components.
-ADOPTED = ("--no-exchange", "--no-learned-match", "--no-coast", "--recurrence", "mingru", "--chunk-s", "10")
+#: The adopted stage-3 recipe: minGRU per slot, no slot exchange, no learned matching, no coasting head, no 1 s
+#: curriculum stage, and a **64-wide** slot state. Item 38 pinned the recurrence; items 40 and 41 removed the
+#: curriculum and the aggregator; **item 49 halved `dim` on 2026-10-27** -- it ties on accuracy (86.12% against
+#: 86.20%, recall at matched false positives 96.5% against 96.43%) and takes **28% off the memory phase** on the CPU
+#: (9.30 -> 6.70 ms), which nearly doubles p99 margin against FROG's 25 ms period. That is the axis the owner made
+#: decisive on 2026-10-19, so a tie on accuracy plus a win on CPU is an adoption.
+ADOPTED = ("--no-exchange", "--no-learned-match", "--no-coast", "--recurrence", "mingru", "--chunk-s", "10",
+           "--dim", "64")
 GATE = Job(name="gate", cli=("-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"), cwd=REPO)
 
 
