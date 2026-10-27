@@ -55,6 +55,43 @@ the 0.5 m match radius (item 34).
 **What survives.** Item 44(a)'s half -- `beam_heatmap` and `compute_loss(soft_labels=)` -- is independent of this and
 remains a live candidate on its own evidence.
 
+## A learned grid over the room: spatial binding in place of object binding (TODO.md item 22)
+
+*keywords: item 22, grid slots, cell_m, spatial binding, occupancy grid, 2x2, room frame, measured not assumed*
+
+**Idea.** Replace object-bound slots with cells of the room. The obvious reviewer question about this architecture --
+"why slots rather than an occupancy grid?" -- and the classical robotics answer, never tested here. Item 36 had shown
+*addressability* matters but never **which kind**, so the paper's central claim was assumed rather than supported.
+
+**Run as sparse "grid slots" (the owner's design), because a dense grid is not the question.** FROG's venue is
+120-250 m across, so person-scale cells need ~46,000 of them -- 180x the recall attention's cost -- and 256 room cells
+would be ~11 x 17 m against a 0.5 m match radius. Instead: keep the 256 slots, quantise each one's position to a room
+cell, never instantiate an empty cell. Capacity, frame, recurrence, recall, head and eviction unchanged, so **one
+variable moves** -- an adopted slot's position follows its object, a grid slot's never moves.
+
+**What was measured** (2026-10-27/28, single seeds, all arms on identical candidates at 82.76%):
+
+| arm | memory AP | gain | share |
+| --- | ---: | ---: | ---: |
+| adopted | 86.12% | +3.88 | 100% |
+| cell, room frame | 84.46% | +1.70 | **44%** |
+| cell, sensor frame | 83.62% | +0.86 | 22% |
+| cell 2 m, room frame *(screen)* | 83.47% | +0.74 | 19% |
+
+**Why rejected: it recovers 44% of the memory's value at the same capacity**, -1.66 pp and outside the 1.32 pp bar.
+Coarser cells are worse, so the loss is not a resolution artefact.
+
+**What it bought even though it lost**, and the reason it was worth a day of GPU: the contribution is now a
+measurement. The write-up can state that object binding was compared against the spatial alternative at matched
+capacity in the same room frame and recovers 2.3x the value -- rather than asserting it.
+
+**Where it lives.** `SlotRules.cell_m` and `--cell-m` on `step3a`; `tests/test_grid_slots.py`; `utils/queue_item22.py`.
+Off by default and bit-identical when off.
+
+**What would reopen it.** A deployment with no usable odometry, where object binding's dependence on the association's
+geometric consistency is a liability -- the sensor-frame row suggests cell binding degrades more gracefully, losing
+0.84 pp to the frame where object binding loses 1.31.
+
 ## Slot Attention's own update, abandoned on a numerical guard (TODO.md item 42)
 
 *keywords: item 42, Slot Attention, Locatello, --iterations, NaN gradients, training guard, abandoned unmeasured*

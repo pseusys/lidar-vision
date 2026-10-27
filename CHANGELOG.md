@@ -107,6 +107,80 @@ at 1.4 pp with no speed gain, and capacity was flat -- but `dim` sets the width 
 item 36 proved load-bearing, and it is also the one knob that could cut CPU cost. **A tie at `--dim 64` would itself be
 a win**, on the axis that decides deployment.
 
+## Item 22: object binding beats spatial binding, and the contribution stops being an assumption (2026-10-28)
+
+*keywords: item 22, grid slots, cell_m, spatial binding, object binding, 2x2, room frame, sensor frame, occupancy grid, failed prediction*
+
+**The gap this closed.** Item 36 proved *addressability* load-bearing -- one global state reaches 82.44% against the
+slots' 85.88-86.08%. It never tested **which kind**, because nothing spatial was ever run. "Why slots rather than an
+occupancy grid?" is the obvious question about this architecture, a learned grid is the classical robotics answer, and
+until now the paper's central claim rested on an untested assumption. It does not any more.
+
+**All four arms read the same candidates (82.76%), so the gain column is the comparison**, not the AP:
+
+| arm | memory AP | **gain** | share of adopted | FP/frame | recall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **adopted** -- object slots, room frame | **86.12%** | **+3.88** | 100% | 0.963 | 84.1% |
+| `grid1m` -- cell slots, room frame | 84.46% | +1.70 | **44%** | 1.218 | 87.7% |
+| `grid1m_sensor` -- cell slots, sensor frame | 83.62% | +0.86 | **22%** | 1.764 | 90.7% |
+| `grid2m_screen` -- 2 m cells, room frame *(20-epoch screen)* | 83.47% | +0.74 | 19% | 1.394 | 88.0% |
+
+**Every grid arm is outside E13's 1.32 pp bar** -- `grid1m` by -1.66 pp, and it is the first arm since item 18's
+sensor-frame votes to land outside it. **Spatial binding recovers 44% of what object binding recovers** at identical
+capacity, identical room frame, identical recurrence, recall, head and eviction. One variable moved and it cost more
+than half the memory's value.
+
+**The cell-size direction is settled, so the loss is not an artefact of resolution.** 2 m cells are *worse* than 1 m
+(+0.74 against +1.70), so `grid1m` did not lose for having cells too fine. That arm is a **screen** -- 20 epochs,
+stopped by the cap rather than patience -- and its number is a floor on what 2 m could reach, never to be quoted beside
+the fully trained arms without that label.
+
+### The 2x2 the owner's second question completed, and the prediction it falsified
+
+The owner asked for a variant changing **two** things instead of three -- cell binding *and* the sensor frame -- which
+needed no new code (`--cell-m 1.0 --no-room-frame`) and completed a square whose object-binding row A51 had already
+measured:
+
+| | room frame | sensor frame | **the frame is worth** |
+| --- | ---: | ---: | ---: |
+| object binding | 83.88% | 82.57% | **+1.31** (A51 D1/E2, old architecture) |
+| **cell binding** | **84.46%** | **83.62%** | **+0.84** |
+
+**The prediction recorded in `queue_item22.py` before the run was wrong.** It said the frame should matter *more* under
+cell binding, reasoning that a cell means nothing except its location. It matters **less**: 0.84 pp against 1.31 pp.
+The reading that fits is the opposite of the one that felt obvious -- a *slot* must stay geometrically consistent with
+the object it tracks, so losing the world anchor corrupts the association itself; a *cell* has no association to
+corrupt, so it degrades more gracefully. It was already doing less, and there was less for the frame to protect.
+
+**Without that arm the whole deficit would have been attributed to binding.** It is worth noting that the owner
+proposed it precisely to decompose a three-change comparison, and it changed the interpretation rather than merely
+confirming it.
+
+### A behavioural signature worth recording
+
+The **rescoring gate drifts negative in both 1 m arms** -- monotonically, -0.057 and -0.055 over 25 and 23 epochs, with
+no reversal -- where every object-binding arm drifts positive (`dim 64` +0.088, `heads 8` +0.059). The test report
+explains it: `grid1m`'s rescoring shift is **-2.971 logits on people** against the adopted model's -4.114. The cell head
+suppresses less confidently because a cell's state mixes whoever passed through it rather than tracking one object.
+**At 2 m the gate goes positive** (+0.048), so the signature belongs to fine cells specifically: a coarse cell pools
+several people and the head finds something to boost -- while being less useful still.
+
+### What this does and does not license
+
+**Does:** the write-up can now say the object-centric design was *measured* against the spatial alternative at matched
+capacity in the same frame, and recovers 2.3x the memory's value. That converts the contribution from an assumption
+into a result, and answers the occupancy-grid question with a number instead of an argument.
+
+**Does not:** these are **single seeds**. The direction and the ordering are safe at n=1 -- all three arms are outside
+the bar, in the order the design predicts, and the cell-size control runs the right way. The **magnitudes** are not:
+-1.66 pp should not be quoted to three-seed precision, and the 2x2's object row is old-architecture, so +1.31 pp is a
+contrast rather than a matched figure.
+
+**Why a dense grid was never the experiment**, measured rather than assumed: FROG's venue is **120-250 m across**, so a
+dense person-scale grid needs **~46,000 cells** -- 180x the recall attention's O(P*K) cost -- while tiling the same
+extent with 256 cells gives ~11 x 17 m cells against a 0.5 m match radius. The owner's sparse grid slots avoided both
+traps by keeping the slots' capacity and quantising only the position.
+
 ## Item 44(a) replicates at three seeds and is adopted; `heads 8` ties; item 49 closes (2026-10-27)
 
 *keywords: item 44a, soft Gaussian beam target, three seeds, replication, adopted, heads 8, item 49 closed, stage-2 seed spread*
