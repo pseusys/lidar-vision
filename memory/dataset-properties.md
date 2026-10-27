@@ -94,6 +94,28 @@ The restated figures are *lower* at every horizon, because people are now given 
 
 **Three things this settles.**
 
+**FROG's venue is 120-250 m across, and "room coordinates" means a museum floor, not a room** (measured 2026-10-27
+from the odometry sidecars, `library/takheliped/include/FROG-data/*_odom.npz`). Per recording the robot covers
+**670-1,260 m of path**, with pose spans of 124-165 m in x and 112-250 m in y, and a 95th-percentile radius of ~102 m
+from each recording's own centre.
+
+| recording | frames | x span | y span | path | max radius |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 10-31 | 15,963 | 164.7 | 143.8 | 699.4 | 110.3 |
+| 11-36 | 17,746 | 147.0 | 112.1 | 742.9 | 98.9 |
+| 12-43 | 18,980 | 141.7 | 124.4 | 746.2 | 98.7 |
+| 14-57 | 17,428 | 145.1 | 130.3 | 787.7 | 91.4 |
+| 15-53 | 15,091 | 149.6 | 134.4 | 669.2 | 87.5 |
+| 16-41 | 17,623 | 123.9 | 134.7 | 803.1 | 80.5 |
+| train+val (11-36 + 12-43) | 120,396 | 144.1 | 250.2 | 1,260.6 | 154.0 |
+
+**Why it matters, beyond description.** It decides what a spatial memory can be (`TODO.md` item 22): a dense
+person-scale grid over this extent is **~46,000 cells**, 180x the recall attention's O(P*K) cost, while tiling it with
+the slots' 256 cells gives **~11 x 17 m** cells against a 0.5 m match radius. Neither is the experiment, which is why
+item 22 is run as **sparse grid slots** instead. It also qualifies every "room frame" claim in `docs/RESEARCH.md`
+section 5.3: the property being exploited is that a static object keeps its world coordinate over a 150 m traversal,
+which is a stronger statement than it sounds.
+
 1. **Most of the available motion appears in the first ~5 seconds**, in both venues. The curve falls steeply to 5 s and then flattens. Horizon past that keeps paying on FROG but with sharply diminishing returns. The restatement sharpened this rather than changing it: the fall from 1 s to 5 s is now 52.4 -> 32.7% where it read 67.3 -> 36.0%.
 2. **There is a hard ceiling on every motion-based method**, and it is not small: at a 10-second horizon, **about a quarter** of people on FROG have not moved a body width (24.0%, against 19.5% on DROW's un-restated clock). No architecture crosses this — it is a property of people, not of models.
 3. **It is not a museum artifact.** This was the main risk to the whole premise (FROG is a science museum, where people stand and look at things). DROW is a care facility, and people there were ~8-10 pp more mobile at every horizon on the clocks both columns used at the time. **That margin is now unquantified**, since FROG's column fell by 4-15 pp and DROW's will rise; the qualitative claim — the problem survives the change of venue — rests on both venues showing the same steep-then-flat shape, which neither restatement changes.

@@ -12,7 +12,7 @@ from math import log, radians, sqrt
 from typing import List, Optional, Tuple
 
 from torch import (
-    Tensor, arange, arctan, argsort, atan2, cat, cos, cumprod, exp, expm1, full, full_like, isfinite, linspace, log1p, long,
+    Tensor, arange, arctan, argsort, atan2, cat, cos, cumprod, exp, expm1, floor, full, full_like, isfinite, linspace, log1p, long,
     minimum, nn, ones_like, randn, as_tensor,
     sigmoid,
     no_grad, ones, sin, stack, tanh, where, zeros, zeros_like,
@@ -120,6 +120,13 @@ class SlotRules:
     velocity_smoothing: float = 0.1
     latest_value: bool = False
     association: str = "mutual"
+    #: `TODO.md` item 22, the owner's design. Above zero, a slot's position **snaps to the centre of a room cell of this
+    #: many metres and never moves again**: it addresses a patch of the room rather than an object. Everything else is
+    #: unchanged -- same capacity, same room frame, same recurrence, recall, head and eviction -- so the arm varies the
+    #: one thing in question, whether *spatial* binding substitutes for *object* binding. Item 36 established that
+    #: addressability matters; it never tested which kind. Sparse by construction: only occupied cells take a slot, which
+    #: is what makes a 150 m venue affordable where a dense person-scale grid would need ~46,000 cells.
+    cell_m: float = 0.0
 
 
 @dataclass
@@ -211,7 +218,14 @@ def manage_slots(slots: Slots, cand_xy: Tensor, cand_score: Tensor, cand_valid: 
     device = cand_xy.device
     step = dt[:, None]
     alive = slots.alive
-    predicted = slots.position + slots.velocity * step[..., None] * alive[..., None]
+    if rules.cell_m:
+        # Item 22. Quantise every candidate to its cell centre before anything reads a position, so a slot's position
+        # *is* a cell: spawning puts it at a centre, matching compares centres, and nothing below can move it. A cell
+        # does not drift either, so there is no constant-velocity prediction to make.
+        cand_xy = (floor(cand_xy / rules.cell_m) + 0.5) * rules.cell_m
+        predicted = slots.position
+    else:
+        predicted = slots.position + slots.velocity * step[..., None] * alive[..., None]
     usable = cand_valid & (cand_score >= rules.floor)
 
     if rules.association not in ASSOCIATIONS:
@@ -219,20 +233,24 @@ def manage_slots(slots: Slots, cand_xy: Tensor, cand_score: Tensor, cand_valid: 
 
     dist = (predicted[:, :, None, :] - cand_xy[:, None, :, :]).norm(dim=-1)
     dist = dist.masked_fill(~(alive[:, :, None] & usable[:, None, :]), float("inf"))
+    # With quantised candidates a same-cell pair is exactly 0 m apart and the nearest other cell is `cell_m` away, so
+    # half a cell separates "same cell" from everything else however the gate was tuned for tracking slots.
+    gate = rules.gate_m if not rules.cell_m else min(rules.gate_m, 0.5 * rules.cell_m)
     if rules.association == "hungarian":
-        nearest_candidate, matched = _assign(dist, rules.gate_m)
+        nearest_candidate, matched = _assign(dist, gate)
     else:
         nearest_candidate = dist.argmin(dim=2)
         mutual = dist.argmin(dim=1).gather(1, nearest_candidate) == arange(k, device=device)[None]
-        matched = alive & mutual & (dist.gather(2, nearest_candidate[..., None])[..., 0] <= rules.gate_m)
+        matched = alive & mutual & (dist.gather(2, nearest_candidate[..., None])[..., 0] <= gate)
 
     match_xy = cand_xy.gather(1, nearest_candidate[..., None].expand(-1, -1, 2))
     fade = exp(-step * log(1.0 / rules.floor) / rules.fade_time_s)
     observed = cand_score.gather(1, nearest_candidate)
     raised = observed if rules.latest_value else slots.value + rules.gain * (1.0 - slots.value) * observed
     value = where(matched, raised, slots.value * fade)
-    velocity = where(matched[..., None], slots.velocity + rules.velocity_smoothing * ((match_xy - slots.position) / step[..., None] - slots.velocity), slots.velocity)
-    position = where(matched[..., None], match_xy, predicted)
+    velocity = slots.velocity if rules.cell_m else where(matched[..., None], slots.velocity + rules.velocity_smoothing * ((match_xy - slots.position) / step[..., None] - slots.velocity), slots.velocity)
+    # A cell keeps its centre whatever matched it; only a tracking slot follows its candidate.
+    position = predicted if rules.cell_m else where(matched[..., None], match_xy, predicted)
     hit_rate = slots.hit_rate + (1.0 - exp(-step / HIT_RATE_TIME_S)) * (matched.float() - slots.hit_rate)
     since = where(matched, zeros_like(slots.since_match_s), slots.since_match_s + step)
     age = slots.age_s + step
@@ -240,6 +258,15 @@ def manage_slots(slots: Slots, cand_xy: Tensor, cand_score: Tensor, cand_valid: 
 
     claimed = zeros(b, p, device=device).scatter_add(1, nearest_candidate, matched.float()) > 0
     eligible = usable & ~claimed
+    if rules.cell_m:
+        # A cell is unique, so two things the tracking path allows have to be refused here: spawning into a cell a live
+        # slot already holds (it exists, it simply did not match this frame), and two candidates in one cell spawning
+        # two slots. Without the second, a crowded cell would quietly consume the whole budget.
+        held = (dist == 0).any(dim=1)
+        same = (cand_xy[:, :, None, :] == cand_xy[:, None, :, :]).all(dim=-1)
+        index = arange(p, device=device)
+        stronger = (cand_score[:, :, None] < cand_score[:, None, :]) |                    ((cand_score[:, :, None] == cand_score[:, None, :]) & (index[None, :, None] > index[None, None, :]))
+        eligible = eligible & ~held & ~(same & stronger & usable[:, None, :]).any(dim=2)
     n_eligible = eligible.sum(dim=1)
     by_score = argsort(where(eligible, -cand_score, full_like(cand_score, float("inf"))), dim=1, stable=True)
     by_index = argsort(alive.float(), dim=1, stable=True)

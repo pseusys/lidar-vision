@@ -739,7 +739,8 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
     slots = capacity if capacity else (parameters["rules"].default.capacity if args.get("slots") is None else int(args["slots"]))
     rules = SlotRules(capacity=slots,
                       latest_value=SlotRules().latest_value if args.get("latest_value") is None else literal_eval(args["latest_value"]),
-                      association=SlotRules().association if args.get("association") is None else args["association"])
+                      association=SlotRules().association if args.get("association") is None else args["association"],
+                      cell_m=SlotRules().cell_m if args.get("cell_m") is None else float(args["cell_m"]))
     memory = ObjectMemory(rules, feature_dim=feature_dim, **{**shape, **overrides})
     state = checkpoint["model"]
     if memory.rescore is None:                           # A51 E12a drops the head, so its trained weights have nowhere to go
@@ -1099,7 +1100,7 @@ def train_memory(args) -> None:
     resume_path = args.out_dir / f"{args.mode}_resume.pth"
     resumed = load_resume(resume_path, args.resume)
 
-    model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value, association=args.association), feature_dim=splits["train"].data.features.shape[-1],
+    model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value, association=args.association, cell_m=args.cell_m), feature_dim=splits["train"].data.features.shape[-1],
                          rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame, coast=args.coast,
                          recurrence=args.recurrence, global_state=args.global_state, refine=args.refine,
                          iterations=args.iterations, dim=args.dim, heads=args.heads,
@@ -1885,6 +1886,15 @@ def build_parser() -> argparse.ArgumentParser:
                                 "initialised -- so an untrained arm reports exactly the candidate's own position")
         step1.add_argument("--refine-weight", type=float, default=1.0,
                            help="weight on item 46's L1 refinement loss, relative to the candidate focal loss")
+        step1.add_argument("--cell-m", type=float, default=0.0,
+                           help="grid slots (TODO.md item 22): snap each slot's position to the centre of a room cell "
+                                "of this many metres and never move it, so the slot addresses a patch of the room "
+                                "rather than an object; 0, the default, keeps the adopted tracking slots. Everything "
+                                "else is unchanged -- same capacity, room frame, recurrence, recall, head and eviction "
+                                "-- so the arm varies only whether binding is spatial or object-centric. Item 36 showed "
+                                "addressability is load-bearing but never tested which kind. Sparse by construction: "
+                                "only occupied cells take a slot, which is what makes FROG's 120-250 m venue "
+                                "affordable where a dense person-scale grid would need ~46,000 cells")
         step1.add_argument("--dim", type=int, default=128,
                            help="width of a slot's state vector (TODO.md item 49). Never varied: item 45 swept stage "
                                 "2's four shape knobs and deferred this one and --heads to the stage-3 half, which "
