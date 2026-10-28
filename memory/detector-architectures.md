@@ -64,7 +64,7 @@ own contribution is.
 | attention heads | 49 | `--heads 8` | 85.99% | +3.74 | tie, no cost change -- dropped |
 | stage-2 beam target | 44a | soft Gaussian | (stage 2) 82.79% | -- | **+0.69 pp at 3 seeds -- adopted** |
 | the published head | 44b | peaks, no votes | (stage 2) 75.35% | -- | dropped without an arm, -7.4 pp |
-| Slot Attention's update | 42 | `--iterations 3` | -- | -- | **never scored** -- NaN guard at epoch 20 |
+| Slot Attention's update | 42 | `--iterations 3` | -- | +2.22 val @ e18 | **dropped on a partial curve** -- see below |
 | block / widths / depth / kernel / expansion | 19, 45 | five stage-2 knobs | ~82.2% | -- | all tie |
 | sensor-frame vote targets | 18 | `--vote-frame sensor` | -- | -- | **worse** |
 | recall width `sigma_m` | 39 | replay sweep | -- | -- | dose-response; confirms 36 |
@@ -78,8 +78,20 @@ heads, block and the stage-2 shape knobs all sit inside E13's 1.32 pp bar. That 
 than the one the project started with: every tie was resolved towards the cheaper or simpler option, which is E13's
 standing rule.
 
-**One arm has no number and must be described as such**: item 42 trained 19 epochs and died on a non-finite-gradient
-guard whose cause was never found. It is the single idea implemented and never scored.
+**One arm has no *test* number, and the reason it was dropped is a judgement that should be stated as one.** Item 42
+trained **19 epochs** and died on a non-finite-gradient guard whose cause was never found. It was not abandoned
+because of the crash: it was abandoned because of **where its curve was when it crashed**. At epoch 18 its validation
+gain was **+2.22 pp** against the simplified baseline's **~+2.70 pp** at the comparable point, and that baseline went
+on to +5.09 -- so the arm was tracking *behind* its own control with no sign of the sudden gain the
+run-everything-once rule exists to catch. Restarting meant a debugging session plus a fresh ~10.5 h arm to pursue a
+line already running second.
+
+**So the honest description is "a grounded guess from partial results", not "unknown error, dropped".** The evidence
+is real but weak in a specific way: a validation curve at epoch 18 of ~50 is a poor predictor -- `dim 64` itself went
++4.15 at epoch 20 to +4.96 at epoch 52 -- so the decision rests on *relative position against a control measured the
+same way*, which is the strongest reading a partial curve supports and weaker than any finished arm here. It belongs
+in the write-up as an idea **deprioritised on interim evidence**, and it is the one row where a reviewer could
+reasonably ask for the full run.
 
 **A caveat that governs the freeze.** `--dim 64` was measured on the **hard-label** stage 2 (candidates 82.24) and the
 soft Gaussian target was adopted afterwards, so **the adopted combination -- soft labels + `dim 64` -- has never been

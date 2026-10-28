@@ -110,10 +110,18 @@ degenerate frame (8 probes: no live slot, no valid candidate, zero state, an 80 
 256 -> 3 -> 1 -> 0); and the MLP residual compounded over a full 399-frame chunk leaves the state bounded at 70-80 with
 **0 of 30** gradients non-finite, because minGRU's gate is a convex combination.
 
-**Why rejected: a judgement, not a measurement, and it should be read as such.** The cause was never identified. At
-epoch 18 the arm's val gain was +2.22 pp against the simplified baseline's ~+2.70 pp at a comparable point, so it was
-tracking behind its control with no hint of a hidden gem, and the alternative was a debugging session plus a fresh
-10.5 h arm. **It is the one idea on the architecture list that was implemented and never scored.**
+**Why rejected: a grounded guess from partial results -- not "it crashed, so we dropped it".** The distinction
+matters for how the write-up should read. The crash is what *stopped* the arm; what *ended* it was where its curve
+sat. At epoch 18 its validation gain was **+2.22 pp** against the simplified baseline's **~+2.70 pp** at the
+comparable point, and that baseline finished at +5.09 -- so the arm was running **second to its own control, measured
+the same way**, with no sign of the sudden gain the run-everything-once rule exists to catch. Against that, resuming
+meant finding a NaN whose cause three hypotheses had failed to explain, then a fresh ~10.5 h arm.
+
+**The evidence is real but weak in a specific way, and the write-up should say so.** A validation curve at epoch 18 of
+~50 predicts poorly in absolute terms -- `dim 64` went +4.15 at epoch 20 to +4.96 at 52 -- so the decision rests on
+*relative position against a control*, which is the strongest claim a partial curve supports. This is the one arm
+where a reviewer could fairly ask for the full run, and the answer is that it was deprioritised on interim evidence,
+not that it was unmeasurable.
 
 **Where it lives.** `--iterations N` on `step3a`; `_SlotAttention` in
 `library/takheliped/detectors/takheliped.py`; `tests/test_slot_attention.py`. Off by default and bit-identical when
