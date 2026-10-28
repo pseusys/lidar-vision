@@ -64,7 +64,7 @@ own contribution is.
 | attention heads | 49 | `--heads 8` | 85.99% | +3.74 | tie, no cost change -- dropped |
 | stage-2 beam target | 44a | soft Gaussian | (stage 2) 82.79% | -- | **+0.69 pp at 3 seeds -- adopted** |
 | the published head | 44b | peaks, no votes | (stage 2) 75.35% | -- | dropped without an arm, -7.4 pp |
-| Slot Attention's update | 42 | `--iterations 3` | -- | +2.22 val @ e18 | **dropped on a partial curve** -- see below |
+| Slot Attention's update | 42 | `--iterations 3` | -- | +2.22 val @ e18 | **REOPENED 2026-10-28** (`TODO.md` item 53) -- to be finished cleanly |
 | block / widths / depth / kernel / expansion | 19, 45 | five stage-2 knobs | ~82.2% | -- | all tie |
 | sensor-frame vote targets | 18 | `--vote-frame sensor` | -- | -- | **worse** |
 | recall width `sigma_m` | 39 | replay sweep | -- | -- | dose-response; confirms 36 |
@@ -86,7 +86,12 @@ on to +5.09 -- so the arm was tracking *behind* its own control with no sign of 
 run-everything-once rule exists to catch. Restarting meant a debugging session plus a fresh ~10.5 h arm to pursue a
 line already running second.
 
-**So the honest description is "a grounded guess from partial results", not "unknown error, dropped".** The evidence
+**Reopened on 2026-10-28 (the owner's call): it will be debugged and re-run rather than left as a guess.** The
+reasoning below stands as the description of *why it was deprioritised at the time*, but it is no longer the final
+word -- "better to spend a few more hours than be insecure about the results later on". `TODO.md` item 53 carries the
+plan, and the arm will be re-run on the adopted recipe so it is comparable to `a71_dim64_s0`.
+
+**The honest description of the original decision is "a grounded guess from partial results", not "unknown error, dropped".** The evidence
 is real but weak in a specific way: a validation curve at epoch 18 of ~50 is a poor predictor -- `dim 64` itself went
 +4.15 at epoch 20 to +4.96 at epoch 52 -- so the decision rests on *relative position against a control measured the
 same way*, which is the strongest reading a partial curve supports and weaker than any finished arm here. It belongs
