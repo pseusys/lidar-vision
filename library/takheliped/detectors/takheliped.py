@@ -737,7 +737,14 @@ class ObjectMemory(nn.Module):
         if self.attend is None:
             queried = state + self.statistics(stats)
             if self.match is None:                           # the slot reads only what the hand-coded association gave it
-                matched_encoding = encoded.gather(1, events.match_index.clamp(min=0)[..., None].expand(-1, -1, self.dim))
+                # `TODO.md` item 54. **Which candidate a slot reads depends on how it got one.** A *matched* slot has
+                # it in `match_index`; a slot that **spawned** this frame did not match, so `manage_slots` leaves
+                # `match_index` at -1 and the candidate is in `source`. Gathering by `match_index` alone made the
+                # `clamp(min=0)` read index 0 -- and `decode_candidates` sorts by descending score, so that is the
+                # frame's *strongest* candidate, admitted by the `matched | refill` mask into every new slot's first
+                # update. The two sibling lines above and below already select this way; this one did not.
+                source = where(refill, events.source, events.match_index).clamp(min=0)
+                matched_encoding = encoded.gather(1, source[..., None].expand(-1, -1, self.dim))
                 found = queried + matched_encoding * (events.matched | refill)[..., None]
             else:
                 found = self.match(queried, encoded, _proximity(slots.position, world, self.sigma_m), cand_valid)

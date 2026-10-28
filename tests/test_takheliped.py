@@ -1479,3 +1479,58 @@ class TestHungarianAssociation:
         assert events.matched[0].tolist() == [True, True]     # the near stream matches both
         assert not events.matched[1].any()                    # the far stream is all out of gate
 
+
+
+class TestASpawnedSlotReadsItsOwnCandidate:
+    """`TODO.md` item 54: a slot spawned this frame must take *its own* candidate's encoding into its first update.
+
+    `step` gathers the encoding by `events.match_index`, which `manage_slots` sets to **-1** for any slot that did not
+    *match* -- and a slot that **spawned** did not match. `clamp(min=0)` then turns that into index 0, and because
+    `decode_candidates` sorts by descending score, index 0 is the frame's **strongest** candidate. The mask
+    `matched | refill` still admits it, so the strongest candidate's encoding lands in every new slot's first update.
+
+    The two sibling lines in the same function already do this correctly -- `observed_score` and the non-recurrent
+    path's `target`, both via `where(refill, source, match_index)` -- which is why this is a slip rather than a design
+    choice. The spawned *state* is correct (`spawn(own encoding)`); only the update's input is wrong.
+    """
+
+    @staticmethod
+    def _memory():
+        torch.manual_seed(0)
+        return ObjectMemory(SlotRules(capacity=8), dim=16, heads=2, recurrence="mingru",
+                            exchange=False, learned_match=False)
+
+    def test_moving_another_candidate_does_not_change_a_spawned_slots_state(self):
+        """Two candidates spawn two slots. Moving the *first* must leave the *second*'s slot untouched."""
+        memory = self._memory()
+        xy = torch.tensor([[[0.0, 2.0], [5.0, -1.0]]])
+        score = torch.tensor([[0.9, 0.5]])          # sorted by score, as decode_candidates emits them
+        valid = torch.ones(1, 2, dtype=torch.bool)
+        moved = xy.clone()
+        moved[0, 0] = torch.tensor([-40.0, 40.0])   # candidate 0 only; candidate 1 is untouched
+
+        with torch.no_grad():
+            a = memory.step(xy, score, valid, torch.zeros(1, 3), torch.full((1,), 0.025), memory.initial_state(1))
+            b = memory.step(moved, score, valid, torch.zeros(1, 3), torch.full((1,), 0.025), memory.initial_state(1))
+
+        own = a.events.source == 1                  # the slot that spawned from candidate 1
+        assert own.any(), "candidate 1 must spawn a slot for this test to mean anything"
+        assert torch.allclose(a.slots.state[own], b.slots.state[own], atol=1e-7), \
+            "a spawned slot's state depends on another candidate -- item 54"
+
+    def test_a_matched_slot_still_reads_the_candidate_it_matched(self):
+        """The guard on the fix: it must not break the matched path, which was always correct."""
+        memory = self._memory()
+        xy = torch.tensor([[[0.0, 2.0], [5.0, -1.0]]])
+        score = torch.tensor([[0.9, 0.5]])
+        valid = torch.ones(1, 2, dtype=torch.bool)
+        dt = torch.full((1,), 0.025)
+
+        with torch.no_grad():
+            first = memory.step(xy, score, valid, torch.zeros(1, 3), dt, memory.initial_state(1))
+            # Second frame: both slots exist and match, so match_index is real and refill is empty.
+            second = memory.step(xy, score, valid, torch.zeros(1, 3), dt, first.slots)
+
+        assert second.events.matched.any(), "the slots must match on the second frame"
+        assert not (second.events.source >= 0).any(), "nothing should spawn on the second frame"
+        assert torch.isfinite(second.slots.state).all()
