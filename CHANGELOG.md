@@ -38,6 +38,62 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A fresh-eyes audit of the model code before the freeze (2026-10-28)
+
+*keywords: pre-freeze audit, fixed_decay_s, D3, silent no-op, step3b targets, phantom flags, subagent audit*
+
+**A cold reader was given the specs and the code and asked to find defects of classes *other* than item 54's.** It
+found one live trap, two step3b divergences, two documentation errors of mine, and seven unconfirmed suspicions --
+and, usefully, a list of what it checked and found correct so the same ground is not re-audited before the next
+dataset. **Nothing it found changes any number the frozen path will produce.**
+
+### `--fixed-decay-s` was a silent no-op under the adopted recurrence -- fixed
+
+`fixed_decay_s` is read in **exactly one place**: `_recur`'s `selective` branch, as `1 / fixed_decay_s`. `gru` and
+`mingru` have no decay term at all, so under them the flag was stored, restored from a checkpoint, passed to the
+constructor -- and ignored. Since item 52 made `mingru` the default, `step3a --fixed-decay-s 8` **today** would train
+a model bit-identical to the control and report the control's AP as A51's **D3** -- an arm `TODO.md` queues for
+re-running on the adopted recipe, and one of the two load-bearing rows in `memory/slot-design-evidence.md` ("the decay
+must be learned; D3 costs 1.04 pp"). The conclusion would have been silently **reversed**.
+
+This is the `--global-state` class one layer down, and the existing guard provably cannot catch it:
+`TestEveryStage3FlagReachesTheModel` checks that a flag *reaches* the constructor, which this one does. **The fix is
+the refusal `iterations` and `global_state` already use** -- `fixed_decay_s` with a non-`selective` recurrence now
+raises -- plus four tests, including one that the adopted recipe still builds, because a bad guard in that constructor
+would make the freeze fail at launch.
+
+**And the run-description line was lying.** `'learned per slot' if not fixed_decay_s` printed "decay learned per slot"
+in **every adopted run's log**, where minGRU has no decay, learned or otherwise. It now says `no decay term` outside
+`selective`.
+
+### Two documentation errors in `docs/ARCHITECTURE.md`, both mine
+
+Section 4's parametrisable table named `--sigma-m` and `--nms-radius`. **Neither flag exists.** `sigma_m` is
+deliberately a replay knob (`slot_experiments.py sigma` sets it on a trained model, and `NOT_FLAGS` pins that it is
+not a flag), and the NMS radius is the module constant `NMS_DIST_M = 0.5`. Both rows now say so. This is the table
+that tells a reader which values are FROG's and which are the method, so a phantom flag there is exactly what a
+reviewer checks.
+
+### Two step3b divergences, recorded not fixed (`TODO.md` item 55)
+
+`joint_frame_loss` calls `make_targets` **without** `nearest=` and **without** `soft_labels=`, so step3b fine-tunes
+stage 2 against the pre-2026-10-06 "last-listed annotation wins" assignment and the *hard* beam target -- while the
+weights it loads were trained with `--label-assign nearest` and item 44(a)'s soft Gaussian. And
+`calibration_network()` does not restore `dropout`, so step3b fine-tunes at 0.0 where training used 0.1. Both are
+step3b/E12 only, off the frozen path; the first would confound any future "feedback contribution" number with a
+target change.
+
+### What it checked and found correct
+
+Worth recording because it is the expensive half to redo: `sensor_to_world`/`world_to_sensor` are exact inverses;
+`swap_vote_frame` is its own inverse and consistent with `_win2global`; `make_targets` round-trips exactly;
+`manage_slots`' index algebra holds (a slot cannot be both matched and refilled, spawn and replace sources are
+disjoint, the `cumprod` prefix is correct); the fade constant reaches the floor in exactly `fade_time_s`; dead slots
+and invalid candidates are excluded from every softmax, loss and metric; the candidates baseline and the memory are
+scored over identical frames with identical inputs; model selection reads val only; `average_checkpoints` preserves
+the args that `network_shape` rebuilds from; and stage 2's parameter count recomputes by hand to **960,323**, matching
+the figure in both documents. It also agreed independently with the item 54 class audit.
+
 ## Item 54 fixed, and an audit for its whole bug class finds nothing else (2026-10-28)
 
 *keywords: item 54, spawned slot, match_index, refill, sentinel index, clamp, audit, bug class, gather*

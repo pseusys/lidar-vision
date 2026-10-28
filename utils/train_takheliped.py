@@ -1112,7 +1112,10 @@ def train_memory(args) -> None:
           f"{f'limited to +-{args.rescore_limit:g} logits' if args.rescore_limit else 'unlimited'}; slots in "
           f"{'room' if args.room_frame else 'sensor'} coordinates, value by "
           f"{'the latest score' if args.latest_value else 'accumulation'}{' (learned)' if args.learn_value else ''}, decay "
-          f"{f'fixed at {args.fixed_decay_s:g} s' if args.fixed_decay_s else 'learned per slot'}"
+          # The audit of 2026-10-28 caught this sentence lying: with `mingru` there is no decay at all, learned or
+          # fixed, so "learned per slot" was false in every adopted run's log. `fixed_decay_s` is now refused outside
+          # `selective`, so only the selective arm can say "fixed".
+          f"{('fixed at %g s' % args.fixed_decay_s) if args.fixed_decay_s else ('learned per slot' if args.recurrence == 'selective' else 'no decay term')}"
           # Which recurrence ran, because selective and minGRU have *identical* parameter counts -- selective's
           # bias-free `decay` plus its own `decay_bias` is exactly minGRU's `gate` with bias -- so the count cannot
           # tell two arms apart and a sweep's logs have to say it outright (`TODO.md` item 38).

@@ -205,11 +205,11 @@ value for FROG, not a property of the method.
 | slot capacity `K` | `--slots` | how many people are ever simultaneously in view |
 | slot-state width `dim` | `--dim` | capacity/CPU trade, retuned per deployment target |
 | attention heads | `--heads` | — |
-| recall width `sigma_m` | `--sigma-m` | person spacing and match radius |
+| recall width `sigma_m` | — (replay knob) | person spacing and match radius; set on a trained model by `slot_experiments.py sigma`, deliberately not a training flag |
 | association gate `gate_m` | — | match radius |
 | value fade `fade_time_s` | — | how long an absent person should be remembered |
 | beam-target width | `--label-sigma-m` | annotation radius and beam density |
-| NMS radius | `--nms-radius` | person spacing |
+| NMS radius | — (`NMS_DIST_M`) | person spacing; a module constant at 0.5 m, swept over three seeds and reported as the middle of a flat optimum |
 | chunk length | `--chunk-s` | frame rate — 10 s is 399 frames at 40 Hz, 125 at 12.5 Hz |
 | recurrence | `--recurrence` | `mingru` adopted; `selective` reads real elapsed time and is untested where the rate varies |
 | frame | `--room-frame` | needs odometry; `--no-room-frame` where there is none |

@@ -493,6 +493,16 @@ class ObjectMemory(nn.Module):
             self.register_parameter("query", None)
         if recurrence not in RECURRENCES:
             raise ValueError(f"recurrence must be one of {list(RECURRENCES)}, not {recurrence!r}")
+        # Found by a pre-freeze audit, 2026-10-28. `fixed_decay_s` is read in exactly one place -- `_recur`'s
+        # `selective` branch, as `1 / fixed_decay_s`. `gru` and `mingru` have no decay term at all, so under them the
+        # flag is stored, restored from a checkpoint, passed in here, and then **ignored**: an arm would be
+        # bit-identical to the control and would report the control's number as A51's D3. `--recurrence` now defaults
+        # to `mingru`, so the trap is live rather than hypothetical, and `TODO.md` queues D3 for re-running on the
+        # adopted recipe. Refusing the pair is the same guard `iterations` and `global_state` use, and the reason it is
+        # needed here is that the flag *does* reach the constructor, so the plumbing test cannot see it.
+        if fixed_decay_s and recurrence != "selective":
+            raise ValueError(f"fixed_decay_s only acts on the selective recurrence, which reads it as a decay rate; "
+                             f"{recurrence!r} has no decay term, so the setting would be silently ignored")
         self.recurrence = recurrence
         self.update = nn.Linear(dim + statistics, dim) if recurrent else None
         # A GRU needs an update and a reset gate, both reading the state; minGRU (Feng et al., *Were RNNs All We Needed?*,

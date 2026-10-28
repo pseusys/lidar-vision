@@ -1534,3 +1534,38 @@ class TestASpawnedSlotReadsItsOwnCandidate:
         assert second.events.matched.any(), "the slots must match on the second frame"
         assert not (second.events.source >= 0).any(), "nothing should spawn on the second frame"
         assert torch.isfinite(second.slots.state).all()
+
+
+class TestFixedDecayNeedsTheSelectiveRecurrence:
+    """Found by a pre-freeze audit, 2026-10-28: `--fixed-decay-s` is a silent no-op under the adopted recurrence.
+
+    `fixed_decay_s` is read in exactly one place -- inside `_recur`'s `selective` branch, as `1 / fixed_decay_s`.
+    `gru` and `mingru` have no decay term at all, so under them the flag is stored, restored from a checkpoint,
+    passed to the constructor, and then **ignored**. `--recurrence` now defaults to `mingru` (item 52), so
+    `step3a --fixed-decay-s 8` today trains a model bit-identical to the control and would report the control's
+    number as A51's D3 -- which `TODO.md` queues for re-running on the adopted recipe. That is exactly the
+    `--global-state` failure class: parsed, plumbed, inert.
+
+    `TestEveryStage3FlagReachesTheModel` cannot catch it, because the flag *does* reach the constructor. Refusing the
+    combination is the same guard `iterations` and `global_state` already use.
+    """
+
+    def test_a_fixed_decay_with_mingru_is_refused(self):
+        with pytest.raises(ValueError, match="fixed_decay_s"):
+            ObjectMemory(SlotRules(capacity=8), dim=16, heads=2, recurrence="mingru", fixed_decay_s=8.0)
+
+    def test_a_fixed_decay_with_the_plain_gru_is_refused_too(self):
+        with pytest.raises(ValueError, match="fixed_decay_s"):
+            ObjectMemory(SlotRules(capacity=8), dim=16, heads=2, recurrence="gru", fixed_decay_s=8.0)
+
+    def test_the_selective_recurrence_still_accepts_it(self):
+        """The guard must not break D3 itself, which is the arm the flag exists for."""
+        memory = ObjectMemory(SlotRules(capacity=8), dim=16, heads=2, recurrence="selective", fixed_decay_s=8.0)
+
+        assert memory.decay is None, "a fixed decay replaces the learned one"
+        assert memory.fixed_decay_s == 8.0
+
+    def test_zero_means_off_under_every_recurrence(self):
+        """0.0 is the default and must stay inert, or every adopted run would refuse to build."""
+        for recurrence in ("selective", "gru", "mingru"):
+            ObjectMemory(SlotRules(capacity=8), dim=16, heads=2, recurrence=recurrence, fixed_decay_s=0.0)
