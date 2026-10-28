@@ -27,6 +27,12 @@ weaker prior than the one this arm answers.
 out of the CPU budget after `--dim 64`'s 28%, since both of stage 3's costly terms -- the recall attention and
 `manage_slots`' distance matrix -- are O(K). A loss keeps 256 and closes the question for good.
 
+**After this chain, both replays must be re-pointed at `a74_fixed256_s0`.** The capacity replay and the odometry
+replay were both run against `a71_dim64_s0`, which carries the item 54 spawn defect, so re-running either on that
+checkpoint would re-measure a known-buggy model. The capacity replay also becomes a useful cross-check once
+`slots128` exists: a trained 128-slot arm and a replayed one should agree in direction, and a disagreement would say
+the replay understates capacity in the way its own docstring warns about.
+
     python queue_item50.py --list
 """
 
