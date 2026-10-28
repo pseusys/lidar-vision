@@ -38,6 +38,52 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 54 fixed, and an audit for its whole bug class finds nothing else (2026-10-28)
+
+*keywords: item 54, spawned slot, match_index, refill, sentinel index, clamp, audit, bug class, gather*
+
+**The fix is one line and the test was written first.** Two candidates spawn two slots; moving candidate 0 forty
+metres changed the state of the slot spawned from candidate 1, which it must not. `where(refill, events.source,
+events.match_index)` is the selection the two sibling lines in the same function already use. A second test guards the
+matched path, which was always correct. 1088 pass.
+
+**What the defect actually cost is bounded, and worth stating precisely.** A spawned slot's *state* was initialised
+correctly (`spawn(own encoding)`), its *statistics* were correct (`observed_score` already selected by `refill`), and
+its position, value and age all came from `manage_slots`, which was right. **Only the encoding added to its first
+minGRU input was wrong** -- it got the frame's strongest candidate instead of its own. So this is a one-frame
+perturbation of each new slot, not a persistent corruption, which is consistent with the measured effect at random
+init being small (0.007 on a state of order 1).
+
+### The audit, because a bug has a class and the class is auditable
+
+The class is **a sentinel index clamped into range and silently reading element 0**. `manage_slots` writes `-1` for
+"no candidate" in both `match_index` and `source`, and a `.clamp(min=0)` turns that into a read of candidate 0 --
+which `decode_candidates` makes the *strongest* candidate, since it sorts by descending score. Every such site was
+checked against one question: **is the bogus value discarded by a mask?**
+
+| site | index | guarded by | verdict |
+| --- | --- | --- | --- |
+| `manage_slots` position/value refill | `source.clamp` | `where(refill, …)` | safe |
+| `_value_with_gradient` | `match_index.clamp` | `where(events.matched, …)` | safe |
+| `step`, spawn | `source.clamp` | `where(refill, spawned, state)` | safe |
+| `step`, `observed_score` | both | `where(refill, …)` and `* matched` | safe |
+| `step`, non-recurrent `target` | `where(refill, source, match_index)` | discard row | safe -- **the pattern item 54 should have followed** |
+| `step`, `matched_encoding` | `match_index.clamp` | **nothing** | **ITEM 54** |
+| `visibility_feature` | `where(inside, index, 0)` | `where(inside, …)` | safe |
+| `manage_slots` `nearest_candidate` | `argmin` over all-`inf` | `inf <= gate` is False | safe |
+| `evaluate`'s `slot_age` | `match_index[matched]` | filtered by `matched` | safe |
+| `tracking_baselines`' `which` | `which[matched]` | filtered by `matched` | safe |
+
+**And the adjacent class -- mask polarity -- is clean too.** Every place that should ask "did this slot get a
+candidate this frame?" uses `matched | refill` (the statistics feature, the non-recurrent `taken`, the encoding mask),
+and `_coasting` correctly uses `alive & ~matched & ~refill`, so a slot that has just spawned cannot coast. **Item 54
+was the single deviation in the file.**
+
+**One semantic gap found that is not a bug**, recorded so it is not mistaken for one later: `evaluate`'s `slot_age`
+diagnostic is `NaN` for a candidate whose slot *spawned* this frame, because it filters on `matched` alone. That is
+documented behaviour ("NaN where no slot matched") and the age would be 0 anyway, but any future analysis of item
+14's creation rule will see `NaN` for every first appearance rather than a zero.
+
 ## The diagram shows that frame t's bookkeeping decides frame t, and a spawn defect is found (2026-10-28)
 
 *keywords: docs/ARCHITECTURE.md, manage_slots, ObjectMemory.step, step order, match_index, refill, spawned slot, item 54*

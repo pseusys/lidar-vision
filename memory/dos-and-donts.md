@@ -119,6 +119,18 @@ would *split* a candidate's attention, true only of the particular initialisatio
 holds for any weights because a softmax's denominator grows — and which is also the property that *discriminates* the
 mechanism, since a candidate-axis softmax would leave the first slot's weight untouched.
 
+**DON'T clamp a sentinel index without checking a mask discards the result.**
+`manage_slots` writes `-1` for "this slot got no candidate", and `.clamp(min=0)` turns that into a read of **element
+0** -- which `decode_candidates` makes the frame's *strongest* candidate, because it sorts by descending score. So the
+failure mode is not a crash or an obvious garbage value: it is the most plausible-looking wrong answer in the batch,
+which is why item 54 survived from E7 until someone read the code against a diagram.
+**The question to ask at every such site is "what discards this?"** -- a `where(mask, …)` around the result, a
+multiplication by the mask, or a filter on `matched` before indexing. Item 54's two sibling lines had one and it did
+not. A 2026-10-28 audit of all ten sites in the detector found exactly one unguarded, and the list is in
+`CHANGELOG.md` so it does not have to be rebuilt.
+**In NumPy this class is worse than in torch**: `-1` is a legal index that silently wraps to the *last* element, with
+no clamp needed and no error.
+
 **DON'T read "the forward is finite" as evidence that the backward is.**
 They are different properties, and for masked attention the backward is the fragile one.
 Item 42 shipped four degenerate-frame tests -- no live slot, no valid candidate, an empty memory, a twelve-frame run --
