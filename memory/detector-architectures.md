@@ -42,6 +42,51 @@ It breaks the lifecycle above in two places: there is no `T`-scan window (one sc
 
 ### The frozen architecture (2026-10-18; the recurrence changed 2026-10-23)
 
+## The architecture sweep, consolidated (2026-09 to 2026-10-28)
+
+**Fourteen architectural questions were measured. Two were load-bearing.** Every row below is FROG `official` test at
+stride 5, memory AP, seed 0 unless stated. **Read the `gain` column, not the AP**: arms sit on two different stage 2s
+(candidates 82.22-82.24 before item 44(a), 82.76 after), so AP is not comparable across that line while the memory's
+own contribution is.
+
+| question | item | arm | memory AP | gain | verdict |
+| --- | --- | --- | ---: | ---: | --- |
+| **per-object addressability** | 36 | one global state | 82.44% | **+0.22** | **LOAD-BEARING** -- 6% of the slots' gain |
+| **object vs spatial binding** | 22 | grid slots, 1 m | 84.46% | **+1.70** | **LOAD-BEARING** -- 44% of it |
+| ” | 22 | grid slots, sensor frame | 83.62% | +0.86 | 22% |
+| ” | 22 | grid slots, 2 m *(screen)* | 83.47% | +0.71 | 19% |
+| recurrence rule | 16 | gru / mingru / selective | 85.9-86.4% | ~+4 | tie; minGRU adopted as citable |
+| position refinement | 46 | `--refine` | 86.24% | +4.03 | tie; coverage unchanged |
+| association | 43 | hungarian | 86.08% | +3.86 | tie on AP **and** CPU |
+| the 1 s curriculum | 41 | `--chunk-s 10` | 85.97% | +3.75 | tie, 24% cheaper -- **removed** |
+| whole-scan aggregator | 40 | `--no-aggregator` | (stage 2) 82.24% | -- | tie -- **removed** |
+| slot-state width | 49 | `--dim 64` | 86.12% | +3.87 | tie, **-28% CPU** -- **adopted** |
+| attention heads | 49 | `--heads 8` | 85.99% | +3.74 | tie, no cost change -- dropped |
+| stage-2 beam target | 44a | soft Gaussian | (stage 2) 82.79% | -- | **+0.69 pp at 3 seeds -- adopted** |
+| the published head | 44b | peaks, no votes | (stage 2) 75.35% | -- | dropped without an arm, -7.4 pp |
+| Slot Attention's update | 42 | `--iterations 3` | -- | -- | **never scored** -- NaN guard at epoch 20 |
+| block / widths / depth / kernel / expansion | 19, 45 | five stage-2 knobs | ~82.2% | -- | all tie |
+| sensor-frame vote targets | 18 | `--vote-frame sensor` | -- | -- | **worse** |
+| recall width `sigma_m` | 39 | replay sweep | -- | -- | dose-response; confirms 36 |
+
+**The two that mattered answer the same question from opposite sides**, and together they are the contribution:
+item 36 says the memory must be *addressable* (one global state keeps 6% of the gain), item 22 says the addressing
+must be *to objects* (binding to room cells at the same capacity keeps 44%). Nothing else moved the number.
+
+**Nine ties is the real finding about the rest.** Recurrence, association, refinement, curriculum, aggregator, width,
+heads, block and the stage-2 shape knobs all sit inside E13's 1.32 pp bar. That is why the adopted model is *smaller*
+than the one the project started with: every tie was resolved towards the cheaper or simpler option, which is E13's
+standing rule.
+
+**One arm has no number and must be described as such**: item 42 trained 19 epochs and died on a non-finite-gradient
+guard whose cause was never found. It is the single idea implemented and never scored.
+
+**A caveat that governs the freeze.** `--dim 64` was measured on the **hard-label** stage 2 (candidates 82.24) and the
+soft Gaussian target was adopted afterwards, so **the adopted combination -- soft labels + `dim 64` -- has never been
+run end to end.** Each component tied or won against its own control, but items 40 and 41 are the precedent for why
+that is not sufficient: both tied individually and "both at once" still needed its own measurement. The freeze is that
+measurement.
+
 **Stage 2 trains against a soft Gaussian beam target as of 2026-10-27** (`TODO.md` item 44(a)): each beam's
 classification target is `exp(-d^2 / 2 sigma^2)` in **metres** with `sigma = 0.3 m`, clipped to 1 where people overlap,
 over exactly the beams the hard label marked positive (`--label-radius`, 0.6 m). Only the values change, hard 1 to a
