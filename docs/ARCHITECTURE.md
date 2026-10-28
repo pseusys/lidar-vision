@@ -95,24 +95,37 @@ flowchart TD
         HEAD --> NMS["nms-mean decode<br/>0.5 m suppression,<br/>probability-weighted centre"]
     end
 
-    NMS --> CAND["candidates<br/>P × (score, x, y) + pooled features"]
+    NMS --> CAND["candidates at frame t<br/>P × (score, x, y) + pooled features"]
 
-    subgraph S3["Stage 3 — object memory (223,234 param at dim 128; see table)"]
+    subgraph S3["Stage 3 — object memory (STATEFUL across frames)"]
         CAND --> ENCODE["encode<br/>5 geometric + 32 pooled → dim"]
-        POSE["robot pose<br/>x, y, θ"] --> WORLD["sensor → room transform"]
+        POSE["robot pose x, y, θ<br/>+ dt since previous frame"] --> WORLD["sensor → room transform"]
         CAND --> WORLD
-        WORLD --> MANAGE["manage_slots  (no_grad, rule-based)<br/>mutual-nearest match · spawn · evict · retire"]
-        MANAGE --> SLOTS[("K object slots<br/>position, velocity, origin,<br/>age, since-match, hit-rate,<br/>value, learned state")]
-        SLOTS --> RECUR["minGRU per slot<br/>state ← gate(state, update)"]
+        PREV[("slots at t−1<br/>K × (alive, value, position, velocity,<br/>origin, age, since-match,<br/>hit-rate, learned state)")] --> MANAGE
+        WORLD --> MANAGE["manage_slots  (no_grad, rule-based)<br/>mutual-nearest match · spawn · evict · retire<br/>· advance by velocity · fade value"]
+        MANAGE --> RECUR["minGRU per slot<br/>state ← gate(state, update)"]
         ENCODE --> RECUR
-        RECUR --> RECALL["recall: biased attention<br/>candidate → slots, −d²/2σ²"]
-        SLOTS --> RECALL
+        RECUR --> NEW[("slots at t<br/>same K, updated")]
+        NEW --> RECALL["recall: biased attention<br/>candidate → slots, −d²/2σ²"]
+        ENCODE --> RECALL
         RECALL --> RESCORE["rescore head<br/>logit += gate · MLP(enc, recalled)"]
         ENCODE --> RESCORE
     end
 
-    RESCORE --> OUT["rescored detections<br/>score, x, y"]
+    RESCORE --> OUT["rescored detections at t<br/>score, x, y"]
+    NEW ==>|"carried to frame t+1 — THIS EDGE IS THE CONTRIBUTION"| PREV
 ```
+
+**The edge from `slots at t` back to `slots at t−1` is the architecture's whole point.** Stages 1 and 2 are
+*stateless*: they see one scan and nothing else, which is what makes every temporal claim attributable to stage 3.
+Stage 3 is a **recurrence over frames** — `step(candidates, pose, dt, slots) → (detections, slots′)`, and the caller
+carries `slots′` into the next call. A person who was seen a moment ago is still in a slot; that is how the memory
+rescores a weak candidate the single-scan detector would have discarded.
+
+Two consequences follow from the loop and are worth stating with it. It is **online and causal** — one scan per call,
+no lookahead, no `T`-scan window, which is why the detector runs at batch 1 on a robot. And the state is **carried
+per stream**, so `reset` exists to empty it at a recording boundary; without that, one recording's slots would leak
+into the next.
 
 ### Stage 1 — per-beam features, no parameters
 
