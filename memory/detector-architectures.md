@@ -42,6 +42,26 @@ It breaks the lifecycle above in two places: there is no `T`-scan window (one sc
 
 ### The frozen architecture (2026-10-18; the recurrence changed 2026-10-23)
 
+**Slot capacity, replayed (2026-10-28, `TODO.md` item 50).** `a71_dim64_s0` played at other slot counts with its
+weights untouched, scored on the soft-label stage 2:
+
+| slots | 32 | 64 | **128** | 256 | 512 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| memory AP | 84.78% | 84.67% | **85.01%** | 85.01% | 85.01% |
+| gain | +2.03 | +1.91 | **+2.25** | +2.26 | +2.26 |
+
+**128 is the knee**: it ties 256, 512 adds nothing, and there is a real cliff below it (64 loses 0.35 pp). So the
+adopted 256 is twice the capacity the model uses. A flat replay curve is weak evidence for *adding* capacity -- the
+weights adapted to 256 -- but is decent for *removing* it, since a model that needed those slots would lose
+immediately, and at 64 it does. **Confirmation by a trained arm is `TODO.md` item 50** (`queue_item50.py`), against
+`a71_dim64_s0`'s 86.12% on the same hard-label stage 2, so capacity is the only variable.
+
+**Read the absolute numbers with care**: this replay plays a memory trained on the *hard-label* stage 2 against
+*soft-label* candidates, which costs 1.11 pp (85.01% here against the arm's own 86.12%). The curve is valid because
+all five points share that mismatch; the level is not comparable to a trained arm. **The results JSON was lost to a
+duplicate-key crash in the writer after the sweep had run** -- the numbers above come from the run's stdout, and the
+bug is fixed, so a re-run will produce `results/item50_slots.json`.
+
 ## The architecture sweep, consolidated (2026-09 to 2026-10-28)
 
 **Fourteen architectural questions were measured. Two were load-bearing.** Every row below is FROG `official` test at

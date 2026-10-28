@@ -330,7 +330,9 @@ def slots(args, device) -> Dict:
                          gain=(r["memory"]["ap"] - r["candidates"]["ap"]) * 100))
         print(f"  slots {capacity:4d}: memory AP {rows[-1]['ap']:.2f}%  candidates {rows[-1]['candidates_ap']:.2f}%"
               f"  gain {rows[-1]['gain']:+.2f}", flush=True)
-    return dict(rows=rows, memory=str(args.memory), stride=args.stride)
+    # No `memory` key: `main` injects one, and returning it here raised "dict() got multiple values" *after* the
+    # whole sweep had run -- eight minutes of work lost to the write, not the compute.
+    return dict(rows=rows, stride=args.stride)
 
 
 EXPERIMENTS = dict(horizon=horizon, odometry=odometry, crowding=crowding, cost=cost, flaky=flaky, sigma=sigma,
