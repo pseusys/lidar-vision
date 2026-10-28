@@ -224,6 +224,21 @@ larger than measured. Against FROG's **25 ms** period, median headroom goes 4.94
 2.3-2.8 -> **4.3-4.8 ms**. Accuracy ties: 86.12% against 86.20%, recall at matched false positives 96.5% against
 96.43%.
 
+**Odometry drift on the adopted architecture (2026-10-28, `results/odometry_adopted.json`).** The room frame is this
+design's central claim and it is bought from odometry, so its price matters. Replayed on `a74_fixed256_s0`:
+
+| drift (m/s) | 0 | 0.005 | 0.020 | 0.050 | 0.100 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| adopted, room frame AP | **85.73%** | 85.09% | 84.57% | 83.13% | 81.82% |
+| recall | 95.85% | 95.53% | 95.45% | 94.74% | 94.03% |
+| A51 E2, old architecture | 83.88% | 82.96% | 81.25% | 78.27% | 73.10% |
+
+**At 0.1 m/s the adopted model loses 3.91 pp where the old one lost 10.78.** So **E2's conclusion does not transfer**:
+"the room frame's advantage survives only below roughly 0.01-0.02 m/s and inverts above it" described the superseded
+architecture. No sensor-frame arm exists on the adopted recipe, so the crossover cannot be re-measured; carrying A51's
+relative -1.31 pp gap onto this baseline puts it near **0.04-0.05 m/s** against FROG's 0.005-0.025 m/s of real drift.
+**That last figure is an extrapolation, not a measurement.**
+
 **What the ladder leaves.** With phase 1's decomposition — about half the lead over LFE-Peaks is the output head: centre votes, aggregation, NMS — what remains is **the network's form and the training recipe**, and those two have not been separated. **Nor has any part of the form been shown to carry it** (2026-10-25): block and widths (items 19a, 19b), depth, kernel and expansion (item 45) and the whole-scan aggregator (item 40) all tie, so this half of the lead currently has no identified owner. Doing so needs LFE's architecture trained the way ours is, which was attempted and dropped (`TODO.md` §A item 7): 29 convolutions reproduce in order from the released graph, but two blocks' dataflow did not resolve without a shape-inference pass. **The pre-print states this as a limitation rather than a result.**
 
 ## TAKHeLiPeD's cost, end to end, one scan at a time

@@ -50,6 +50,12 @@ weights untouched, scored on the soft-label stage 2:
 | memory AP | 84.78% | 84.67% | **85.01%** | 85.01% | 85.01% |
 | gain | +2.03 | +1.91 | **+2.25** | +2.26 | +2.26 |
 
+**Re-run on fixed weights and its own stage 2, there is no knee at all** (2026-10-28): 32 / 64 / 128 / 256 / 512
+score 85.61 / 85.71 / 85.75 / 85.73 / 85.73%, so even 32 slots loses 0.12 pp. The "cliff at 64" in the first replay
+was an artefact of playing a hard-label memory against soft-label candidates. **For 128 the replay says +0.02 pp
+where the trained arm says -0.74: the replay is wrong by 0.76 pp**, in the direction that would have caused an
+adoption.
+
 **The replay said 128 is the knee -- and a trained arm contradicted it (2026-10-28).** Trained at 128 the memory
 scores **84.99% against 256's 85.73%**, a **0.74 pp loss**, where the replay had them tied to two decimals. The
 replay evicts under the *same trained policy*; a model trained at 128 learns a more conservative one (precision

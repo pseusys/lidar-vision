@@ -38,6 +38,61 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Both replays re-run on fixed weights: a cliff that was an artefact, and the room frame's real price (2026-10-28)
+
+*keywords: replay vs trained, capacity cliff artefact, odometry drift, room frame, A51 E2, stage-2 mismatch, timeout guard*
+
+Re-run on `a74_fixed256_s0` -- **fixed code, and paired with its own hard-label stage 2** -- which removes both defects
+of the first attempt: the item 54 bug and a stage-2 mismatch that had cost 1.11 pp of absolute level.
+
+### Capacity: the "cliff at 64" was an artefact of the mismatch, and the replay is wrong by 0.76 pp
+
+| slots | 32 | 64 | 128 | 256 | 512 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| memory AP | 85.61% | 85.71% | **85.75%** | 85.73% | 85.73% |
+| gain | +3.37 | +3.47 | +3.51 | +3.48 | +3.48 |
+
+**There is no cliff.** Even 32 slots loses only 0.12 pp. The first replay showed 64 dropping 0.35 pp below 128, and I
+used that cliff to argue the flat curve was "decent evidence in the reducing direction, because a model that needed
+those slots would lose immediately, and at 64 it visibly does". **That reasoning rested on an artefact**: the cliff
+came from playing a hard-label-trained memory against soft-label candidates, not from capacity.
+
+**And the replay-vs-trained gap is now cleanly quantified.** For 128 slots the replay says **+0.02 pp** against 256;
+the trained arm says **-0.74 pp**. The replay is wrong by **0.76 pp** on this parameter, in the direction that would
+have caused an adoption. That is the sharpest possible vindication of insisting on a trained arm, and it sets the
+price of the shortcut: on a parameter the training policy can adapt to, a replay is not evidence of a tie.
+
+### Odometry: the adopted architecture degrades far more gracefully than A51's
+
+| drift (m/s) | 0 | 0.005 | 0.020 | 0.050 | 0.100 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| **adopted**, room frame AP | **85.73%** | 85.09% | 84.57% | 83.13% | 81.82% |
+| loss from zero | -- | -0.64 | -1.16 | -2.60 | **-3.91** |
+| recall | 95.85% | 95.53% | 95.45% | 94.74% | 94.03% |
+| *A51 E2, old architecture* | *83.88%* | *82.96%* | *81.25%* | *78.27%* | *73.10%* |
+| *its loss from zero* | -- | *-0.92* | *-2.63* | *-5.61* | ***-10.78*** |
+
+**At 0.1 m/s the adopted model loses 3.91 pp where the old one lost 10.78** -- not quite a third of the degradation.
+The room frame is therefore a much safer bet than E2 implied, and E2's headline conclusion ("the room frame's
+advantage survives only below roughly 0.01-0.02 m/s and inverts above it") **does not transfer to the adopted
+architecture**.
+
+**The crossover estimate, stated as an estimate.** No sensor-frame arm exists on the adopted recipe -- `a51_d1_sensor_s*`
+and `a67_sensor_s*` are older architectures, `grid1m_sensor` is cell-binding -- so the sensor-frame line cannot be
+re-measured without ~7 h of training. Carrying A51's *relative* gap (-1.31 pp at zero drift) onto this baseline puts a
+hypothetical adopted sensor-frame arm near 84.4%, which the room frame beats out to roughly **0.04-0.05 m/s** rather
+than E2's 0.015. FROG's robot drifts **0.005-0.025 m/s**, so the adopted model sits comfortably inside the region
+where room coordinates win, where the old one was marginal. **This is an extrapolation, not a measurement**, and the
+write-up should say so; the measured half is the degradation curve above.
+
+### A process note: the timeout guard earned its place
+
+Both replays exited **124** -- `timeout`'s kill code -- *after* writing their results: each hung past its own exit in
+the ROCm teardown pattern. The first attempt at these two replays was chained in one shell block with `;`, and the
+hung first process **blocked the second from ever starting**, which cost the odometry sweep entirely and was
+misdiagnosed at the time as "odometry is working". Running each under `timeout 1200` turned a silent indefinite block
+into a bounded one with both results on disk.
+
 ## Item 50: 128 slots loses when trained, and item 54 cost nothing measurable (2026-10-28)
 
 *keywords: item 50, slot capacity, 128 slots, replay vs trained, item 54 effect size, a74_fixed256_s0, a74_slots128_s0*
