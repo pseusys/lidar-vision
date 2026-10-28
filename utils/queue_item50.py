@@ -41,10 +41,24 @@ ADOPTED = ("--no-exchange", "--no-learned-match", "--no-coast", "--recurrence", 
            "--dim", "64")
 GATE = Job(name="gate", cli=("-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"), cwd=REPO)
 
+CONTROL = CHECKPOINTS / "a74_fixed256_s0"
 OUT = CHECKPOINTS / "a74_slots128_s0"
 
 JOBS = [
-    Job(name="slots128", outputs=(OUT / "step3a_results.json",),
+    # **The control, and it has to be re-trained because of item 54.** `a71_dim64_s0` (86.12%) was the control until
+    # 2026-10-28, when the spawn defect was fixed: a slot spawned in a frame took candidate 0's encoding -- the
+    # frame's strongest -- into its first update instead of its own. Every stage-3 checkpoint on the adopted recipe
+    # carries it, so comparing a fixed-code arm against `a71_dim64_s0` would be two variables.
+    #
+    # This arm is `a71_dim64_s0`'s **exact configuration on fixed code**, so it does double duty: it is the
+    # one-variable control for `slots128` below, and the difference from 86.12% is **what the defect cost** -- the
+    # only measurement of that, since re-running the whole sweep is not affordable.
+    Job(name="fixed256", outputs=(CONTROL / "step3a_results.json",),
+        cli=("train_takheliped.py", "step3a", "--stage2", str(STAGE2), *ADOPTED, "--slots", "256",
+             "--seed", "0", "--out-dir", str(CONTROL), "--resume")),
+
+    # Item 50 proper: the same thing at 128 slots. One variable against the arm above.
+    Job(name="slots128", outputs=(OUT / "step3a_results.json",), needs=("fixed256",),
         cli=("train_takheliped.py", "step3a", "--stage2", str(STAGE2), *ADOPTED, "--slots", "128",
              "--seed", "0", "--out-dir", str(OUT), "--resume")),
 ]
