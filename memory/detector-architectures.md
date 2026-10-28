@@ -93,7 +93,19 @@ own contribution is.
 | attention heads | 49 | `--heads 8` | 85.99% | +3.74 | tie, no cost change -- dropped |
 | stage-2 beam target | 44a | soft Gaussian | (stage 2) 82.79% | -- | **+0.69 pp at 3 seeds -- adopted** |
 | the published head | 44b | peaks, no votes | (stage 2) 75.35% | -- | dropped without an arm, -7.4 pp |
-| Slot Attention's update | 42 | `--iterations 3` | -- | +2.22 val @ e18 | **REOPENED 2026-10-28** (`TODO.md` item 53) -- to be finished cleanly |
+| Slot Attention's update | 42 | `--iterations 3` | -- | +2.22 val @ e18 | **NOT TRAINABLE AT THIS HORIZON** (item 53) -- see below |
+
+**Item 42's arm has no score because the published rule is unstable when the slots persist** (item 53, measured
+2026-10-28, from the batch the trainer saved). Slot Attention re-initialises its slots on every input, so it
+backpropagates through `state = state + mlp(state)` exactly `iterations` times. Our slots persist across the chunk, so
+`--iterations 3` applies that residual about 1,200 times in one backward graph. The gradient arriving at the carried
+state grows **2.1x per frame** (5.3e-1 at frame 290 to 1.1e16 at frame 240), reaches `inf` ~60 frames back and `NaN` 40
+frames later; the forward loss stays finite and the state magnitude saturates near 347, which is why three earlier
+forward-side checks cleared it. A length bisect is monotone: 50 frames -> 8.81, 150 -> `inf`, 300 -> `NaN`. The
+LayerNorms in the block normalise the state *entering* the attention and the MLP, never the state carried between
+frames. **`GRAD_CLIP` runs after `backward` and so cannot prevent it.** Scoring the row therefore needs a stabiliser --
+a per-frame gradient clip on the carried state is the only one that leaves the architecture, chunk and loss untouched
+and no-ops on the adopted arm -- which is a second change beyond the ablation as specified, and the owner's call.
 | block / widths / depth / kernel / expansion | 19, 45 | five stage-2 knobs | ~82.2% | -- | all tie |
 | sensor-frame vote targets | 18 | `--vote-frame sensor` | -- | -- | **worse** |
 | recall width `sigma_m` | 39 | replay sweep | -- | -- | dose-response; confirms 36 |

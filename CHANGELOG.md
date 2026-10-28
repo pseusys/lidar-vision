@@ -38,6 +38,42 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 53: item 42 died of gradient explosion through the persistent recurrence, not a bug (2026-10-28)
+
+*keywords: item 42, item 53, Slot Attention, NaN gradient, BPTT explosion, persistent recurrence, length bisect, GRAD_CLIP*
+
+Reproduced from the batch the trainer saved (`a70_slot_attention_s0/step3a_nan.pth`) and diagnosed. **There is no
+line-level defect.** The gradient arriving at the carried slot state, walking backward over the 399-frame chunk:
+
+| frame | 290 | 280 | 270 | 260 | 250 | 240 | 230 | 190 | 189 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| gradient norm | 5.3e-1 | 2.8e+2 | 1.7e+6 | 3.0e+10 | 3.4e+12 | 1.1e+16 | `inf` | `inf` | `NaN` |
+
+**2.1x per frame, clean exponential.** float32 overflows about 60 frames back from the chunk's end and `NaN` forms 40
+frames after that, while the forward loss stays finite (0.888 at 300 frames) and the state magnitude saturates near 347.
+A length bisect on the same batch is monotone: 50 frames gives a finite norm of 8.81; 150 gives `inf` with all 30
+parameter gradients still finite; 300 gives `NaN`. `GRAD_CLIP` runs *after* `backward`, so it can never prevent this.
+
+**The mechanism.** Published Slot Attention re-initialises its slots on every input, so `state = state + mlp(state)` is
+backpropagated through `iterations` times. Here slots persist, so the arm's `iterations=3` applies it about 1,200 times
+in one backward graph. The LayerNorms inside the block normalise the state *entering* the attention and the MLP, not the
+state *carried between frames* -- which is why the forward stays bounded and only the backward diverges.
+
+**Two earlier claims of mine were wrong and are retracted.** The MLP residual was listed as a *refuted* hypothesis
+(CHANGELOG 2026-10-25); it was refuted on forward boundedness plus synthetic-data gradients, neither of which tests BPTT
+growth on real data at real magnitudes -- it was the cause all along. And the fix comment added earlier that day claimed
+the threshold-and-substitute normalisation "bounds the backward everywhere"; the bisect ran with that change in place and
+still produced `NaN`, so the comment has been corrected.
+
+**The normalisation change is kept anyway, on its own merits and as a behaviour change rather than a no-op.** `total` is
+the weight a slot won across the frame's candidates, so a slot that won nothing previously had its numerical noise
+renormalised to a full-strength mean and now takes a zero update. Thresholding rather than testing `> 0` also keeps the
+division's backward bounded.
+
+**This does not touch the adopted architecture.** It runs one iteration per frame with minGRU's convex gate, and
+`a74_fixed256_s0` and `slots128` trained 42 and 28 epochs with the guard never firing. Item 42's row is therefore "not
+trainable at this horizon without a stabiliser", and choosing that stabiliser is an open decision.
+
 ## Both replays re-run on fixed weights: a cliff that was an artefact, and the room frame's real price (2026-10-28)
 
 *keywords: replay vs trained, capacity cliff artefact, odometry drift, room frame, A51 E2, stage-2 mismatch, timeout guard*

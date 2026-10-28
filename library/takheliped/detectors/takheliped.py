@@ -364,7 +364,20 @@ class _SlotAttention(nn.Module):
         attendable = cat([alive, ones_like(alive[:, :1])], dim=1)
         attention = softmax(logits.masked_fill(~attendable[:, None, :], float("-inf")), dim=-1)
         weights = attention[..., :-1] * valid[..., None]
-        weights = weights / weights.sum(dim=1, keepdim=True).clamp(min=PROBABILITY_EPS)
+        # **This normalisation is not the cause of item 42's NaN** -- `TODO.md` item 53 measured the cause instead, and it
+        # is the persistent recurrence, not any one line. Walking backward over a 399-frame chunk, the gradient arriving
+        # at the carried state grows about 2.1x per frame (5.3e-1 at frame 290, 1.1e16 at frame 240), overflows to inf
+        # roughly 60 frames back and turns to NaN 40 frames after that; the forward loss stays finite throughout.
+        # Published Slot Attention re-initialises its slots on every input, so it never backpropagates through more than
+        # `iterations` applications of the residual below -- here that residual is applied `iterations` times per frame
+        # for the whole chunk, and `GRAD_CLIP` runs after `backward`, so it cannot intervene.
+        # Substituting **1** for an empty denominator, rather than the original `clamp(min=PROBABILITY_EPS)`, is kept on
+        # its own merits and is a behaviour change in one corner rather than a no-op: `total` is the weight a slot won
+        # across the frame's candidates, so a slot that won nothing used to have its numerical noise renormalised to a
+        # full-strength mean and now takes a zero update. Thresholding rather than testing `> 0` also keeps the
+        # division's backward bounded (`1/den <= 1e6` instead of `-num/den**2` overflowing on a ~1e-30 sum).
+        total = weights.sum(dim=1, keepdim=True)
+        weights = weights / where(total > PROBABILITY_EPS, total, ones_like(total))
         return weights.transpose(-1, -2) @ self.to_v(items), attention
 
     def read(self, attention: Tensor, state: Tensor) -> Tensor:

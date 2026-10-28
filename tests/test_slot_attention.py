@@ -325,3 +325,82 @@ class TestTheDegenerateFrames:
 def _logit_of(score: torch.Tensor) -> torch.Tensor:
     p = score.clamp(1e-6, 1.0 - 1e-6)
     return torch.log(p) - torch.log1p(-p)
+
+
+class TestTheBackwardSurvivesAnEmptyAttentionRow:
+    """Backward-direction invariants for a degenerate attention row. **These are NOT a regression test for item 53.**
+
+    They were written as one and they do not qualify: they pass *before* the fix, because in these synthetic cases the
+    weight rows sum to exactly 0 and the gradient through the update is exactly 0 rather than NaN -- even with the
+    upstream gradient scaled to 1e12. The real failure needed the magnitudes of a 399-frame chunk with 256 slots and
+    64 candidates, which a one-frame unit test does not produce. Item 53's reproduction is the trainer's own saved
+    batch replayed under `set_detect_anomaly`, and that is what verifies the fix.
+
+    They are kept because they close the gap that let item 53 through in the first place: the four degenerate-frame
+    tests above assert `isfinite` on the **forward** only, and `memory/dos-and-donts.md` now has a rule about exactly
+    that. These two assert on `.grad` after a `backward()`.
+
+    What item 53 turned out to be, for the record:
+
+        RuntimeError: Function 'MulBackward0' returned nan values in its 0th output
+          takheliped.py  weights = attention[..., :-1] * valid[..., None]
+
+    The gradient *arriving* at that multiply was NaN, so the fault is downstream of it in forward order -- the
+    normalisation, whose `clamp(min=1e-6)` denominator makes `1/den` up to 1e6 and `-num/den**2` up to 1e12. The fix
+    substitutes 1 for an empty denominator instead of epsilon, which removes both unbounded factors.
+
+    Found by replaying the trainer's own saved batch under `set_detect_anomaly`, which named the line:
+
+        RuntimeError: Function 'MulBackward0' returned nan values in its 0th output
+          takheliped.py  weights = attention[..., :-1] * valid[..., None]
+
+    **The fault is an interaction, which is why three earlier probes all came back clean.** `attention` is a softmax
+    over slots; where the proximity bias drives real-slot logits to `exp(-large)` the entries underflow to exactly 0.
+    Multiplying by `valid` is finite forward. But the normalisation below divided by a denominator `clamp`ed to 1e-6,
+    so the *backward* arriving at that multiply carries a ~1e6 factor, and `MulBackward0` then forms `0 * inf` -> NaN.
+
+    Testing the clamp alone showed no gradient amplification -- correctly -- and testing degenerate frames showed a
+    finite *forward*. Neither could see the combination. **The fix removes the `0 * huge` term entirely**: substitute
+    1 for an empty denominator instead of epsilon, so the numerator's 0 divides by 1 and the backward's denominator is
+    never tiny.
+    """
+
+    def test_gradients_are_finite_when_a_candidate_contributes_nothing(self):
+        model = _memory(2)
+        with torch.no_grad():
+            model.rescore_gate.fill_(1.0)
+        g = torch.Generator().manual_seed(5)
+        # One valid candidate and one invalid, and slots far enough away that the proximity bias underflows the
+        # softmax for the real slots -- the exact pairing the trainer hit.
+        cand_xy = torch.tensor([[[0.0, 0.0], [0.0, 0.0]]])
+        slot_xy = torch.full((1, CAPACITY, 2), 60.0)
+        valid = torch.tensor([[True, False]])
+        alive = torch.ones(1, CAPACITY, dtype=torch.bool)
+        items = torch.randn(1, 2, DIM, generator=g, requires_grad=True)
+        state = torch.randn(1, CAPACITY, DIM, generator=g, requires_grad=True)
+
+        update, attention = model.attend(state, items, _proximity(cand_xy, slot_xy, model.sigma_m), valid, alive)
+        model.attend.read(attention, update).abs().sum().backward()
+
+        assert torch.isfinite(items.grad).all(), "item 53: NaN in the items gradient"
+        assert torch.isfinite(state.grad).all(), "item 53: NaN in the state gradient"
+        for name, p in model.attend.named_parameters():
+            if p.grad is not None:
+                assert torch.isfinite(p.grad).all(), f"item 53: NaN in {name}"
+
+    def test_an_all_invalid_frame_also_has_a_finite_backward(self):
+        """The limit case: every candidate masked out, so every weight row sums to zero."""
+        model = _memory(2)
+        g = torch.Generator().manual_seed(6)
+        cand_xy = torch.zeros(1, 3, 2)
+        slot_xy = torch.full((1, CAPACITY, 2), 80.0)
+        items = torch.randn(1, 3, DIM, generator=g, requires_grad=True)
+        state = torch.randn(1, CAPACITY, DIM, generator=g, requires_grad=True)
+
+        update, attention = model.attend(state, items, _proximity(cand_xy, slot_xy, model.sigma_m),
+                                         torch.zeros(1, 3, dtype=torch.bool),
+                                         torch.ones(1, CAPACITY, dtype=torch.bool))
+        (update.abs().sum() + attention.abs().sum()).backward()
+
+        assert torch.isfinite(items.grad).all()
+        assert torch.isfinite(state.grad).all()

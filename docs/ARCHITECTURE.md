@@ -9,9 +9,8 @@ single knee-height 2-D LiDAR.
 >
 > | outstanding | what it decides | `TODO.md` |
 > | --- | --- | --- |
-> | Slot Attention's own update | one row of the ablation ledger | item 53 |
+> | Slot Attention's own update | one row of the ablation ledger -- now **a decision, not a measurement** | item 53 |
 > | the three-seed freeze | **every number in the results table** | item 47 |
-> | a spawned slot's first update reads candidate 0, not its own | whether ② is drawn as the code does it; gates item 47 | item 54 |
 
 This document is **per-dataset by design**. The structure is general; the *parameters* are fitted to FROG and are
 expected to differ elsewhere. Later datasets get their own parameter sections rather than edits to this one.
@@ -65,10 +64,24 @@ stride 5. **Two were load-bearing.** The full ledger with numbers is in
 | the published voteless head (44b) | −7.4 pp even on its own objective → dropped |
 | block, widths, depth, kernel, expansion (19, 45) | all tie → defaults kept |
 | sensor-frame vote targets (18) | **worse** → beam frame |
-| Slot Attention's own update (42) | `PENDING` — item 53 |
+| Slot Attention's own update (42) | **not trainable at this horizon** — item 53 |
 
 **Nine ties are the finding about everything except the two load-bearing rows.** Each was resolved toward the cheaper
 or simpler option, which is why the adopted model is *smaller* than the one the project started with.
+
+> **Why item 42 has no score, stated as what was measured** (item 53, 2026-10-28). The arm did not hit an
+> implementation bug; it hit an instability that is a property of the idea as applied here. Published Slot Attention
+> re-initialises its slots from a learned Gaussian on every input, so it backpropagates through `iterations`
+> applications of `state = state + mlp(state)` and no more. This architecture's slots **persist**, so over a 10 s chunk
+> that residual is applied `iterations` times per frame for 399 frames -- about 1,200 deep in one backward graph.
+> Replaying the failing batch on its own weights, the gradient arriving at the carried state grows **2.1x per frame**
+> (5.3e-1 at frame 290, 1.1e16 at frame 240), overflows to `inf` about 60 frames back, and becomes `NaN` 40 frames
+> after that; the forward loss stays finite the whole way, and `GRAD_CLIP` runs after `backward`, so it cannot
+> intervene. A length bisect on the same batch is monotone -- 50 frames gives a finite gradient norm of 8.81, 150 gives
+> `inf`, 300 gives `NaN`.
+>
+> **So the published update rule is not a drop-in for a persistent memory at this horizon**, and scoring it requires
+> choosing a stabiliser, which is a second change rather than the ablation as specified. That choice is open.
 
 **What the two load-bearing results mean together.** Item 36 says the memory must be **addressable**; item 22 says the
 addressing must be **to objects, not to places**. Neither alone is the contribution — together they are.
@@ -177,11 +190,11 @@ retire; **minGRU** updates each surviving slot's state; a **biased recall attent
 slots near it, with an additive distance bias `−d² / 2σ²`; and a **rescoring head** adjusts each candidate's score
 from its own encoding plus what it recalled.
 
-> **`PENDING` — item 54, a defect in ②.** The diagram draws the intended rule; the code gets it right for a matched slot
-> and wrong for a spawned one. `step` gathers the candidate encoding by `events.match_index`, which is `-1` for a slot
-> spawned this frame, and the `clamp(min=0)` turns that into candidate 0 — the frame's strongest — while the mask
-> `matched | refill` still lets it in. The spawned state itself, `spawn(own encoding)`, is correct, and so are the
-> statistics. Every stage-3 number on the adopted recipe was trained with the defect.
+> **Item 54, a defect in ② — fixed and priced, 2026-10-28.** A slot spawned this frame has `events.match_index == -1`,
+> which `clamp(min=0)` turned into candidate 0, the frame's strongest, while the mask `matched | refill` still let it
+> in; the fix is the selection its two sibling lines already used, `where(refill, events.source, events.match_index)`.
+> **It was worth 0.39 pp** — inside the 1.32 pp bar and under the seed spread — so the sweep's absolute levels stand.
+> The diagram draws the fixed rule, and a class audit of all ten sentinel-clamp sites found no other instance.
 
 **The bookkeeping is not learned, and that is the design** — spawning, matching, eviction and retirement are discrete
 decisions with no gradient to give. Only the slot state, the recurrence and the rescoring head are trained.
@@ -257,7 +270,7 @@ Fitted to FROG `official`. **Other datasets get their own section; do not carry 
 | — of which stage 2 / decode / memory | 9.35 / 1.68 / 6.70 | measured |
 | phantoms per person-free frame | `PENDING` | `empty_scene.py` at 3 seeds |
 | stage-2 parameters | 960,323 | measured |
-| stage-3 parameters | `PENDING` (depends on `K`) | item 50 |
+| stage-3 parameters | **45,762** (independent of `K` — slots are state, not parameters) | measured |
 
 **The CPU figure is the one that decides deployment** (owner, 2026-10-19): FROG's frame period is **25 ms**, so
 17.73 ms median leaves 7.3 ms of headroom and the p99 leaves ~4.5 ms. A GPU number does not substitute.
