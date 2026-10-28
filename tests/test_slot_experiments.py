@@ -33,3 +33,23 @@ class TestOutputPath:
     @pytest.mark.parametrize("name", list(EXPERIMENTS))
     def test_every_experiment_is_reachable_by_name(self, name):
         assert callable(EXPERIMENTS[name])
+
+
+class TestTheSlotCapacityReplay:
+    """`TODO.md` item 50: 256 slots is the last number in the design nobody has priced.
+
+    It is a **replay**, like `sigma` and `cost`: `object_memory(..., capacity=k)` rebuilds a trained memory at another
+    slot count with its weights untouched, so the sweep costs minutes instead of an arm apiece. Read a flat curve
+    weakly -- the weights adapted to 256 -- but read a *cliff* strongly, because a capacity the model genuinely needs
+    cannot be taken away without one.
+    """
+
+    def test_the_experiment_is_registered(self):
+        assert "slots" in EXPERIMENTS
+
+    def test_the_capacities_bracket_the_adopted_count(self):
+        from slot_experiments import CAPACITIES
+
+        assert 256 in CAPACITIES, "the adopted count has to be in the sweep or there is nothing to compare against"
+        assert min(CAPACITIES) < 256 < max(CAPACITIES), "a sweep that only shrinks cannot show 256 is too small"
+        assert CAPACITIES == tuple(sorted(CAPACITIES)), "report them in order"

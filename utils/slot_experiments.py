@@ -52,6 +52,9 @@ TIMED_FRAMES = 500
 # Item 39, bracketing the adopted 0.6 m: half it, and on up to a width at which every slot is about equally near,
 # which is item 36's global-state arm approached from the other direction.
 SIGMAS_M = (0.3, 0.45, 0.6, 0.9, 1.5, 3.0)
+#: Item 50. Brackets the adopted 256 in both directions, because a sweep that only shrinks cannot show 256 is too
+#: small. FROG holds at most a few dozen people in view, so the low end is where the interesting answer lives.
+CAPACITIES = (32, 64, 128, 256, 512)
 # Item 37. Four shapes share a 20% drop so gap shape is separated from how much data was lost; the last raises the share
 # to 50% at the same shape. Bursts stay under 40 frames because MAX_DT_S is 1.0 s and a longer gap saturates the clamp.
 FLAKY_PATTERNS = (
@@ -300,7 +303,38 @@ def output_path(args) -> Path:
     return args.out if args.out is not None else args.out_dir / f"a51_{args.experiment}.json"
 
 
-EXPERIMENTS = dict(horizon=horizon, odometry=odometry, crowding=crowding, cost=cost, flaky=flaky, sigma=sigma)
+def slots(args, device) -> Dict:
+    """AP against the slot count (`TODO.md` item 50), the last number in the design nobody has priced.
+
+    **Replayed, not retrained.** `object_memory(..., capacity=k)` rebuilds the trained memory at another slot count
+    with its weights untouched -- the same trick `cost` uses to price the O(K) terms and `sigma` uses for the recall
+    width -- so the whole sweep costs minutes rather than one arm per point.
+
+    **Why it matters beyond tidiness.** Both of stage 3's costly terms are O(K): the recall attention over slots and
+    `manage_slots`' distance matrix. `--dim 64` already took 28% off the memory phase by halving the state *width*;
+    capacity is the other axis, and if the model is insensitive below 256 it is free CPU on the axis that decides
+    deployment.
+
+    **How to read it.** A flat curve is weak evidence -- the weights adapted to 256, so a replay understates how much
+    capacity matters. A **cliff** is strong: a capacity the model genuinely needs cannot be removed without one. Train
+    an arm only if a smaller count looks live.
+    """
+    model, split = load(args, device)
+    segments = evaluation_segments(split, 0, 0, 0)
+    checkpoint = torch.load(args.memory, map_location="cpu", weights_only=False)
+    rows = []
+    for capacity in CAPACITIES:
+        model = object_memory(checkpoint, split.data.features.shape[-1], capacity=capacity).to(device).eval()
+        r = evaluate(model, split, device, args.stride, args.streams, segments)
+        rows.append(dict(capacity=capacity, ap=r["memory"]["ap"] * 100, candidates_ap=r["candidates"]["ap"] * 100,
+                         gain=(r["memory"]["ap"] - r["candidates"]["ap"]) * 100))
+        print(f"  slots {capacity:4d}: memory AP {rows[-1]['ap']:.2f}%  candidates {rows[-1]['candidates_ap']:.2f}%"
+              f"  gain {rows[-1]['gain']:+.2f}", flush=True)
+    return dict(rows=rows, memory=str(args.memory), stride=args.stride)
+
+
+EXPERIMENTS = dict(horizon=horizon, odometry=odometry, crowding=crowding, cost=cost, flaky=flaky, sigma=sigma,
+                   slots=slots)
 
 
 def main() -> None:

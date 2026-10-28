@@ -312,13 +312,13 @@ class TestAttributionArmShapes:
     def test_step2_defaults_describe_today_s_network(self):
         """Exact equality on purpose: a new key here changes what every loader rebuilds, so adding one is a decision."""
         assert network_shape(self._stored([])) == dict(max_range_m=MAX_RANGE_M, input_features="beam", channels=(32, 64, 128),
-                                                       gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext", aggregator=True,
+                                                       gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext", aggregator=False,
                                                        kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2)
 
     def test_the_arms_flags_describe_their_network(self):
         shape = network_shape(self._stored(["--input-features", "lfe", "--channels", "8", "16", "32"]))
         assert shape == dict(max_range_m=MAX_RANGE_M, input_features="lfe", channels=(8, 16, 32),
-                             gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext", aggregator=True,
+                             gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext", aggregator=False,
                                                        kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2)
 
     def test_the_gather_flag_describes_its_network(self):
@@ -343,8 +343,12 @@ class TestAttributionArmShapes:
     def test_the_aggregator_describes_its_network(self):
         """Item 40: ablating it changes which weights exist, so it is part of the shape a checkpoint rebuilds from."""
         assert network_shape(self._stored(["--no-aggregator"]))["aggregator"] is False
-        assert network_shape(self._stored([]))["aggregator"] is True
-        assert network_shape({"max_range_m": "10.0"})["aggregator"] is True        # written before the flag existed
+        assert network_shape(self._stored([]))["aggregator"] is False       # item 52: the CLI default is the adopted arch
+        assert network_shape(self._stored(["--aggregator"]))["aggregator"] is True
+        # **The line that matters most here.** A checkpoint written before the flag existed must still rebuild *with*
+        # the aggregator, from the CONSTRUCTOR default -- which is why item 52 moved the CLI default and left that one
+        # alone. If this ever flips, every stage-2 checkpoint older than 2026-10-25 silently refuses its own weights.
+        assert network_shape({"max_range_m": "10.0"})["aggregator"] is True
 
     def test_the_vote_frame_and_the_block_describe_their_network(self):
         """Items 18 and 19: both change what the weights mean, so both are read back rather than defaulted."""
@@ -361,7 +365,8 @@ class TestAttributionArmShapes:
     def test_a_sensor_frame_checkpoint_rebuilds_knowing_which_frame_it_votes_in(self):
         """The decoders read `net.vote_frame`, so losing it would silently rotate every detection."""
         torch.manual_seed(0)
-        net = CalibrationNetwork(torch.from_numpy(self.ANGLES), channels=(8, 16, 32), vote_frame="sensor", block="residual")
+        net = CalibrationNetwork(torch.from_numpy(self.ANGLES), channels=(8, 16, 32), vote_frame="sensor", block="residual",
+                                 aggregator=False)      # item 52: what the stored args below now describe
         stored = self._stored(["--vote-frame", "sensor", "--block", "residual", "--channels", "8", "16", "32"])
 
         rebuilt = calibration_network(dict(model=net.state_dict(), args=stored), self.ANGLES)
@@ -370,7 +375,8 @@ class TestAttributionArmShapes:
 
     def test_a_checkpoint_rebuilds_into_the_network_it_was_trained_as(self):
         torch.manual_seed(0)
-        net = CalibrationNetwork(torch.from_numpy(self.ANGLES), channels=(8, 16, 32), input_features="lfe").eval()
+        net = CalibrationNetwork(torch.from_numpy(self.ANGLES), channels=(8, 16, 32), input_features="lfe",
+                                 aggregator=False).eval()      # item 52: what the stored args below now describe
         stored = self._stored(["--input-features", "lfe", "--channels", "8", "16", "32"])
         rebuilt = calibration_network(dict(model=net.state_dict(), args=stored), self.ANGLES).eval()
         scans = torch.rand(2, 48) * 8
@@ -1712,7 +1718,7 @@ class TestStage3SShapeFlags:
     def test_the_flags_exist_and_default_to_the_adopted_shape(self):
         flags = {a.dest: a for a in build_parser()._subparsers._group_actions[0].choices["step3a"]._actions}
 
-        assert flags["dim"].default == 128
+        assert flags["dim"].default == 64      # item 49, adopted 2026-10-27
         assert flags["heads"].default == 4
 
     def test_a_checkpoint_round_trips_its_own_width(self):
@@ -1744,10 +1750,11 @@ class TestTheSoftBeamTargetReachesStage2STraining:
     stage earlier, and the loss is the only place it can act.
     """
 
-    def test_the_flag_exists_and_is_off_by_default(self):
+    def test_the_flag_exists_and_defaults_to_the_adopted_width(self):
+        """Adopted 2026-10-27 after replicating at three seeds; `--label-sigma-m 0` restores the hard label."""
         flags = {a.dest: a for a in build_parser()._subparsers._group_actions[0].choices["step2"]._actions}
 
-        assert flags["label_sigma_m"].default == 0.0, "every stage-2 number on record was trained with hard labels"
+        assert flags["label_sigma_m"].default == 0.3
 
     def test_the_training_loop_builds_the_target_and_hands_it_to_the_loss(self):
         import inspect
@@ -1759,3 +1766,46 @@ class TestTheSoftBeamTargetReachesStage2STraining:
         assert "beam_heatmap(" in source, "the flag cannot act without building the target"
         assert "soft_labels=" in source, "the target cannot act without reaching compute_loss"
         assert "args.label_sigma_m" in source, "the target must be built from the flag, not a constant"
+
+
+class TestTheCliDefaultsAreTheAdoptedArchitecture:
+    """`TODO.md` item 52: running `step2`/`step3a` with no flags must train the architecture the project proposes.
+
+    **CLI defaults only -- the `ObjectMemory`/`CalibrationNetwork` constructor defaults deliberately do NOT move.**
+    `network_shape` and `object_memory` fall back to a *constructor* default for any flag a checkpoint predates, so
+    flipping those would make every older checkpoint rebuild in the new shape and refuse its own weights. The two
+    layers answer different questions: the constructor default is "what did a checkpoint that never recorded this
+    mean?", the CLI default is "what should a new run do?".
+    """
+
+    def _flags(self, mode):
+        return {a.dest: a for a in build_parser()._subparsers._group_actions[0].choices[mode]._actions}
+
+    def test_stage3_defaults_to_the_adopted_recipe(self):
+        f = self._flags("step3a")
+
+        assert f["recurrence"].default == "mingru"      # item 38
+        assert f["exchange"].default is False           # A51 E6
+        assert f["learned_match"].default is False      # A51 E7
+        assert f["coast"].default is False              # item 24
+        assert f["dim"].default == 64                   # item 49
+        assert f["chunk_s"].default == [10.0]           # item 41, no curriculum
+
+    def test_stage2_defaults_to_the_adopted_recipe(self):
+        f = self._flags("step2")
+
+        assert f["aggregator"].default is False         # item 40
+        assert f["label_sigma_m"].default == 0.3        # item 44(a)
+
+    def test_the_constructor_defaults_have_not_moved(self):
+        """The guard on the above: old checkpoints load against these, not against the CLI."""
+        from inspect import signature
+
+        from takheliped.detectors.takheliped import ObjectMemory
+
+        p = signature(ObjectMemory).parameters
+
+        assert p["dim"].default == 128, "an old checkpoint with no recorded dim is a 128-wide one"
+        assert p["recurrence"].default == "selective"
+        assert p["exchange"].default is True
+        assert p["learned_match"].default is True

@@ -46,6 +46,8 @@ Launch, when the owner says so, per `memory/long-running-tasks.md` -- Task Sched
     schtasks /run   /tn "lidar_freeze"
 """
 
+import os
+
 from run_queue import CHECKPOINTS, REPO, Job, main
 
 AVERAGED = "step2_calibration.averaged.pth"
@@ -89,9 +91,25 @@ def stage3(seed: int) -> Job:
                     "--seed", str(seed), "--out-dir", str(out), "--resume"))
 
 
-# Every stage 2 and its average first, then the three stage-3 arms: `run_queue`'s `ordered()` is layered and keeps
-# declaration order within a dependency layer, so a stage-2 failure stops its own seed without blocking the others.
-JOBS = [job for seed in SEEDS for job in stage2(seed)] + [stage3(seed) for seed in SEEDS]
+# **Seed 0 is a gate, not just the first arm** (the owner's procedure, 2026-10-28). The adopted combination -- the soft
+# Gaussian beam target *and* `--dim 64` -- has **never been run end to end**: `dim 64` was measured on the hard-label
+# stage 2 and the target was adopted afterwards. Each tied or won against its own control, but items 40 and 41 are the
+# precedent for why that is not enough: both tied individually and "both at once" still needed its own number.
+#
+# So the chain runs **seed 0 alone** and stops. If its test figure is near the components' (~86.1%), the remaining two
+# seeds are one command away and nothing has been wasted. If it is surprisingly bad, the rollback is cheap and
+# obvious -- `a71_dim64_s0` (hard labels, `dim 64`, 86.12%) and `a70_baseline_s0` (hard labels, `dim 128`, 86.20%) are
+# both on disk and already scored, so either component can be reverted without retraining it.
+#
+# `--steps 1`-style gating is not used because the stage-2 jobs are already `done`; listing only seed 0's arm here is
+# simpler and leaves the file honest about what it ran.
+GATE_SEED = 0
+REMAINING = (1, 2)
+
+JOBS = [job for seed in SEEDS for job in stage2(seed)] + [stage3(GATE_SEED)]
+#: Appended once seed 0 has been read and accepted -- `python queue_freeze.py --list` then shows all three.
+if os.environ.get("FREEZE_ALL_SEEDS"):
+    JOBS += [stage3(seed) for seed in REMAINING]
 
 
 if __name__ == "__main__":

@@ -1814,7 +1814,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--resume", action="store_true", help="continue from this run's saved state in --out-dir, written after every "
                                                              "evaluation; a crash then costs the time since it, not the whole run")
     for step1 in (sub.choices["step1"], sub.choices["step3a"]):
-        step1.add_argument("--chunk-s", type=float, nargs="+", default=[1.0, 10.0, 30.0], help="chunk-length curriculum, seconds")
+        step1.add_argument("--chunk-s", type=float, nargs="+", default=[10.0], help="chunk-length curriculum, seconds. Default is the adopted single 10 s stage (item 41): the 1 s warm-up tied and cost 24% of training time, and it carried two of the sweep's five out-of-memory failures through its 26-stream configuration. `--chunk-s 1 10` restores the curriculum")
         step1.add_argument("--max-epochs", type=float, default=100, help="per chunk length; patience usually ends a stage first")
         step1.add_argument("--patience", type=int, default=8, help="evaluations without a new best val AP")
         step1.add_argument("--min-epochs", type=float, default=5, help="per chunk length")
@@ -1850,9 +1850,9 @@ def build_parser() -> argparse.ArgumentParser:
         step1.add_argument("--recurrent", action=argparse.BooleanOptionalAction, default=True,
                            help="carry a learned state per slot; --no-recurrent leaves the rescoring head a candidate and the statistics of "
                                 "the slot matched to it, which tests whether this is a learned memory or a tracker with a scorer (TODO A51 E10)")
-        step1.add_argument("--exchange", action=argparse.BooleanOptionalAction, default=True,
+        step1.add_argument("--exchange", action=argparse.BooleanOptionalAction, default=False,
                            help="self-attention between slots; --no-exchange removes it, which is the design's only O(K^2) term (TODO A51 E6)")
-        step1.add_argument("--learned-match", action=argparse.BooleanOptionalAction, default=True,
+        step1.add_argument("--learned-match", action=argparse.BooleanOptionalAction, default=False,
                            help="cross-attention from slots to candidates; --no-learned-match leaves each slot the candidate its hand-coded "
                                 "association matched (TODO A51 E7). Both flags off together is a per-slot recurrent memory, the baseline "
                                 "a reviewer would ask for")
@@ -1870,7 +1870,7 @@ def build_parser() -> argparse.ArgumentParser:
         step1.add_argument("--rescore-gate", action=argparse.BooleanOptionalAction, default=True,
                            help="scale the rescoring by a scalar that starts at zero; --no-rescore-gate zero-initialises the head's last "
                                 "layer instead, which starts equally silent but leaves the head's own gradient unscaled (TODO A51 T1)")
-        step1.add_argument("--recurrence", choices=RECURRENCES, default="selective",
+        step1.add_argument("--recurrence", choices=RECURRENCES, default="mingru",
                            help="which rule updates a slot's state (TODO.md item 16). selective: a diagonal state whose "
                                 "decay rate is read off the input and applied over the real elapsed time, exp(-dt * rate) "
                                 "in seconds -- the adopted one, and D3 measured the learned rate as load-bearing. gru: the "
@@ -1895,7 +1895,7 @@ def build_parser() -> argparse.ArgumentParser:
                                 "addressability is load-bearing but never tested which kind. Sparse by construction: "
                                 "only occupied cells take a slot, which is what makes FROG's 120-250 m venue "
                                 "affordable where a dense person-scale grid would need ~46,000 cells")
-        step1.add_argument("--dim", type=int, default=128,
+        step1.add_argument("--dim", type=int, default=64,
                            help="width of a slot's state vector (TODO.md item 49). Never varied: item 45 swept stage "
                                 "2's four shape knobs and deferred this one and --heads to the stage-3 half, which "
                                 "then never ran, so the adopted 128 is a choice nobody has priced. It is also the one "
@@ -2014,7 +2014,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "where --channels is width and item 19 found width flat (TODO.md item 45)")
     step2.add_argument("--bottleneck-blocks", type=int, default=None, metavar="B",
                        help="how many blocks at the N/8 bottleneck; unset is the constructor's 2 (TODO.md item 45)")
-    step2.add_argument("--aggregator", action=argparse.BooleanOptionalAction, default=True,
+    step2.add_argument("--aggregator", action=argparse.BooleanOptionalAction, default=False,
                        help="give the bottleneck the whole-scan max beside its own features, which is the one path by "
                             "which one end of the field of view reaches the other end's logits (TODO.md item 40). "
                             "--no-aggregator ablates it and halves `aggregate`'s input width. Named as a defining "
@@ -2036,7 +2036,7 @@ def build_parser() -> argparse.ArgumentParser:
                        "run before it did (TODO.md A59)")
     step2.add_argument("--label-radius", type=float, default=LABEL_RADIUS_M, help="distance from a person's centre within which a beam is "
                        "a positive and votes for them; DR-SPAAM uses 0.35 m, FROG's circles are 0.4 m")
-    step2.add_argument("--label-sigma-m", type=float, default=0.0,
+    step2.add_argument("--label-sigma-m", type=float, default=0.3,
                        help="replace the hard per-beam label with a Gaussian of this width in METRES, keeping the vote "
                             "head and nms-mean (TODO.md item 44(a)); 0, the default, keeps the hard label and every "
                             "stage-2 number on record. The decoder half of item 44 is already measured on fixed "
