@@ -19,7 +19,7 @@ from takheliped.detectors.takheliped import MAX_RANGE_M, CalibrationNetwork, Obj
 from takheliped.utils.drow_utils import _win2global, swap_vote_frame
 from train import make_targets
 from train_takheliped import (
-    BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, coast_targets, decode_votes, evaluate, evaluation_segments,
+    BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, clip_state_grad, coast_targets, decode_votes, evaluate, evaluation_segments,
     FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
     DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, matched_person_xy, coasting_hits, exponential_schedule, network_shape, select_test_weights, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
     union_decode,
@@ -1809,3 +1809,68 @@ class TestTheCliDefaultsAreTheAdoptedArchitecture:
         assert p["recurrence"].default == "selective"
         assert p["exchange"].default is True
         assert p["learned_match"].default is True
+
+
+class TestTheCarriedStateGradientClip:
+    """`TODO.md` item 53: one frame's gradient at the carried slot state, bounded so a long chunk cannot compound.
+
+    **What these do not prove.** Reaching an actual float32 overflow needs ~300 frames of the real recurrence on real
+    candidates, which is minutes, not a unit test; that case is covered by the scratchpad replay of the batch
+    `a70_slot_attention_s0/step3a_nan.pth` saved, reported in `CHANGELOG.md`. What is testable cheaply is the bound
+    itself -- that it holds per frame, that it does nothing when the gradient is already small, and that compounding
+    is what it removes.
+    """
+
+    def test_a_gradient_above_the_bound_is_scaled_to_it(self):
+        grad = torch.tensor([[[3.0, 4.0]]])          # norm 5
+        out = clip_state_grad(grad, 1.0)
+        assert out.norm().item() == pytest.approx(1.0)
+        assert torch.allclose(out, grad / 5.0)       # direction preserved
+
+    def test_a_gradient_below_the_bound_is_untouched(self):
+        grad = torch.tensor([[[0.3, 0.4]]])          # norm 0.5
+        assert torch.equal(clip_state_grad(grad, 10.0), grad)
+
+    def test_a_non_finite_gradient_becomes_zero(self):
+        grad = torch.tensor([[[float("inf"), float("nan"), 2.0]]])
+        out = clip_state_grad(grad, 1.0)
+        assert torch.isfinite(out).all()
+        assert out.abs().sum().item() == 0.0
+
+    def test_without_the_hook_a_long_recurrence_compounds_and_with_it_it_does_not(self):
+        """The same residual recurrence, run twice: the gradient reaching the first frame grows without the bound.
+
+        The gain is kept mild on purpose. A first version used 2.3x over 60 frames, which overflowed the *forward* pass,
+        so it tested how an infinite loss is handled rather than whether compounding is removed -- the first thing this
+        bound has to do. Overflow has its own test above.
+        """
+        def run(bound):
+            torch.manual_seed(0)
+            weight = torch.eye(4) * 0.5
+            weight.requires_grad_(True)
+            state = torch.ones(1, 1, 4)
+            seen = []
+            loss = torch.zeros(())
+            for _ in range(30):
+                state = state + state @ weight
+                if bound:
+                    state.register_hook(lambda g: clip_state_grad(g, bound))
+                state.register_hook(lambda g: seen.append(float(g.norm())) or g)
+                loss = loss + state.pow(2).mean()
+            loss.backward()
+            return max(seen)
+
+        unbounded = run(None)
+        bounded = run(2.0)
+        assert unbounded > 1e5, f"the recurrence did not compound, so the test proves nothing: {unbounded}"
+        assert bounded <= 2.0 + 1e-5, f"the bound did not hold: {bounded}"
+
+    def test_the_clip_is_off_by_default_so_every_arm_already_measured_is_unaffected(self):
+        """Turning this on by default would silently change the gradient estimator of `a74_fixed256_s0`'s 85.73%."""
+        args = build_parser().parse_args(["step3a", "--stage2", "x.pth"])
+        assert args.state_grad_clip == 0.0
+
+    def test_the_flag_is_accepted_and_lands_in_the_stored_args(self):
+        args = build_parser().parse_args(["step3a", "--stage2", "x.pth", "--state-grad-clip", "10"])
+        assert args.state_grad_clip == 10.0
+        assert vars(args)["state_grad_clip"] == 10.0     # this dict is what the checkpoint stores

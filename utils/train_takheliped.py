@@ -421,6 +421,31 @@ def gradient_verdict(loss: float, grad_norm: float, skipped: int, limit: int = G
     return "stop" if skipped >= limit else "skip"
 
 
+def clip_state_grad(grad: torch.Tensor, bound: float, counter: Optional[List[int]] = None) -> torch.Tensor:
+    """Bound one frame's gradient at the carried slot state, so a long chunk cannot compound -- `TODO.md` item 53.
+
+    `GRAD_CLIP` acts on the parameters once `backward` has already finished, which is far too late: item 42's arm
+    overflowed *inside* the backward pass, where the gradient reaching the carried state grew 2.1x per frame and was
+    infinite some 60 frames before the chunk's end. Bounding each frame's gradient as it is produced removes the
+    compounding and **touches nothing in the forward pass**, so the function being trained is unchanged and only the
+    estimator differs -- which is why this is a flag on the recurrence that needs it rather than a change to the model.
+    A non-finite gradient is zeroed **entirely**, not component-wise: if any one component overflowed, the direction the
+    rest describes is not trustworthy either, and propagating it turns the whole remaining chunk into NaN.
+    `counter` records `[bitten, seen]` so an arm can report
+    how often the bound actually fired; an arm it fires on constantly is an arm whose number needs that caveat.
+    """
+    if counter is not None:
+        counter[1] += 1
+    norm = grad.norm()
+    if not bool(torch.isfinite(norm)):
+        if counter is not None:
+            counter[0] += 1
+        return torch.zeros_like(grad)
+    if counter is not None and bool(norm > bound):
+        counter[0] += 1
+    return grad * (bound / norm).clamp(max=1.0)
+
+
 def non_finite_summary(named: Dict[str, torch.Tensor]) -> str:
     """Which of these tensors hold a NaN or an infinity, and how many. The epoch-level guard fires up to 151 iterations after a run
     breaks and its traceback points at the guard itself, so this names what was already broken at the iteration that did it."""
@@ -1162,7 +1187,7 @@ def train_memory(args) -> None:
             schedule.load_state_dict(resumed["schedule"])
             stopper.__dict__.update(resumed["stopper"])
         while True:
-            t_epoch, losses, skipped = time.time(), [], 0
+            t_epoch, losses, skipped, clipped = time.time(), [], 0, [0, 0]
             for _ in range(iterations):
                 seq, frame, reset = sampler.next_chunk(length, args.reset_prob)
                 batch = gather(splits["train"], seq, frame, device)
@@ -1181,6 +1206,8 @@ def train_memory(args) -> None:
                                      cand_features=batch["features"][:, t], free_range=batch["free_range"][:, t],
                                      angles=laser_angles(device))
                     slots = out.slots
+                    if args.state_grad_clip:
+                        slots.state.register_hook(lambda g, b=args.state_grad_clip, c=clipped: clip_state_grad(g, b, c))
                     annotated = batch["annotated"][:, t, None]
                     missed = batch["gt_valid"][:, t] & ~batch["gt_covered"][:, t]
                     loss = loss + focal_loss(out.candidate_logit, batch["target"][:, t], batch["valid"][:, t] & annotated)
@@ -1237,9 +1264,10 @@ def train_memory(args) -> None:
                         stopper=stopper.state(), best=best.state(), history=history, hours=hours, stage=stage, epoch=epoch,
                         rng=rng_snapshot(rng), args={k: str(v) for k, v in vars(args).items()})
             marker = "  best" if overall else ("  stage best" if improved else "")
+            clip_note = f"  clipped {clipped[0]}/{clipped[1]} frames" if args.state_grad_clip else ""
             print(f"  epoch {epoch:>3}  loss {row['loss']:.4f}  val AP {row['val_ap']:.2%} (candidates {row['val_ap_candidates']:.2%})  "
                   f"FP {row['val_fp']:.3f} FN {row['val_fn']:.3f}  gate {row['gate']:+.3f}  train {train_s:.0f} s  eval {row['eval_s']:.0f} s  "
-                  f"{hours:.2f} h  GPU {row['gpu_gb']:.1f} GB{marker}", flush=True)
+                  f"{hours:.2f} h  GPU {row['gpu_gb']:.1f} GB{clip_note}{marker}", flush=True)
             if stopper.should_stop(epoch):
                 break
         if best.saved:
@@ -1842,6 +1870,11 @@ def build_parser() -> argparse.ArgumentParser:
         step1.add_argument("--coast-weight", type=float, default=1.0,
                            help="weight of the coasting loss against the candidate loss; the coasting head holds a live slot on 95.5%% of the "
                                 "people stage 3 fails to report, yet ranks them too low to report (TODO A51 O2)")
+        step1.add_argument("--state-grad-clip", type=float, default=0.0,
+                           help="bound each frame's gradient at the carried slot state; 0 disables, and it stays off by default "
+                                "because turning it on would change the gradient estimator of every arm already measured. Needed "
+                                "only when --iterations > 1, whose residual update compounds 2.1x per frame and overflows float32 "
+                                "about 60 frames into a chunk (TODO item 53)")
         step1.add_argument("--train-drift-m-per-s", type=float, default=0.0,
                            help="train with odometry that drifts, at a rate drawn per stream from [0, this] and redrawn each chunk; "
                                 "E2 showed the room frame's advantage inverts around 0.02 m/s and real wheel odometry reaches it (TODO A51 S3/E11)")

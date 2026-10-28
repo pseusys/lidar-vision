@@ -93,7 +93,7 @@ own contribution is.
 | attention heads | 49 | `--heads 8` | 85.99% | +3.74 | tie, no cost change -- dropped |
 | stage-2 beam target | 44a | soft Gaussian | (stage 2) 82.79% | -- | **+0.69 pp at 3 seeds -- adopted** |
 | the published head | 44b | peaks, no votes | (stage 2) 75.35% | -- | dropped without an arm, -7.4 pp |
-| Slot Attention's update | 42 | `--iterations 3` | -- | +2.22 val @ e18 | **NOT TRAINABLE AT THIS HORIZON** (item 53) -- see below |
+| Slot Attention's update | 42 | `--iterations 3` | -- | +2.22 val @ e18 | **NOT TRAINABLE, AND 31.45 ms CPU** (item 53) -- see below |
 
 **Item 42's arm has no score because the published rule is unstable when the slots persist** (item 53, measured
 2026-10-28, from the batch the trainer saved). Slot Attention re-initialises its slots on every input, so it
@@ -105,7 +105,15 @@ forward-side checks cleared it. A length bisect is monotone: 50 frames -> 8.81, 
 LayerNorms in the block normalise the state *entering* the attention and the MLP, never the state carried between
 frames. **`GRAD_CLIP` runs after `backward` and so cannot prevent it.** Scoring the row therefore needs a stabiliser --
 a per-frame gradient clip on the carried state is the only one that leaves the architecture, chunk and loss untouched
-and no-ops on the adopted arm -- which is a second change beyond the ablation as specified, and the owner's call.
+-- which is a second change beyond the ablation as specified. That clip now exists as `--state-grad-clip` (off by
+default) and holds over all 399 frames. **A carried-state LayerNorm was tried first and made it worse**, 3.3x per
+frame against 2.1x, because the growth is in the Jacobian product and LayerNorm's `1/sigma` backward strips the
+damping a growing state had supplied.
+
+**And the arm cannot be deployed even once it trains.** A matched CPU sweep of `iterations` 1 against 3 -- identical
+otherwise, same stage 2, interleaved, 3 repeats, stage-2 floor 0.2 ms -- gives memory 9.15 -> 20.77 ms and total
+**19.65 -> 31.45 ms against FROG's 25 ms period**. Scaled onto the adopted `dim 64` that is ~26.2 ms, still over;
+`iterations=2` would fit near 22.0 ms but is not the published setting. So item 42 is a ledger row, not a candidate.
 | block / widths / depth / kernel / expansion | 19, 45 | five stage-2 knobs | ~82.2% | -- | all tie |
 | sensor-frame vote targets | 18 | `--vote-frame sensor` | -- | -- | **worse** |
 | recall width `sigma_m` | 39 | replay sweep | -- | -- | dose-response; confirms 36 |

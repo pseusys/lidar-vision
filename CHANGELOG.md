@@ -38,6 +38,65 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 53: the clip that fixes item 42, and the cost that may retire it (2026-10-28)
+
+*keywords: item 42, item 53, state_grad_clip, gradient clip hook, LayerNorm refuted, CPU latency, iterations, 25 ms budget*
+
+Three measurements and one implementation, all on the batch `a70_slot_attention_s0/step3a_nan.pth` saved or on an idle
+host.
+
+### LayerNorm on the carried state does not fix it, and makes it worse
+
+| variant | forward `state` magnitude | per-frame gradient growth | outcome over 399 frames |
+| --- | --- | --- | --- |
+| as-is | 23 -> 347, grows | 2.1x per frame | `inf` ~60 frames back, NaN at 189 |
+| + carried-state LayerNorm | **4.0-6.3, flat** | **3.3x per frame** | `inf` by 320, NaN at 276 |
+| + per-frame gradient clip | 23 -> 347 (forward untouched) | pinned at the bound | **0 of 30 non-finite** |
+
+LayerNorm does exactly what it promises on the forward pass, and that is why it fails: the explosion lives in the
+product of Jacobians, and LayerNorm's backward carries a `1/sigma` factor, so holding sigma near 1 removes the mild
+self-damping the growing state had been providing through the MLP's own leading `LayerNorm`. **It also is not what the
+paper does**, contrary to an earlier claim here: Slot Attention normalises the *inputs* to the attention and the MLP,
+which this code already did; its residual output is unnormalised, and the paper survives that only by re-initialising
+slots every input. One limit on the above: these weights trained without the norm, so its forward is off-distribution
+and a model trained with it could land on a gain below 1. It is not refuted in principle -- it is refuted as a fix.
+
+### `--state-grad-clip`, off by default
+
+`clip_state_grad` bounds each frame's gradient at the carried slot state as it is produced. It lives in the **training
+loop, not the model**: it changes the gradient estimator, not the architecture, so the forward is bit-identical (loss
+119.9403 at t=50 and 490.7610 at t=250, matching the unpatched run digit for digit) and the arm stays comparable.
+**The default is 0.0, off, deliberately** -- `a74_fixed256_s0`'s 85.73% trained without it, so defaulting it on would
+silently change the estimator of the control and of all three freeze arms. The epoch line reports `clipped N/M frames`,
+because an arm the bound fires on constantly is an arm whose number needs that caveat.
+
+**Two defects in the first cut, both caught by the tests.** `nan_to_num` was zeroing non-finite components but keeping
+the finite ones, leaving a half-corrupted direction; a non-finite gradient is now zeroed entirely, since if one
+component overflowed the rest is not trustworthy either. And the compounding test used a 2.3x gain over 60 frames,
+which overflowed the *forward* pass, so it was testing infinite-loss handling rather than compounding; it now uses 1.5x
+over 30 frames, with overflow covered by its own test. A mutation check (both returns replaced by the identity) kills
+three of the six tests; the other three are correctly insensitive.
+
+### The cost: `iterations=3` does not fit FROG's frame period
+
+Matched interleaved CPU sweep, item 29's protocol, 4 threads, 2,000 scans, batch 1, idle host, 3 repeats, `a66_mingru_s0`
+against `a70_slot_attention_s0` -- identical but for `iterations`, both 37->128:
+
+| phase | `iterations=1` | `iterations=3` | delta |
+| --- | ---: | ---: | ---: |
+| stage2 (noise floor) | 8.86 ms | 8.97 ms | +0.11 (within the 0.2 ms floor) |
+| decode | 1.62 ms | 1.65 ms | +0.03 |
+| memory | 9.15 ms | 20.77 ms | **+11.62 (2.27x)** |
+| **total** | **19.65 ms** | **31.45 ms** | **+11.80** |
+| p99 total | 22.5 ms | 35.1 ms | |
+
+**31.45 ms against FROG's 25 ms period is 26% over at the median and ~40% over at p99.** Projecting onto the adopted
+`dim 64` (whose memory phase is 6.70 ms of 17.73 ms total) by the measured 2.27x puts `iterations=3` at about
+**26.2 ms -- still over budget**; `iterations=2` would come in near 22.0 ms and fit. That projection is an estimate
+from the `dim 128` pair, not a measurement. By the owner's 2026-10-19 rule, an architecture that wins on accuracy and
+loses on the CPU has not won, so item 42 at the published three iterations cannot be adopted whatever it scores, and
+training the arm would fill a ledger row rather than offer a candidate.
+
 ## Item 53: item 42 died of gradient explosion through the persistent recurrence, not a bug (2026-10-28)
 
 *keywords: item 42, item 53, Slot Attention, NaN gradient, BPTT explosion, persistent recurrence, length bisect, GRAD_CLIP*

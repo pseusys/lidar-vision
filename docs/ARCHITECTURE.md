@@ -64,7 +64,7 @@ stride 5. **Two were load-bearing.** The full ledger with numbers is in
 | the published voteless head (44b) | −7.4 pp even on its own objective → dropped |
 | block, widths, depth, kernel, expansion (19, 45) | all tie → defaults kept |
 | sensor-frame vote targets (18) | **worse** → beam frame |
-| Slot Attention's own update (42) | **not trainable at this horizon** — item 53 |
+| Slot Attention's own update (42) | **not trainable at this horizon, and 31.45 ms on the CPU** — item 53 |
 
 **Nine ties are the finding about everything except the two load-bearing rows.** Each was resolved toward the cheaper
 or simpler option, which is why the adopted model is *smaller* than the one the project started with.
@@ -81,7 +81,15 @@ or simpler option, which is why the adopted model is *smaller* than the one the 
 > `inf`, 300 gives `NaN`.
 >
 > **So the published update rule is not a drop-in for a persistent memory at this horizon**, and scoring it requires
-> choosing a stabiliser, which is a second change rather than the ablation as specified. That choice is open.
+> choosing a stabiliser. `--state-grad-clip` is that stabiliser: it bounds each frame's gradient as it is produced,
+> leaves the forward bit-identical, and held over all 399 frames with no non-finite parameter gradient. A carried-state
+> LayerNorm was tried first and **made the divergence faster** (3.3x per frame against 2.1x), because the explosion is
+> in the Jacobian product and LayerNorm's `1/sigma` backward removes the damping a growing state had provided.
+>
+> **The arm is nonetheless unaffordable.** A matched CPU sweep (`iterations` 1 against 3, otherwise identical) puts
+> three iterations at **31.45 ms against FROG's 25 ms period**, 26% over at the median and ~40% over at p99; scaled onto
+> the adopted `dim 64` it is about 26.2 ms, still over, while two iterations would fit near 22.0 ms. Three iterations is
+> the published setting, so the row can be filled but not adopted.
 
 **What the two load-bearing results mean together.** Item 36 says the memory must be **addressable**; item 22 says the
 addressing must be **to objects, not to places**. Neither alone is the contribution — together they are.

@@ -149,6 +149,19 @@ phase is read first**: it is byte-identical work across arms, so its spread *is*
 catches ordering bias -- in the 2026-10-27 sweep it showed `dim 64` running 0.31 ms slower on identical work purely
 because it went second.
 
+**`--state-grad-clip FLOAT`** (`TODO.md` item 53) bounds each frame's gradient at the carried slot state, in the
+training loop rather than the model, so the forward is bit-identical. **It is off by default and must stay off** for
+any arm being compared with one already measured: `a74_fixed256_s0`'s 85.73% trained without it. It is needed only by
+`--iterations > 1`, whose residual update compounds 2.1x per frame and overflows float32 about 60 frames into a chunk.
+The epoch line then reports `clipped N/M frames`; a high share means the estimator was modified heavily and the arm's
+number needs that said out loud. `GRAD_CLIP` cannot substitute -- it runs after `backward` has already finished.
+
+**Pricing one flag against another** uses the same latency sweep, one `--memory` per arm, which is how `iterations`
+1-against-3 was priced at 19.65 against 31.45 ms total (2026-10-28). Any two memory checkpoints of the same feature
+width are interchangeable here, because only the arithmetic per frame is being timed, not the accuracy -- so arms
+trained on different stage 2s can still be compared, provided **one** `--stage2` is passed to both so the `stage2`
+phase stays byte-identical.
+
 **Never** use `step3a_results.json`'s `memory_ms_per_frame` instead. It is timed on whatever device trained the arm,
 which is the GPU here.
 
