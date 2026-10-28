@@ -50,8 +50,11 @@ weights untouched, scored on the soft-label stage 2:
 | memory AP | 84.78% | 84.67% | **85.01%** | 85.01% | 85.01% |
 | gain | +2.03 | +1.91 | **+2.25** | +2.26 | +2.26 |
 
-**128 is the knee**: it ties 256, 512 adds nothing, and there is a real cliff below it (64 loses 0.35 pp). So the
-adopted 256 is twice the capacity the model uses. A flat replay curve is weak evidence for *adding* capacity -- the
+**The replay said 128 is the knee -- and a trained arm contradicted it (2026-10-28).** Trained at 128 the memory
+scores **84.99% against 256's 85.73%**, a **0.74 pp loss**, where the replay had them tied to two decimals. The
+replay evicts under the *same trained policy*; a model trained at 128 learns a more conservative one (precision
+68.7% -> 74.1%, false positives 1.220 -> 0.871, recall 87.4% -> 81.2%), which a replay cannot see. **256 is kept.**
+The original replay reading is left below because the contradiction is the finding: A flat replay curve is weak evidence for *adding* capacity -- the
 weights adapted to 256 -- but is decent for *removing* it, since a model that needed those slots would lose
 immediately, and at 64 it does. **Confirmation by a trained arm is `TODO.md` item 50** (`queue_item50.py`), against
 `a71_dim64_s0`'s 86.12% on the same hard-label stage 2, so capacity is the only variable.

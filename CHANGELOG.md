@@ -38,6 +38,64 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 50: 128 slots loses when trained, and item 54 cost nothing measurable (2026-10-28)
+
+*keywords: item 50, slot capacity, 128 slots, replay vs trained, item 54 effect size, a74_fixed256_s0, a74_slots128_s0*
+
+Two arms, one variable each, both on the **hard-label** stage 2 so they are directly comparable to
+`a71_dim64_s0` (candidates 82.24% in all three):
+
+| arm | code | slots | memory AP | gain | FP/frame | recall | precision |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `a71_dim64_s0` | **with** item 54 | 256 | 86.12% | +3.88 | 0.963 | 84.1% | -- |
+| **`a74_fixed256_s0`** | fixed | 256 | **85.73%** | +3.49 | 1.220 | 87.4% | 68.7% |
+| **`a74_slots128_s0`** | fixed | **128** | **84.99%** | +2.75 | 0.871 | 81.2% | 74.1% |
+
+### Item 54's effect size: -0.39 pp, inside the bar
+
+The fix scores **85.73% against 86.12%**, so the defect cost **nothing measurable** -- 0.39 pp, well inside E13's
+1.32 pp bar and under the seed spread. That vindicates the bounded-harm reading taken from the code: a spawned slot
+kept its correct state, statistics, position, value and age, and only one frame's encoding input was wrong.
+
+**Two corrections belong in the record.** First, **the sweep's absolute levels stand within the bar**, so the
+reporting worry raised while this arm trained -- that every tie would need re-stating -- does not apply. Second, that
+worry was built on *validation* gaps of ~1.3 pp read at epochs 17 and 22; at epoch 34 the two arms were level
+(+4.70 against +4.75), and the test figure finally went the *other* way. **Validation could not resolve a 0.39 pp
+difference and should not have been used to argue one.** The rule this project already learned about plateaus --
+do not read a difference off two points of a noisy curve -- applies to gaps *between* curves exactly as much.
+
+### Capacity: the trained arm says 128 loses, where the replay said it tied
+
+**This is the headline, because it is a direct contradiction of the cheap measurement.** The replay put 128 at
++2.25 against 256's +2.26 -- a tie to two decimal places. The trained arm puts 128 at **+2.75 against +3.49, a
+0.74 pp loss**. Inside the bar, so "no evidence of a difference" by the letter of the rule, but it is **twice** the
+0.39 pp that item 54's defect cost and it runs the wrong way for adoption.
+
+**Why the replay was wrong, and it is instructive.** `slots()`' own docstring says a flat curve is weak evidence
+because the weights adapted to 256 -- and it argued the *reducing* direction was better supported, since a model that
+needed those slots would lose immediately when they were removed. **That argument was incomplete.** A replay at 128
+evicts slots under the *same trained policy*; a model **trained** at 128 learns a different eviction and rescoring
+balance, and here it learns a *more conservative* one: precision rises 68.7% -> 74.1% and false positives fall
+1.220 -> 0.871, while recall drops 87.4% -> 81.2%. The replay could not see that because it never retrains the
+trade-off. **A replay can price removing capacity from a fixed policy; it cannot price learning with less.**
+
+**Decision: keep 256.** 128 buys GPU memory (0.7 GB against 1.0) and ~1% of epoch time, and would cut the two O(K)
+CPU terms -- but it is the one arm in the sweep that *lost* on the axis the project optimises while the gain it
+offered was never measured on the CPU at all. E13's rule takes the cheaper option **on a tie**, and 0.74 pp against
+0.39 pp of known noise is not comfortably a tie.
+
+**What would reopen it**: a CPU sweep showing 128 saves materially more than `--dim 64`'s 28%, which would make the
+trade worth re-examining. The sweep was never run, because the accuracy result removed the reason to.
+
+### A methodological note worth keeping
+
+Item 50 is the first time in this sweep that a **replay and a trained arm disagreed**. Both were run deliberately --
+the replay to triage cheaply, the arm to confirm -- and the confirmation is what stopped a 0.74 pp regression being
+adopted on a flat curve. The replay was still worth its eight minutes: it bracketed the question and found the cliff
+at 64. The lesson is narrower than "don't trust replays" -- it is that **a replay prices a parameter under a frozen
+policy, so it is only confirmatory where the policy cannot adapt to the parameter.** `sigma_m` (item 39) reads only at
+inference and is safe; capacity reshapes what the model learns and is not.
+
 ## A fresh-eyes audit of the model code before the freeze (2026-10-28)
 
 *keywords: pre-freeze audit, fixed_decay_s, D3, silent no-op, step3b targets, phantom flags, subagent audit*

@@ -3,13 +3,12 @@
 **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector) — person detection from a
 single knee-height 2-D LiDAR.
 
-> **STATUS: NOT YET FROZEN.** Three measurements and one code defect are outstanding, and each is named inline as `PENDING`. The structural
+> **STATUS: NOT YET FROZEN.** Two measurements are outstanding, and each is named inline as `PENDING`. The structural
 > description below is settled; the numbers in [Proposed FROG parameters](ARCHITECTURE.md#5-proposed-frog-parameters) are either
 > measured (and cited) or marked pending. Nothing here may be quoted until the status line says frozen.
 >
 > | outstanding | what it decides | `TODO.md` |
 > | --- | --- | --- |
-> | slot capacity, 128 against 256 | one row of the parameter table | item 50 |
 > | Slot Attention's own update | one row of the ablation ledger | item 53 |
 > | the three-seed freeze | **every number in the results table** | item 47 |
 > | a spawned slot's first update reads candidate 0, not its own | whether ② is drawn as the code does it; gates item 47 | item 54 |
@@ -232,7 +231,7 @@ Fitted to FROG `official`. **Other datasets get their own section; do not carry 
 | beam-target `--label-sigma-m` | **0.3 m** | **+0.69 pp at 3 seeds**, item 44a |
 | label radius | 0.6 m | DR-SPAAM convention |
 | decoder / NMS radius | `nms-mean` / 0.5 m | flat optimum, items 13/17/34 |
-| slot capacity `K` | **`PENDING` — 256 or 128** | item 50 |
+| slot capacity `K` | **256** | trained 128 loses 0.74 pp (item 50); a replay had said it tied |
 | slot-state `dim` | **64** | tie, **−28% CPU**, item 49 |
 | heads | 4 | tie, item 49 |
 | recurrence | **minGRU** | tie; citable, item 38 |
