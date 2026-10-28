@@ -3,13 +3,12 @@
 **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector) — person detection from a
 single knee-height 2-D LiDAR.
 
-> **STATUS: NOT YET FROZEN.** Two measurements are outstanding, and each is named inline as `PENDING`. The structural
+> **STATUS: NOT YET FROZEN.** One measurement is outstanding, named inline as `PENDING`. The structural
 > description below is settled; the numbers in [Proposed FROG parameters](ARCHITECTURE.md#5-proposed-frog-parameters) are either
 > measured (and cited) or marked pending. Nothing here may be quoted until the status line says frozen.
 >
 > | outstanding | what it decides | `TODO.md` |
 > | --- | --- | --- |
-> | Slot Attention's own update | one row of the ablation ledger -- now **a decision, not a measurement** | item 53 |
 > | the three-seed freeze | **every number in the results table** | item 47 |
 
 This document is **per-dataset by design**. The structure is general; the *parameters* are fitted to FROG and are

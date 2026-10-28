@@ -154,7 +154,9 @@ training loop rather than the model, so the forward is bit-identical. **It is of
 any arm being compared with one already measured: `a74_fixed256_s0`'s 85.73% trained without it. It is needed only by
 `--iterations > 1`, whose residual update compounds 2.1x per frame and overflows float32 about 60 frames into a chunk.
 The epoch line then reports `clipped N/M frames`; a high share means the estimator was modified heavily and the arm's
-number needs that said out loud. `GRAD_CLIP` cannot substitute -- it runs after `backward` has already finished.
+number needs that said out loud. **Calibrate the bound before trusting an arm that uses it**: replay a chunk through a
+healthy arm with the hook counting only, read the p100 per-frame state-gradient norm, and set the bound an order of
+magnitude above it. No value is baked in, and the 10.0 used in the item 53 probe was arbitrary. `GRAD_CLIP` cannot substitute -- it runs after `backward` has already finished.
 
 **Pricing one flag against another** uses the same latency sweep, one `--memory` per arm, which is how `iterations`
 1-against-3 was priced at 19.65 against 31.45 ms total (2026-10-28). Any two memory checkpoints of the same feature
