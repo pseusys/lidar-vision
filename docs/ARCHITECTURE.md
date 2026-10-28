@@ -3,8 +3,8 @@
 **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector) — person detection from a
 single knee-height 2-D LiDAR.
 
-> **STATUS: NOT YET FROZEN.** Three measurements are outstanding and each is named inline as `PENDING`. The structural
-> description below is settled; the numbers in [Proposed FROG parameters](#proposed-frog-parameters) are either
+> **STATUS: NOT YET FROZEN.** Three measurements and one code defect are outstanding, and each is named inline as `PENDING`. The structural
+> description below is settled; the numbers in [Proposed FROG parameters](ARCHITECTURE.md#5-proposed-frog-parameters) are either
 > measured (and cited) or marked pending. Nothing here may be quoted until the status line says frozen.
 >
 > | outstanding | what it decides | `TODO.md` |
@@ -12,6 +12,7 @@ single knee-height 2-D LiDAR.
 > | slot capacity, 128 against 256 | one row of the parameter table | item 50 |
 > | Slot Attention's own update | one row of the ablation ledger | item 53 |
 > | the three-seed freeze | **every number in the results table** | item 47 |
+> | a spawned slot's first update reads candidate 0, not its own | whether ② is drawn as the code does it; gates item 47 | item 54 |
 
 This document is **per-dataset by design**. The structure is general; the *parameters* are fitted to FROG and are
 expected to differ elsewhere. Later datasets get their own parameter sections rather than edits to this one.
@@ -81,10 +82,14 @@ Three stages. Stage 2 reads **one scan** and has no state, so every temporal cla
 
 ```mermaid
 flowchart TD
+    SCAN["raw LiDaR scan<br/>N ranges"]
+
     subgraph S1["Stage 1 — per-beam features (no parameters)"]
-        SCAN["raw scan<br/>N ranges"] --> SAN["sanitize_ranges<br/>one rule per dataset encoding"]
+        SAN["sanitize_ranges<br/>one rule per dataset encoding"]
         SAN --> FEAT["beam_features<br/>range, median-window delta,<br/>4 neighbour deltas → 10 ch"]
     end
+
+    SCAN --> SAN
 
     subgraph S2["Stage 2 — single-scan detector (960,323 param)"]
         FEAT --> STEM["stem conv"]
@@ -96,27 +101,39 @@ flowchart TD
     end
 
     NMS --> CAND["candidates at frame t<br/>P × (score, x, y) + pooled features"]
+    POSE["robot pose x, y, θ<br/>+ dt since previous frame"]
+    PREV[("slot memory — held by the caller, not by stage 3<br/>read as slots at t−1 · written back as slots at t<br/>K × (alive, value, position, velocity,<br/>origin, age, since-match,<br/>hit-rate, learned state)")]
 
-    subgraph S3["Stage 3 — object memory (STATEFUL across frames)"]
-        CAND --> ENCODE["encode<br/>5 geometric + 32 pooled → dim"]
-        POSE["robot pose x, y, θ<br/>+ dt since previous frame"] --> WORLD["sensor → room transform"]
-        CAND --> WORLD
-        PREV[("slots at t−1<br/>K × (alive, value, position, velocity,<br/>origin, age, since-match,<br/>hit-rate, learned state)")] --> MANAGE
-        WORLD --> MANAGE["manage_slots  (no_grad, rule-based)<br/>mutual-nearest match · spawn · evict · retire<br/>· advance by velocity · fade value"]
-        MANAGE --> RECUR["minGRU per slot<br/>state ← gate(state, update)"]
-        ENCODE --> RECUR
-        RECUR --> NEW[("slots at t<br/>same K, updated")]
-        NEW --> RECALL["recall: biased attention<br/>candidate → slots, −d²/2σ²"]
+    %% Stage 3's inputs and outputs are wired below `end`: Mermaid draws a node inside every subgraph whose body
+    %% mentions it, so an edge to PREV, POSE or CAND written in here would pull that node back into the box.
+    subgraph S3["Stage 3 — object memory (STATEFUL across frames) · ① → ⑤ all run inside frame t"]
+        ENCODE["encode<br/>5 geometric + 32 pooled → dim"]
+        WORLD["sensor → room transform"] --> MANAGE["① manage_slots  (no_grad, rule-based)<br/>advance by velocity · mutual-nearest match ·<br/>fade value · retire · spawn · evict"]
+        MANAGE -->|"events: which candidate of frame t<br/>each slot matched or spawned from"| INPUT
+        MANAGE -->|"8 slot statistics, already at t"| INPUT
+        ENCODE --> INPUT["② slot input<br/>spawned: state ← spawn(its candidate)<br/>matched: + its candidate's encoding"]
+        INPUT --> RECUR["③ minGRU per slot<br/>state ← (1−z)·state + z·tanh(W·u)"]
+        MANAGE -->|"alive, value, position … at t"| NEW
+        RECUR -->|"learned state at t"| NEW[("slots at t<br/>same K, updated")]
+        NEW -->|"alive mask, positions, states — all at t<br/>a candidate's own slot sits at d = 0"| RECALL["④ recall: biased attention<br/>candidate → slots, −d²/2σ²"]
         ENCODE --> RECALL
-        RECALL --> RESCORE["rescore head<br/>logit += gate · MLP(enc, recalled)"]
+        RECALL --> RESCORE["⑤ rescore head<br/>logit += gate · MLP(enc, recalled)"]
         ENCODE --> RESCORE
     end
 
+    CAND --> ENCODE
+    CAND --> WORLD
+    POSE --> WORLD
+    PREV -->|"slots at t−1"| MANAGE
+    PREV -.->|"learned state at t−1<br/>(manage_slots passes it through)"| RECUR
     RESCORE --> OUT["rescored detections at t<br/>score, x, y"]
-    NEW ==>|"carried to frame t+1 — THIS EDGE IS THE CONTRIBUTION"| PREV
+    NEW ==>|"written back, read at frame t+1 — THIS EDGE IS THE CONTRIBUTION"| PREV
 ```
 
-**The edge from `slots at t` back to `slots at t−1` is the architecture's whole point.** Stages 1 and 2 are
+**The edge from `slots at t` back into the slot memory is the architecture's whole point.** The memory is drawn
+outside stage 3 because that is where it lives in the code: `ObjectMemory` holds no state between calls, every
+caller does `slots = out.slots`, so stage 3 takes the slots as an input and returns the new ones as an output beside
+its detections. Stages 1 and 2 are
 *stateless*: they see one scan and nothing else, which is what makes every temporal claim attributable to stage 3.
 Stage 3 is a **recurrence over frames** — `step(candidates, pose, dt, slots) → (detections, slots′)`, and the caller
 carries `slots′` into the next call. A person who was seen a moment ago is still in a slot; that is how the memory
@@ -160,6 +177,12 @@ which slot each candidate belongs to (mutual nearest within a gate) and which sl
 retire; **minGRU** updates each surviving slot's state; a **biased recall attention** lets each candidate read the
 slots near it, with an additive distance bias `−d² / 2σ²`; and a **rescoring head** adjusts each candidate's score
 from its own encoding plus what it recalled.
+
+> **`PENDING` — item 54, a defect in ②.** The diagram draws the intended rule; the code gets it right for a matched slot
+> and wrong for a spawned one. `step` gathers the candidate encoding by `events.match_index`, which is `-1` for a slot
+> spawned this frame, and the `clamp(min=0)` turns that into candidate 0 — the frame's strongest — while the mask
+> `matched | refill` still lets it in. The spawned state itself, `spawn(own encoding)`, is correct, and so are the
+> statistics. Every stage-3 number on the adopted recipe was trained with the defect.
 
 **The bookkeeping is not learned, and that is the design** — spawning, matching, eviction and retirement are discrete
 decisions with no gradient to give. Only the slot state, the recurrence and the rescoring head are trained.

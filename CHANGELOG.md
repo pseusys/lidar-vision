@@ -38,6 +38,34 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The diagram shows that frame t's bookkeeping decides frame t, and a spawn defect is found (2026-10-28)
+
+*keywords: docs/ARCHITECTURE.md, manage_slots, ObjectMemory.step, step order, match_index, refill, spawned slot, item 54*
+
+**The owner asked whether slot management at frame `t` only matters for `t+1`.** It does not, and the code is
+unambiguous: `ObjectMemory.step` runs `manage_slots`, then the spawn and the minGRU update, then the recall and the
+rescoring, all on the same candidates, and the recall reads the slots after this frame's bookkeeping. A candidate
+therefore always finds its own slot at distance zero -- the matched slot has just been moved onto it, or it has just
+spawned one -- and what arrives from `t-1` is that slot's carried state, value, age and hit rate. A scratch check at
+random init confirmed it: on a stream's first frame, with nothing alive coming in, the logits differ from a recall
+over the incoming slots, because two slots spawned and were read in the same call. The only bookkeeping output first
+read at `t+1` is the velocity, through the next predicted position.
+
+**The diagram invited the other reading**, so stage 3 is redrawn: the five steps are numbered as they run, the edges
+say what each one carries (events, statistics, the alive mask and positions at `t`), the previous learned state is
+drawn going to the minGRU through `manage_slots` unchanged, and a paragraph under the figure states the order.
+The slot memory and the pose are then drawn **outside** stage 3, as the inputs and output they are in the code
+(owner's request): `ObjectMemory` keeps no state between calls, and the caller carries `out.slots` into the next one.
+
+**The same reading found a defect, now `TODO.md` item 54.** A slot spawned this frame takes candidate 0's encoding into
+its first update instead of its own: the gather is by `match_index`, which is `-1` there and clamped to 0, while the
+mask `matched | refill` still admits it. Moving candidate 0 by 1 m changed the state of candidate 1's slot by up to
+0.007 at random init, where it should not move. It is on the adopted path and in every stage-3 checkpoint since
+`--no-learned-match` was adopted; not fixed, because the fix retrains stage 3 and that is the owner's call before
+the freeze.
+
+No code changed and nothing was trained.
+
 ## Item 44(a)'s target and loss land, because its tests were blocking the gate (2026-10-25)
 
 *keywords: item 44a, beam_heatmap, soft_labels, compute_loss, Gaussian beam target, metric sigma, pos_weight*
