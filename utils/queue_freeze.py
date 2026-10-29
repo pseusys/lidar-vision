@@ -3,8 +3,13 @@
 
 The architecture settled on 2026-10-25 and every published number predates it. `docs/PAPER.md`'s table is the
 **selective** recurrence on the aggregator-ful stage 2 with the 1 s curriculum; the adopted model is **slots + minGRU,
-no aggregator, no curriculum**, and has one seed at 86.20%. All three changes tied inside E13's 1.32 pp bar, so the old
-figures are not wrong -- they measure a model this project no longer proposes. This chain replaces them.
+no aggregator, no curriculum**, a **64-wide** slot state and 256 slots. All of those changes tied inside E13's
+1.32 pp bar, so the old figures are not wrong -- they measure a model this project no longer proposes. This chain
+replaces them.
+
+**Mind which reference you compare against.** The 86.20% and 86.12% quoted below were measured before `TODO.md`
+item 54 was fixed (a spawned slot read candidate 0's encoding), which cost 0.39 pp. The fixed-code reference is
+**85.73%** (`a74_fixed256_s0`), and it is still on the *hard-label* stage 2.
 
 **Why stage 2 is in here at all.** Item 40 removed the whole-scan aggregator, which lives in stage 2, so the three
 control seeds (`a59_c1_recipe_dropout01_s{0,1,2}`) no longer match the adopted architecture and cannot be reused. Only
@@ -57,7 +62,9 @@ SEEDS = (0, 1, 2)
 #: curriculum and the aggregator; **item 49 halved `dim` on 2026-10-27** -- it ties on accuracy (86.12% against
 #: 86.20%, recall at matched false positives 96.5% against 96.43%) and takes **28% off the memory phase** on the CPU
 #: (9.30 -> 6.70 ms), which nearly doubles p99 margin against FROG's 25 ms period. That is the axis the owner made
-#: decisive on 2026-10-19, so a tie on accuracy plus a win on CPU is an adoption.
+#: decisive on 2026-10-19, so a tie on accuracy plus a win on CPU is an adoption. Both figures in that comparison
+#: predate the item 54 fix, so the *tie* stands -- they carried the same defect -- but neither is the reference here.
+#: 256 slots (item 50) and 4 heads (item 49) are the constructor defaults, so they need no flag.
 ADOPTED = ("--no-exchange", "--no-learned-match", "--no-coast", "--recurrence", "mingru", "--chunk-s", "10",
            "--dim", "64")
 GATE = Job(name="gate", cli=("-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"), cwd=REPO)
@@ -96,10 +103,14 @@ def stage3(seed: int) -> Job:
 # stage 2 and the target was adopted afterwards. Each tied or won against its own control, but items 40 and 41 are the
 # precedent for why that is not enough: both tied individually and "both at once" still needed its own number.
 #
-# So the chain runs **seed 0 alone** and stops. If its test figure is near the components' (~86.1%), the remaining two
-# seeds are one command away and nothing has been wasted. If it is surprisingly bad, the rollback is cheap and
-# obvious -- `a71_dim64_s0` (hard labels, `dim 64`, 86.12%) and `a70_baseline_s0` (hard labels, `dim 128`, 86.20%) are
-# both on disk and already scored, so either component can be reverted without retraining it.
+# So the chain runs **seed 0 alone** and stops. **The reference is 85.73%** -- `a74_fixed256_s0`, which is hard-label
+# stage 2 with `dim 64`, 256 slots and the item 54 fix in place. It is *not* the 86.12% this file used to quote; that
+# was `a71_dim64_s0` carrying the defect, worth 0.39 pp. The soft target gained +0.69 pp at stage 2 on candidates, so
+# the expectation for this arm is **roughly 86.4%** -- with the caveat that a stage-2 gain need not transfer to the
+# memory column at all, which is the whole reason seed 0 is a gate. **Accept anything within E13's 1.32 pp of 85.73%,
+# i.e. >= 84.4%, and stop to report below that.** If it is surprisingly bad the rollback is cheap: `a74_fixed256_s0`
+# (85.73%, fixed code) and `a70_baseline_s0` (`dim 128`, 86.20%, defect-carrying) are both on disk and scored, so
+# either component reverts without retraining.
 #
 # `--steps 1`-style gating is not used because the stage-2 jobs are already `done`; listing only seed 0's arm here is
 # simpler and leaves the file honest about what it ran.
