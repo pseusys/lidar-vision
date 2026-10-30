@@ -126,6 +126,19 @@ is what the restart check below is for.
 | free memory under ~2 GB | something else is competing | stop the intruder before the run dies |
 | a new bugcheck in the System log | the driver crashed the machine | note it with the dump path, then relaunch |
 
+**The >15 min symptom needs a phase check before you act on it, or it kills healthy runs** (2026-10-29, twice in one
+day). `train_takheliped.py step3a` has two phases that do tens of minutes of work and print **only on completion**, so
+the clock alone cannot tell them from a hang:
+
+* **Test evaluation.** 50,088 frames at stride 1 and again at stride 5. `freeze_s0` sat silent for 24 min here.
+* **Candidate-cache rebuild.** `candidate_cache_path` keys on the stage-2 checkpoint's write time, so a new stage-2
+  seed rebuilds train and val caches first -- `freeze_s1` spent **39 min** on it (924 s + 1422 s) before epoch 1.
+
+**The discriminator is the results file, not the clock.** The teardown hang happens *after* `step3a_results.json` is
+written, so: no results file means work remains -- leave it alone. Results file present and the process still alive
+means the hang -- kill it. Confirm with two CPU samples a few seconds apart if you want a second signal, but remember
+CPU burn alone is not proof of progress (a crashed-but-hanging process also burns CPU); the file is the evidence.
+
 **Report bad news at once**, never at the next heartbeat.
 
 ## Reporting
