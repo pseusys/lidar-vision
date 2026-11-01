@@ -61,28 +61,30 @@ and a DROW-style vote head (**stage 2**), and an object memory of 256 slots in r
 state (**stage 3**). **Stage 2 reads one scan per call** — it has no temporal input of any kind — so every temporal claim below
 belongs to the memory.
 
-> **STALE AS OF 2026-10-25: this table's architecture has been superseded three times and its numbers have not been
-> re-measured.** The draft describes the **selective** per-slot recurrence, a stage 2 **with** the whole-scan aggregator,
-> and stage-3 training **with** the 1 s curriculum. The adopted architecture is **minGRU, no aggregator, no curriculum**
-> (`TODO.md` items 38, 40, 41; `CHANGELOG.md` 2026-10-23 and 2026-10-25). Every change tied inside the 1.32 pp bar, so
-> the numbers below are not *wrong* -- they are a correct measurement of a model this project no longer proposes, and the
-> adopted one has **one** seed, at 86.20%. **Nothing here may be quoted until the three-seed freeze** (`TODO.md` item 47),
-> which replaces this table wholesale: three stage-2 seeds and three stage-3 seeds, ~13 h. The architecture sentence above
-> is left as written for the same reason -- it describes what was measured, not what is proposed.
-
-> **The architecture was frozen on 2026-10-18 and this table describes it.** Our detector's wp-AUC is the frozen
-> model's three-seed mean -- **86.01%** (86.08 / 86.08 / 85.88) -- measured after step 1 removed the coasting head.
-> The **85.87%** quoted before 2026-10-19 described the same model *with* that head: the means are 0.14 pp apart,
-> inside the 1.32 pp three-sigma bar, so removing it cost nothing. The **seed spread fell from 0.86 to 0.21**, which
-> is suggestive rather than established -- three seeds against three cannot settle a variance claim.
+> **FROZEN AND MEASURED 2026-10-30, three seeds** (`TODO.md` item 47, full entry in `CHANGELOG.md`). The architecture
+> this table describes is the one the project proposes: an aggregator-free stage 2 trained against a **soft Gaussian**
+> per-beam target (σ = 0.3 m), and a memory of 256 slots with a **64-wide** state, **4** heads and a **minGRU**
+> recurrence, with no slot exchange, no learned matching, no coasting head and **no chunk curriculum**. Our wp-AUC is
+> its three-seed mean, **86.29%** (86.11 / 86.33 / 86.43), sample sd **0.17 pp**.
+>
+> **Two older figures are superseded, not wrong.** The **86.01%** quoted here before this date measured the
+> *selective* recurrence on an aggregator-ful stage 2 with the 1 s curriculum, and the **85.87%** before 2026-10-19
+> the same model with a coasting head. Every change between them tied inside the 1.32 pp three-sigma bar, so the
+> freeze **confirms** the architecture rather than improving on it -- which is how it should be reported. The
+> architecture sentence above the table has been brought in line with what is now measured.
+>
+> **Argument 2's tracking comparison was re-run on the frozen candidates on 2026-10-31** (`CHANGELOG.md`, item 56), so no
+> row below is the superseded line's any more. The margin over the tuned tracker moved from +2.36 pp to **+2.16 pp**:
+> the better stage 2 did help the tracker slightly more than it helped the memory, but by 0.20 pp, not by enough to
+> change the argument.
 
 | | wp-AUC | phantoms per person-free frame | ms/frame, CPU (4 threads) | ms/frame, GPU |
 | --- | --- | --- | --- | --- |
 | LFE-Peaks, authors' weights | 65.1% | 1.39 | 1.14 | — |
 | LFE-PPN, authors' weights | 69.6% | 3.17 | 2.06 | — |
 | DR-SPAAM, **authors' published FROG figures** ¹ | 73.7% (`T=1`), 75.6% (`T=5`) | not reported | 1195.88 ² | — |
-| **stage 2 alone**, one scan per call | **82.20%** | 2.62 | 9.95 | 7.59 |
-| **stage 2 + object memory** | **86.01%** | **0.74** | **19.15** *(p99 22.07)* | 12.32 *(p99 13.63)* |
+| **stage 2 alone**, one scan per call | **82.80%** | 2.13 | 12.23 | not re-measured ⁴ |
+| **stage 2 + object memory** | **86.29%** | **0.675** ³ | **19.32** *(p99 21.67)* ⁵ | not re-measured ⁴ |
 
 *¹ Cited, not measured here: these are the authors' FROG numbers. ² Measured here, and **every row in this column was
 re-measured together on 2026-10-11 under one protocol** — the same 2,000 consecutive FROG test scans, in order, batch 1, at the
@@ -93,31 +95,61 @@ the two orders of magnitude go; its released **streaming** form encodes one scan
 overstates what the published detector costs while our accuracy rows understate it by 1.24 pp. Our CPU column is the whole
 pipeline — network, candidate decoding and the memory — streamed one scan at a time.*
 
+*³ Three seeds at the 0.3 operating threshold, 2026-10-30, over all 72,533 person-free frames: 0.706 / 0.591 / 0.727,
+from candidates of 2.106 / 2.156 / 2.139. The superseded model's figures were 2.62 and 0.740 — **fewer phantoms here
+from fewer candidates**, so the *relative* cut (68.4% against 72%) is not a like-for-like comparison and the absolute
+count is the one that matters to a robot. At threshold 0.9 the whole detector emits **0.0015** per frame — 298, 0 and
+20 detections across 72,533 frames — against the superseded model's 0.010. ⁴ The freeze's
+sweep was CPU-only, which is the axis that decides deployment here (owner, 2026-10-19). The superseded architecture's
+GPU figures were 7.59 and 12.32 ms and are not carried over, because they timed a different stage 2 and a
+128-wide slot state. **Our two CPU rows are not comparable with the three baseline rows above them**, which were timed
+in the 2026-10-11 session; within the freeze's own session the `stage2` phase — byte-identical across arms — spreads
+0.084 ms, and that is the only noise figure these two rows support. ⁵ **Measured twice in two independent sessions and
+reproducing to 0.4%**: 19.32 ms on a host idle 63 minutes (item 57) and 19.39 ms on one two minutes past a 7-hour GPU
+job (item 47). The cold run is quoted, its floor being four times tighter. The `dim 128` control, interleaved in both,
+costs 22.34 ms median and 24.65 ms at p99 — inside the 25 ms period, with 0.35 ms to spare against the frozen
+architecture's 3.33.*
+
 **Three results carry the argument.**
 
 **1. The memory removes phantoms, which is what the problem statement asked for.** On the 72,533 person-free frames stage 2
-alone emits **2.62** detections per frame — worse than both published detectors, because it is tuned for recall where people
-exist — and the memory takes that to **0.740**, a 72% cut and **below LFE-Peaks' 1.39**, which no published detector on this
-split reaches. At a 0.9 confidence threshold the contrast is categorical: the published detectors still hallucinate in a third
-to a half of empty frames, and the whole detector does so in **0.9%** of them. It is not an artefact of remembering people who
-have just left: 42.4% of those frames fall within the slots' 10 s fade of someone in view, and restricted to the 41,797 frames
-beyond that horizon the cut is **larger** (−76%). What survives is furniture, as the theory says it must — the memory's
-remaining phantoms recur in the next frame **92.2%** of the time, against 84.9% for the candidates it filtered and 99.8% for
-real people.
+alone emits **2.13** detections per frame — worse than LFE-Peaks, because it is tuned for recall where people exist — and the
+memory takes that to **0.675**, a **68.4%** cut and **below LFE-Peaks' 1.39**, which no published detector on this split
+reaches. At a 0.9 confidence threshold the contrast is categorical: the published detectors still hallucinate in a third to a
+half of empty frames, and the whole detector does so in **0.15%** of them — 318 detections across three seeds and 217,599
+scored frames, one of the three emitting **none at all**. It is not an artefact of remembering people who have just left:
+42.4% of those frames fall within the slots' 10 s fade of someone in view, and restricted to the 41,797 frames beyond that
+horizon the cut is **larger** (−73.5%, to 0.524 per frame). What survives is furniture, as the theory says it must — the
+memory's remaining phantoms recur in the next frame **93.6%** of the time, against **85.8%** for the candidates it filtered
+and 99.8% for real people (that last figure is the 2026-10-09 measurement and has not been repeated).
 
 **2. The gain is the learned memory, not association.** Every row shares one detector's candidates, so the only difference is
-what reads them:
+what reads them.
 
 | what reads stage 2's candidates | wp-AUC, 3 seeds | against the candidates |
 | --- | --- | --- |
-| nothing | 82.19% | — |
-| SORT, `min_hits = 1` | 82.31% | +0.14 / +0.12 / +0.12 |
-| ByteTrack as published | 81.17% | −0.94 / −1.11 / −1.00 |
-| ByteTrack + CBMOT, tuned on validation | 83.51% | +1.30 / +1.35 / +1.32 |
-| **the object memory** | **86.01%** | **+3.82 over its own candidates** |
+| nothing | 82.80% | — |
+| SORT, `min_hits = 1` | 82.85% | +0.03 / +0.03 / +0.08 |
+| ByteTrack as published | 81.46% | −1.32 / −1.43 / −1.27 |
+| the memory's own fade and coast rules, applied *after* the threshold | 74.00% | −9.24 / −9.09 / −8.07 |
+| ByteTrack + CBMOT, tuned on validation | 84.13% | +1.37 / +1.26 / +1.35 |
+| **the object memory** | **86.29%** | **+3.49 over its own candidates** |
 
-The memory beats a tuned published tracker by **+2.36 pp**, with every seed's bootstrap interval above zero, and GOSPA agrees
-(0.454 against 0.493). The ablations locate the mechanism: removing the slot-to-slot attention costs nothing and saves 43% of
+The third row is the sharpest control available: the memory's *own* bookkeeping — the same fade time, coast floor and
+unmatched scaling, tuned over a 54-config grid on validation — loses **9 pp** when it runs as a post-hoc rescoring of
+thresholded candidates instead of as learned state inside the model. The gain is not the rules; it is where they live.
+
+On these candidates the memory beat a tuned published tracker by **+2.16 pp** (+1.98 / +2.34 / +2.16), with every seed's
+bootstrap interval above zero, and GOSPA agreed (0.435 against 0.481). **Where it wins is where the task is hard.** On the
+**occluded** stratum it recalls 78.2% of person-observations against the tuned tracker's 71.5% and the raw candidates'
+58.8%; on the partially occluded, 90.4% against 86.6%; beyond 8 m, 95.2% against 91.6%. Inside 2 m, where every method is
+easy, the tracker is ahead (95.2% against 92.7%). It is also **first to a person**: it detects them on their very first
+frame 92.8% of the time against the candidates' 90.5% and the tuned tracker's 80.6%, and it never finds 8 of 672 people
+where the tracker never finds 34 — so the tracker's AP is bought partly with latency a follow-me robot pays for. One
+column does *not* favour the memory: at a matched false-positive rate the tuned tracker recalls 95.39% against the
+memory's 95.17%, so the AP lead is curve shape and operating point, not uniform dominance.
+
+The ablations locate the mechanism: removing the slot-to-slot attention costs nothing and saves 43% of
 the parameters, removing the learned matching costs nothing, and **removing the learned per-slot state is the only ablation that
 costs anything** — −1.60 pp of recall at a matched false-positive rate, at 1.9 times its three-sigma bar. Feeding the memory's
 state back into stage 2 was measured null in three configurations, including one with a ground-truth prior and no competitor,
@@ -273,7 +305,7 @@ Use `.venv/Scripts/python.exe` directly on Windows; `python3` resolves to a Stor
 | **Both horizon curves**, the trajectory-duration tables and the saturation points | `python horizon_sweep.py --detector lfe-peaks` (and `--detector lfe-ppn`) |
 | **Recall stratified by range**, the sub-threshold miss budget and the close-pair residual | `python range_probe.py` |
 | **The scale-vs-capacity answer** and the Cover & Hart bracket | `python repr_probe.py` |
-| **The merge-radius exchange rates** against SORT | `python nms_sweep.py --skip fullscan_tcn lfe_ppn --score-by operating-point` |
+| **The merge-radius exchange rates** against SORT | `python nms_sweep.py --skip lfe_ppn --score-by operating-point` |
 | **The displacement and trail-length oracles** on populated frames | `python horizon_sweep.py --discrimination` (add `--max-gap 26` for the gap-tolerant row) |
 | **The persistence map** | `python persistence_map.py` |
 | **The background model** | `python persistence_map.py --background` |

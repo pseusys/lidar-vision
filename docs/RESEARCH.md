@@ -78,6 +78,8 @@ The categories above are the right level of description, but "replicated" is not
 - **`TemporalUNetDetector`** â€” see Section 6.4; the U-Net implementation itself is confirmed correct against the canonical definition, but its relationship to LFE's *actual* backbone needed a correction (below).
 - **`SpaceTimeCNNDetector`** and **`FullScanTCNDetector`** â€” see Sections 5.1 and 5.2; both had at least one inaccurate/overstated literature citation that has been corrected.
 
+**Two of the three were retired on 2026-10-31** (`TODO.md` item 32): `FullScanTCNDetector` and `TemporalUNetDetector` are gone from the code, last existing at commit `98b0716`. Their sections below stay as written, because this is the design record and the audit of a design does not expire with its implementation. `SpaceTimeCNNDetector` was kept, so Section 6.2's architecture is the only one of the three that can still be run.
+
 ### 2.2 SOTA baselines mentioned in the literature but not replicated here
 
 The four papers this research compares against (Sections 3, 7) each report their own baseline comparisons. Collated across all of them, three classical detectors recur that this repo does **not** implement:
@@ -366,7 +368,7 @@ memory "loses" at a shared threshold were pushed under it by rescoring while a l
 (`../memory/slot-design-evidence.md`), and rescoring before the threshold beats SORT on *identical* candidates at every setting.
 SORT cannot reach those people by construction -- not for want of seeing them (this repository's replay feeds it every candidate down to 0.01), but because it only filters.
 **The tracking literature does have a way to lift them:** CBMOT's score refinement raises a detection's score from its track's confidence (Benbarka et al., IROS 2021), and ByteTrack's second association pass is built for low-score detections (Zhang et al., ECCV 2022).
-**Re-measured 2026-10-09 on the adopted stage-2 recipe (`TODO.md` A61):** the tuned tracker lifts the candidates from 82.19% to 83.51% and the memory to 85.87%, +2.36 over the tracker at every seed, though at one matched false-positive rate the two now find the same people. **Measured 2026-10-03 (Â§7.4.5), old recipe:** ByteTrack with CBMOT's track confidence, tuned on val, lifts the same candidates from 77.66% to 80.96% AP -- about half of what the memory adds -- and the proposed memory is **+2.90 pp above it**, every seed's block-bootstrap interval above zero.
+**Re-measured 2026-10-09 on the then-adopted stage-2 recipe (`TODO.md` A61):** the tuned tracker lifts the candidates from 82.19% to 83.51% and the memory to 85.87%, +2.36 over the tracker at every seed, though at one matched false-positive rate the two now find the same people. **That stage 2 has since been superseded by the freeze and this comparison has not been repeated on the new candidates** (`TODO.md` item 56): the memory's own gain over them is +3.49 pp (86.29% over 82.80%), but the tracker's is unmeasured, so the +2.36 margin belongs to the 2026-10-09 measurement and not to the frozen model. **Measured 2026-10-03 (Â§7.4.5), old recipe:** ByteTrack with CBMOT's track confidence, tuned on val, lifts the same candidates from 77.66% to 80.96% AP -- about half of what the memory adds -- and the proposed memory is **+2.90 pp above it**, every seed's block-bootstrap interval above zero.
 **JRDB** ships image-plane (2D) and point-cloud (3D) person *tracking* benchmarks beside its detection ones, but none on its 2D laser (Â§7.4.1). The older
 laser-based people-tracking literature (Arras, Luber, Linder and the SPENCER work; Leigh et al., ICRA 2015) is substantial.
 So a reviewer will not accept "nobody combines a learned 2D-LiDAR detector with tracking" -- they do, modularly, and on embedded
@@ -479,6 +481,11 @@ argument is in Section 7.4 and rests on one measurement: a frozen detector plus 
 ByteTrack with CBMOT confidence, swept on validation -- gains **+1.32 pp** over its own candidates, while the memory gains
 **+3.82 pp**, with every seed's bootstrap interval above zero. If a tracker could do this, the memory would not be worth
 its parameters.
+
+Both figures are the **superseded** stage 2's, and the comparison has not been repeated on the frozen one (`TODO.md`
+item 56). On the frozen candidates the memory gains **+3.49 pp** (86.29% over 82.80%, three seeds, 2026-10-30), but the
+tracker's share of the better candidates is unmeasured, so the *margin* stated above may be quoted only for the line of
+work it was measured on.
 
 **Three stages, one of which is not learned:**
 
@@ -612,7 +619,7 @@ the method is reusable and because a retracted citation is worth more on the rec
 | Multi-branch, multi-kernel-size blocks merged via 1Ã—1 conv | Szegedy et al., *Going Deeper with Convolutions*, CVPR 2015 (Inception/GoogLeNet) | **Loose inspiration, not a faithful port.** `_MultiScaleBlock` does run parallel kernel-size branches concatenated and 1Ã—1-projected â€” the core motif is real â€” but it diverges from actual Inception: branches use anisotropic `(k,1)`/`(1,k)` kernels along a single axis rather than square 2D multi-scale kernels, there's no pre-branch 1Ã—1 bottleneck (Inception's actual compute-saving trick), and SE + residual are bolted on, which GoogLeNet's Inception module never had. A person's beam-width varies 4Ã— between near and far range (Section 1), which is the real motivation for the multi-kernel idea, independent of how closely it tracks GoogLeNet specifically. |
 | Joint (not factorized) space-time convolution in the early layers, cited as video-CNN literature (e.g. C3D) | ~~Tran et al., *Learning Spatiotemporal Features with 3D Convolutions*, ICCV 2015 (C3D)~~ | **Inaccurate citation â€” removed.** C3D's defining feature is a *true 3D convolution* over two spatial axes plus time. This architecture has only one spatial axis (beam index); the "joint" stem/blocks are ordinary `Conv2d` over a beamÃ—time grid, not a volumetric 3D kernel. Citing C3D overstates a kinship to volumetric video CNNs this design doesn't have. No single published architecture was found that matches this beamÃ—time-grid treatment closely enough to cite directly (it doesn't match range-image LiDAR CNNs like SqueezeSeg/RangeNet++ either, which use azimuthÃ—elevation, not beamÃ—time) â€” **the honest framing is that this is an original design combining the ResNet/SE/Inception-style ideas above, not a port or close variant of any single published architecture.** |
 
-#### 6.3 Architecture B â€” Causal TCN + Spatial CNN (`FullScanTCNDetector`)
+#### 6.3 Architecture B â€” Causal TCN + Spatial CNN (`FullScanTCNDetector`) -- **retired 2026-10-31**
 
 **What it does:** a small causal temporal-convolutional stack runs over each beam's own `T`-frame history *first* (collapsing time to a single per-beam summary), and only then does the spatial `DilatedScanBackbone` mix across beams â€” so spatial mixing has access to motion-aware features from the start, which Architecture A's joint-from-layer-1 design has to learn implicitly instead.
 
@@ -625,7 +632,7 @@ the method is reusable and because a retracted citation is worth more on the rec
 
 **Architecture A vs. B is a deliberate ablation, not two unrelated designs:** "should space and time be fused jointly from layer 1, or should time be collapsed first and space handled afterward?" is analogous to the question studied for video CNNs by Xie et al., *Rethinking Spatiotemporal Feature Learning: Speed-Accuracy Trade-offs in Video Classification*, ECCV 2018 (joint 3-D convolution vs. factorized 2-D-spatial + 1-D-temporal designs). Architecture A is the "joint" point in that design space; Architecture B inverts the factorized order further by doing time *before* space rather than after.
 
-#### 6.4 Architecture C â€” LFE-with-Time U-Net (`TemporalUNetDetector`)
+#### 6.4 Architecture C â€” LFE-with-Time U-Net (`TemporalUNetDetector`) -- **retired 2026-10-31**
 
 **What it does:** a standard 1-D U-Net backbone (Ronneberger et al., MICCAI 2015) with the single-channel input replaced by T-channel input (one channel per historical scan). Operates over the beam axis â€” each encoder stage halves N_beams by MaxPool1d(2), the bottleneck sees the full scan compressed 8Ã—, and the decoder upsamples back with skip connections from each encoder stage restoring spatial precision. Default head is heatmap (matching LFE-Peaks).
 
@@ -759,8 +766,8 @@ The most expressive beam-level architecture in the family (content-adaptive, glo
 | ~~FullScanCNNDetector~~ | Local â†’ growing (dilated, up to Â±15 beams) | GRU | space-then-time | (r, x, y) full scan | **removed** |
 | SpaceTimeCNNDetector | Local (spatial + temporal jointly) | Implicit (2D conv) | joint | raw range only, full scan, unaligned by default* | active |
 | ~~FullScanTransformerDetector~~ | Global (all N beams) | Mean-pool | space-then-time | (r, x, y) full scan | **removed** |
-| FullScanTCNDetector | Local â†’ growing (dilated, up to Â±15 beams) | Causal TCN | **time-then-space** | raw range only, full scan, unaligned by default* | active |
-| TemporalUNetDetector | Global (bottleneck) + local (skips) | T input channels | joint | raw range only, full scan, unaligned by default* | active |
+| FullScanTCNDetector | Local â†’ growing (dilated, up to Â±15 beams) | Causal TCN | **time-then-space** | raw range only, full scan, unaligned by default* | **retired 2026-10-31** (item 32; code at `98b0716`) |
+| TemporalUNetDetector | Global (bottleneck) + local (skips) | T input channels | joint | raw range only, full scan, unaligned by default* | **retired 2026-10-31** (item 32; code at `98b0716`) |
 | Li2FormerDetector | None (per-beam cutout) | Transformer (T steps) | time-then-space | Polar range only | active |
 | LFEPeaksDetector / LFEPPNDetector | Global (U-Net, full scan) | None (single scan) | n/a | Normalised range only | active |
 
@@ -769,7 +776,7 @@ The most expressive beam-level architecture in the family (content-adaptive, glo
 All active detectors are accessible via `takheliped.detectors.DETECTOR_REGISTRY`; the trainable ones (no published weights) via:
 
 ```bash
-python train.py --detector drow|drspaam|spacetime_cnn|fullscan_tcn|temporal_unet|li2former
+python train.py --detector drow|drspaam|spacetime_cnn|li2former
 ```
 
 ---

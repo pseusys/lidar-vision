@@ -710,6 +710,15 @@ def run_arms(args) -> None:
         del split
 
 
+def report_focus(table, best_classical) -> List[str]:
+    """The methods the per-person tables compare: the candidates, the strongest classical pipeline, and every arm.
+
+    An arm is any key carrying its `label:run` separator, whatever the label. While this read `startswith("E13:")` it
+    dropped item 56's `FRZ` arm from the strata and the first-detection latency altogether.
+    """
+    return [m for m in ("candidates", best_classical) if m] + [m for m in table if ":" in m]
+
+
 def run_report(args) -> None:
     """The A56 tables: AP with intervals, GOSPA, strata, latency."""
     from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
@@ -781,7 +790,7 @@ def run_report(args) -> None:
     d = test.data
     every = stride_frames(test, 1)
     thresholds = {m: table[m]["matched_fp_threshold"] for m in table}
-    focus = [m for m in ("candidates", best_classical) if m] + [m for m in table if m.startswith("E13:")]
+    focus = report_focus(table, best_classical)
     covered = {m: {} for m in focus}
     attributes = {}
     for m in focus:

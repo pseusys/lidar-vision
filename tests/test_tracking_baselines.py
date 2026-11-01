@@ -19,7 +19,8 @@ from takheliped.utils.tracking import ByteTracker
 from train_takheliped import SequenceCandidates, pack, replay_sort, score_detections
 from tracking_baselines import (
     PrecisionRecall, block_ids, double_report_anatomy, drop_duplicate_annotations, first_detection_delays, gospa, gospa_frames,
-    merge_detections, occlusion_share, paired_bootstrap, parse_arms, replay_rule_scorer, replay_tracker, stride_frames, summarise,
+    merge_detections, occlusion_share, paired_bootstrap, parse_arms, replay_rule_scorer, replay_tracker,
+    report_focus, stride_frames, summarise,
 )
 
 
@@ -324,3 +325,16 @@ class TestSummary:
         assert summary["gospa"]["E13"]["mean"] == pytest.approx(0.5)
         assert summary["first_frame"]["E13"]["mean"] == pytest.approx(0.8)
         assert summary["strata"]["occlusion"]["occluded"]["E13"]["mean"] == pytest.approx(0.7)
+class TestReportFocus:
+    """Which methods the per-person tables -- the strata and the first-detection latency -- actually compare."""
+
+    def test_the_candidates_and_the_strongest_classical_pipeline_are_always_compared(self):
+        assert report_focus({"candidates": {}, "sort_m1": {}}, "sort_m1") == ["candidates", "sort_m1"]
+
+    def test_every_arm_is_included_whatever_its_label(self):
+        """A hardcoded `E13:` dropped item 56's `FRZ:` arm from the strata and latency tables altogether."""
+        table = {"candidates": {}, "bytetrack_cbmot": {}, "FRZ:a71_freeze_s0": {}, "E13:static": {}}
+        assert report_focus(table, "bytetrack_cbmot") == ["candidates", "bytetrack_cbmot", "FRZ:a71_freeze_s0", "E13:static"]
+
+    def test_a_report_with_no_classical_pipeline_still_compares_the_candidates_and_the_arm(self):
+        assert report_focus({"candidates": {}, "FRZ:run": {}}, None) == ["candidates", "FRZ:run"]

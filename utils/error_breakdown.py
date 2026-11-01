@@ -44,8 +44,6 @@ from evaluate import (  # noqa: E402
 
 _NN_CKPTS = {
     "spacetime_cnn": Path("../checkpoints/spacetime_cnn.best.pth"),
-    "fullscan_tcn":  Path("../checkpoints/fullscan_tcn.best.pth"),
-    "temporal_unet": Path("../checkpoints/temporal_unet.best.pth"),
 }
 _LFE_MODELS = {
     "lfe_peaks": LFEPeaksDetector,

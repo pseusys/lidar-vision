@@ -4,7 +4,8 @@ Ablation: does the T-frame temporal window actually help on FROG, or is it
 dead weight?
 
 Motivation: LFE-Peaks/LFE-PPN are single-frame (no temporal input at all) yet
-match or beat FullScanTCN/TemporalUNet on FROG, and SpaceTimeCNN's lead is
+match or beat FullScanTCN/TemporalUNet on FROG (both retired by TODO.md
+item 32; this ran when all three existed), and SpaceTimeCNN's lead is
 plausibly explained by raw capacity/joint fusion rather than motion modeling
 (Section 8.5.1). Two concrete reasons to suspect the temporal signal itself
 is compromised on FROG specifically:
@@ -18,8 +19,8 @@ is compromised on FROG specifically:
      as "half a gait cycle", Section 5.4) — so T=5 covers only ~100-125 ms
      of real time on FROG, not the ~500 ms the design rationale assumes.
 
-This script trains each of the 3 proposed architectures twice on FROG,
-identical in every way except one flag:
+This script trains the architecture twice on FROG, identical in every way
+except one flag:
   - control:      normal T=5 window (--zero-history not set)
   - zero_history: same T=5 architecture, but every historical frame (all but
                   the current/last one) is zeroed before feature extraction
@@ -37,7 +38,6 @@ number) — a full run would take the original 3.3-8.9h/model x2 variants.
 Usage
 -----
   python ablation_zero_history.py
-  python ablation_zero_history.py --skip temporal_unet
 """
 
 import argparse
@@ -49,7 +49,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from train import _default_args  # noqa: E402
 from train_all import _run_in_subprocess, _train_worker, _fmt  # noqa: E402
 
-_DETECTORS = ["spacetime_cnn", "fullscan_tcn", "temporal_unet"]
+_DETECTORS = ["spacetime_cnn"]
 _VARIANTS = ["control", "zero_history"]
 
 

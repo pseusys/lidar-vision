@@ -449,8 +449,14 @@ class ObjectMemory(nn.Module):
                  fixed_decay_s: float = 0.0, learn_value: bool = False, exchange: bool = True, learned_match: bool = True,
                  recurrent: bool = True, rescore: bool = True, visibility: bool = False, coast: bool = False,
                  recurrence: str = "selective", global_state: bool = False, refine: bool = False,
-                 iterations: int = 0):
+                 iterations: int = 0, calibration: Tuple[float, float] = (1.0, 0.0)):
         super().__init__()
+        # `TODO.md` item 48: a post-hoc `(temperature, bias)` on the output logit. The default is the identity, so a
+        # checkpoint written before the key scores bit-identically -- see the loader's constructor-default rule.
+        if calibration[0] <= 0.0:
+            raise ValueError(f"calibration temperature must be positive, got {calibration[0]}: a non-positive one "
+                             "either divides by zero or inverts the ranking, which is the property item 48 rests on")
+        self.calibration = (float(calibration[0]), float(calibration[1]))
         # `TODO.md` item 42: Slot Attention's own update in place of the association's role in the state update. Each
         # refusal is a feature the published mechanism either duplicates or cannot be given.
         if iterations:
@@ -678,13 +684,24 @@ class ObjectMemory(nn.Module):
 
     def _rescored(self, encoded: Tensor, recalled: Tensor, cand_score: Tensor) -> Tensor:
         """A candidate's logit after the memory's correction, or its own logit untouched when `rescore` is false (A51 E12a),
-        which leaves the prior drawn into stage 2 as the memory's only remaining route to the loss."""
+        which leaves the prior drawn into stage 2 as the memory's only remaining route to the loss.
+
+        The post-hoc calibration (`TODO.md` item 48) is applied here and **only** here. Not to the coasting head's
+        logit: without that head `_coasting` pins it at `SILENT_COAST_LOGIT`, and a bias term applied there would
+        un-silence a head item 24 removed, inventing slot reports from nothing.
+        """
         if self.rescore is None:
-            return _logit(cand_score)
+            return self._calibrated(_logit(cand_score))
         correction = self.rescore(cat([encoded, recalled], dim=-1))[..., 0]
         if self.rescore_limit:
             correction = self.rescore_limit * tanh(correction)
-        return _logit(cand_score) + (correction if self.rescore_gate is None else self.rescore_gate * correction)
+        return self._calibrated(_logit(cand_score) + (correction if self.rescore_gate is None else self.rescore_gate * correction))
+
+    def _calibrated(self, logit: Tensor) -> Tensor:
+        """`(logit + bias) / temperature`, the identity at the default `(1.0, 0.0)` -- exactly, since `x + 0.0` and
+        `x / 1.0` are both exact in IEEE 754, which is what lets an older checkpoint keep its numbers to the bit."""
+        temperature, bias = self.calibration
+        return (logit + bias) / temperature
 
     def initial_state(self, batch: int, device=None) -> Slots:
         return initial_slots(batch, self.rules, self.dim, device)

@@ -15,10 +15,12 @@ make launch-docker-robot            # against the real robot, default ROBAIR_IP=
 Both run `docker compose -f deploy/docker/docker-compose.yml up --force-recreate roslaunch`, which rebuilds the ROS package from whatever is on disk in `deploy/takheliped/` at that moment — there is no CI auto-deploy step; a code change reaches the robot only when someone runs one of these commands by hand.
 `make build-image` builds the underlying Docker image (also built by CI on pushes touching `deploy/docker/**`, `library/**`, or the `Makefile`); it does not launch anything.
 
+> **None of these three commands work on the current development host** (verified 2026-10-30): it has no `docker` on `PATH`, no daemon, and no Docker inside WSL, and its WSL2/Ubuntu has no ROS. "Laptop only" above means *a* laptop with Docker, **not this one**. CI still builds the image on the paths listed, so the image exists; it just cannot be built, launched or exercised from here. Anything whose value lands on the robot is therefore unverifiable in this working environment and must be reported as reasoned, not demonstrated — see [`gotchas.md`](gotchas.md).
+
 ## What actually runs today
 
 Only `DrowDetector` — the published DROW cutout network — is wired into any ROS node.
-None of this project's newer work (`SpaceTimeCNNDetector`/`FullScanTCNDetector`/`TemporalUNetDetector`, the real-odometry pipeline, `SimpleTracker`) has ever been integrated into a ROS node; reaching the robot with any of them needs real node-integration work, not just training-side work.
+None of this project's newer work (`SpaceTimeCNNDetector`, `TAKHeLiPeD`, the real-odometry pipeline, `SimpleTracker`) has ever been integrated into a ROS node; reaching the robot with any of them needs real node-integration work, not just training-side work.
 Node enable/disable, topic names, and every tuning constant go through `deploy/conf.env` — see the file itself for the full variable list, and `dos-and-donts.md` for why it shouldn't be tuned against the live robot.
 
 ```mermaid

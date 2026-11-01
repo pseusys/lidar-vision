@@ -407,7 +407,6 @@ def _parse():
     p.add_argument("--drow",               metavar="WEIGHTS", default=None)
     p.add_argument("--drspaam",            metavar="WEIGHTS", default=None)
     p.add_argument("--spacetime-cnn",      metavar="WEIGHTS", default=None)
-    p.add_argument("--fullscan-tcn",       metavar="WEIGHTS", default=None)
 
     # Output
     p.add_argument("--out",    type=Path, default=None,
@@ -462,7 +461,6 @@ def main():
         ("drow",          args.drow),
         ("drspaam",       args.drspaam),
         ("spacetime_cnn", args.spacetime_cnn),
-        ("fullscan_tcn",  args.fullscan_tcn),
     ]
     for det_name, weights in nn_map:
         if weights is None:

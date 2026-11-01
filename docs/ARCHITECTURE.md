@@ -3,13 +3,18 @@
 **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector) — person detection from a
 single knee-height 2-D LiDAR.
 
-> **STATUS: NOT YET FROZEN.** One measurement is outstanding, named inline as `PENDING`. The structural
-> description below is settled; the numbers in [Proposed FROG parameters](ARCHITECTURE.md#5-proposed-frog-parameters) are either
-> measured (and cited) or marked pending. Nothing here may be quoted until the status line says frozen.
+> **STATUS: FROZEN 2026-10-30** (`TODO.md` item 47). Every cell in
+> [Proposed FROG parameters](ARCHITECTURE.md#5-proposed-frog-parameters) is measured and cited; nothing is pending.
+> Three seeds, FROG `official` test: **86.29%** wp-AUC (sd 0.17 pp), **19.32 ms** median on the CPU against a 25 ms
+> frame period, **0.596** phantoms per person-free frame. The citable artifact is
+> `weights_archive/frozen-frog-2026-10-30/`.
 >
-> | outstanding | what it decides | `TODO.md` |
-> | --- | --- | --- |
-> | the three-seed freeze | **every number in the results table** | item 47 |
+> **The CPU figure is measured twice, in two independent sessions, and agrees to 0.4%** — 19.32 ms on a host idle for
+> 63 minutes and 19.39 ms on one two minutes past a 7-hour GPU job (item 57 and item 47). The cold run is the one
+> quoted, because its noise floor is four times tighter.
+>
+> **This freezes the architecture on FROG, not on every dataset.** Section 6 is still unwritten, and the parameters
+> here are fitted to FROG by design.
 
 This document is **per-dataset by design**. The structure is general; the *parameters* are fitted to FROG and are
 expected to differ elsewhere. Later datasets get their own parameter sections rather than edits to this one.
@@ -264,29 +269,168 @@ Fitted to FROG `official`. **Other datasets get their own section; do not carry 
 
 ### 5.2 Results
 
-> **`PENDING` — the freeze (item 47).** The adopted combination (soft labels **and** `dim 64`) has never been run end
-> to end: `dim 64` was measured on the hard-label stage 2 and the target adopted afterwards. Seed 0 of the freeze is
-> the first measurement of it, and is run as a **gate** before the other two seeds.
+> **Measured 2026-10-30 (item 47), three seeds.** The adopted combination — soft labels **and** `dim 64` — had never
+> been run end to end before this, because `dim 64` was priced on the hard-label stage 2 and the target adopted
+> afterwards. Seed 0 was run as a **gate**; it passed, and so did seeds 1 and 2. Per-seed numbers and the two claims
+> the three-seed sample retracted are in `CHANGELOG.md`.
 
 | metric | value | status |
 | --- | --- | --- |
-| wp-AUC, FROG `official` test, stride 5, 3 seeds | `PENDING` | item 47 |
-| stage-2 candidates AP | 82.79% (3-seed mean) | measured |
-| memory gain over candidates | `PENDING` | item 47 |
-| CPU ms/frame, 4 threads, batch 1 | **17.73** median / 20.5 p99 | measured, item 49 |
-| — of which stage 2 / decode / memory | 9.35 / 1.68 / 6.70 | measured |
-| phantoms per person-free frame | `PENDING` | `empty_scene.py` at 3 seeds |
+| wp-AUC, FROG `official` test, stride 5, 3 seeds | **86.29%** (86.11 / 86.33 / 86.43, sd 0.17 pp) | measured, item 47 |
+| — at the 0.3 m radius | 85.19% (85.04 / 85.20 / 85.34) | measured, item 47 |
+| recall at each seed's own threshold | 95.2% (95.0 / 95.3 / 95.2) | measured, item 47 |
+| stage-2 candidates AP | 82.80% (3-seed mean; `stage2_probe.py` independently says 82.79%) | measured |
+| memory gain over candidates | **+3.49 pp** (3-seed mean; +3.35 / +3.60 / +3.51) | measured, item 47 |
+| CPU ms/frame, 4 threads, batch 1 | **19.32** median / 21.67 p99 (9 runs, 3 seeds, cold host) | measured, item 57 |
+| — of which stage 2 / decode / memory | 10.45 / 1.70 / 7.23 | measured, item 57 |
+| — the same on a warm host | 19.39 median / 21.78 p99 | measured, item 47 |
+| phantoms per person-free frame | **0.596** at threshold 0.3 (0.573 / 0.567 / 0.648, sd 0.045), from candidates' 2.134 | measured, item 58 — calibrated; **0.675** uncalibrated (item 47) |
+| — at threshold 0.9 | **0.0122** (820 / 767 / 1,061 detections in 72,533 frames) | measured, item 58 — calibrated; **0.0015** uncalibrated (106 detections), see §5.5 |
 | stage-2 parameters | 960,323 | measured |
 | stage-3 parameters | **45,762** (independent of `K` — slots are state, not parameters) | measured |
 
+> **Which of these rows item 48 moved, and which it cannot.** The shipped checkpoints carry a score calibration
+> (§5.4). It is monotone, so every **rank-based** row above stands unchanged and is still what the shipped weights
+> produce: both AP rows, the memory gain, and the recall at each seed's own threshold, that threshold being chosen by
+> sweeping to a false-positive budget. The two **fixed-threshold** rows — the phantom column at 0.3 and at 0.9 — could
+> not stand on a measurement taken before the key existed, and **item 58 re-measured them on 2026-10-31**; both now
+> quote the calibrated model, with the uncalibrated value beside it. They moved in **opposite directions** and §5.5 is
+> where that is explained. The uncalibrated values stay reproducible from `weights_archive/frozen-frog-2026-10-30/`.
+
 **The CPU figure is the one that decides deployment** (owner, 2026-10-19): FROG's frame period is **25 ms**, so
-17.73 ms median leaves 7.3 ms of headroom and the p99 leaves ~4.5 ms. A GPU number does not substitute.
+19.32 ms median leaves **5.7 ms of headroom (23%)** and the p99 leaves **3.3 ms**. A GPU number does not substitute.
+Measured under item 29's protocol — the three frozen seeds and the `dim 128` control interleaved inside one session on
+an idle host, 2,000 consecutive scans at batch 1, one `--stage2` for every arm. On the cold host the `stage2` phase,
+which is byte-identical work, spreads just **0.084 ms** across arms; that is the floor, and the frozen seeds' totals
+spread 0.14 ms, *below* it, which is the check this sweep exists to pass.
+
+**`dim 64` buys the only usable margin there is.** The `dim 128` control costs 22.34 ms median and **24.65 ms at p99**
+against the frozen architecture's 21.67 — that is **0.35 ms** of headroom against 3.33, so the control technically
+fits the frame period and has nothing left for a slow frame, a busy robot or a second node. The memory phase falls
+10.08 → 7.23 ms (−28.3%, 34× the cold floor) and the total 22.34 → 19.32 ms (−13.5%).
+
+> **Corrected 2026-10-30:** an earlier version of this section said the control was "over the 25 ms budget" at p99, on
+> the warm sweep's 25.29 ms. The cold sweep reads **24.65 ms**, inside it. The claim was session-dependent and is
+> withdrawn; what survives is that the control has no usable margin, which is the weaker and defensible statement.
+
+> **Measured twice, and it reproduces.** Item 47's warm sweep and item 57's cold sweep agree to **0.4%** on the total
+> (19.39 and 19.32 ms) and **0.9%** on the `stage2` phase (10.56 and 10.45 ms), and their ratios agree too (memory
+> −28.8% and −28.3%, total −14.6% and −13.5%). The cold run is quoted because its floor is four times tighter.
+>
+> **These rows are still not comparable with item 49's 17.73 ms**, and the discrepancy is now narrowed rather than
+> explained. Two hypotheses are dead: it is **not thermal** (the cold host reproduces the level) and **not the
+> stage-2 checkpoint** (`a69_no_aggregator_s0` and `a71_soft_label_s0` are both 960,323 parameters and both
+> aggregator-free, so their forward arithmetic is identical — only the training target differs). The `stage2` phase
+> nonetheless reads ~10.45 ms today against 9.35 ms on 2026-10-27 and 8.44 ms on 2026-10-11, the latter on the
+> *aggregator-ful* network, which does strictly more work. Something in the environment changed between those sessions
+> and this one, and it is unidentified. This is exactly why
+> [`memory/commands.md`](../memory/commands.md) bans cross-session CPU totals and why the protocol interleaves: every
+> conclusion here rests on within-session comparisons, which are unaffected.
 
 ### 5.3 Artifact
 
-> **`PENDING` — produced by the freeze.** The citable artifact will be a versioned directory holding the stage-2 and
-> stage-3 checkpoints for all three seeds, their `step3a_results.json`, the CPU latency JSON, and a manifest naming
-> the git commit that produced them.
+**Built 2026-10-30: `weights_archive/frozen-frog-2026-10-30/`**, 12 MB, with its own
+[`MANIFEST.md`](../weights_archive/frozen-frog-2026-10-30/MANIFEST.md). It holds the stage-2 and stage-3 checkpoints
+for all three seeds, their three `step3a_results.json`, all twelve latency JSONs and the sweep's own log so the
+interleaving is checkable, and a manifest naming the producing commit (`98b0716`; last commit touching the model or
+the training loop, `475255e`) together with the loading recipe, which needs neither a dataset nor a candidate cache.
+
+`weights_archive/` is gitignored — weights are data — and each release now takes a dated subdirectory. The loose
+`stage2/`/`memory/` files at its root are the **2026-10-11 release and a different architecture**; they differ in the
+stage-2 aggregator, the beam target, the slot width and the recurrence, so files from the two releases do not pair.
+
+**Built 2026-10-31: `weights_archive/frozen-frog-2026-10-31-calibrated/`**, the calibrated companion (§5.4), with its
+own [`MANIFEST.md`](../weights_archive/frozen-frog-2026-10-31-calibrated/MANIFEST.md). Every weight tensor is
+`torch.equal` to the 2026-10-30 release; the only difference is the added `calibration` key. **Cite 2026-10-30 for
+the rank-based numbers and 2026-10-31 for everything read at a fixed threshold** — which since item 58 (§5.5) means the
+phantom column is measured on the calibrated release and every other row on the 2026-10-30 one. They agree wherever the
+transform is monotone, which is everywhere except a fixed threshold.
+
+### 5.4 Score calibration
+
+> **Measured 2026-10-31 (item 48), three seeds, fitted on val.** A post-hoc temperature and bias on the memory's
+> output logit, stored in each stage-3 checkpoint. It exists because A51 phase 1b found the rescore head shifts the
+> *whole* score distribution down — a median −3.292 logits on people it keeps against −1.497 on those it loses —
+> which leaves rank-based AP better while silently decalibrating any fixed threshold.
+
+    calibrated_logit = (logit + bias) / temperature
+
+Applied in `ObjectMemory._rescored`, to the candidate logit **only**: without a coasting head `_coasting` pins that
+logit at `SILENT_COAST_LOGIT`, and a bias there would un-silence a head item 24 removed. The constructor default is
+the exact identity `(1.0, 0.0)`, so a checkpoint predating the key scores bit-identically.
+
+| | seed 0 | seed 1 | seed 2 |
+| --- | ---: | ---: | ---: |
+| temperature | 0.7917 | 0.7424 | 0.7082 |
+| bias | **−0.1792** | **+0.1580** | **+0.0807** |
+| val AP, uncalibrated → calibrated | 81.8096 → **81.8096%** | 81.6475 → **81.6475%** | 81.7778 → **81.7778%** |
+| val precision @0.3 | 65.50 → **70.20%** | 67.96 → **68.86%** | 66.46 → **69.04%** |
+| val recall @0.3 | 84.75 → 81.52% | 82.56 → 81.91% | 83.91 → 82.05% |
+| val FP/frame @0.3 | 1.436 → **1.114** | 1.252 → **1.192** | 1.363 → **1.184** |
+| val NLL | 0.20333 → **0.19509** | 0.19018 → **0.18296** | 0.19711 → **0.18746** |
+
+**Every temperature sharpens, but the biases do not share a sign**, so the miscalibration is a property of the
+individual seed rather than of the architecture — which is why the pair is stored per checkpoint instead of published
+as one recommended threshold. **The result worth quoting is not the per-seed gain**, which ranges from seed 0's
+4.70 pp of precision for 3.23 pp of recall down to seed 1's 0.90 for 0.65. It is that the three seeds **converge on a
+common operating point**, which is what a deployment holding a single number in a config file needs:
+
+| spread across the three seeds | uncalibrated | calibrated |
+| --- | ---: | ---: |
+| precision @0.3 | 2.46 pp | **1.33 pp** |
+| recall @0.3 | 2.19 pp | **0.53 pp** |
+| FP/frame @0.3 | 0.184 | **0.078** |
+
+**AP is invariant by construction** — the transform is monotone for any positive temperature — and that is what made
+it safe to apply after the freeze rather than before it. Seeds 0 and 2 nonetheless report AP differing by
+**±5.96e-8**, one float32 ulp near 0.82, with seed 1 at exactly 0. That was chased to a definite answer rather than
+waved off: across all three seeds and 6.4 M detections there are **zero inversions** — rounding to nearest is itself
+monotone, so no pair can swap — while **24,812 to 26,010 adjacent pairs per seed become tied** that were distinct
+before, because sharpening pushes logits onto a coarser part of the sigmoid's float32 grid. `_prec_rec_2d` accepts
+tied detections in mergesort order, so a collapsed tie can reorder within its group and move AP by a hair. It is an
+artifact of float32 scoring, two orders of magnitude below the 0.01 pp this project reports to.
+
+> **Fitted on val, never on test.** `calibrate_rescore.py` refuses `--split test` outright, so the transform is never
+> chosen on the split it would be reported on. The fit's labels follow the metric's own rule — detections accepted in
+> descending score order, one-to-one within the match radius — and a cross-check requires the labels' recall at 0.3 to
+> agree with `score_detections`' own to within 2 pp; all three agreed to ~0.001. See `CHANGELOG.md` for the two label
+> defects that a first attempt died of.
+
+### 5.5 The phantom column, re-measured on the calibrated checkpoints
+
+§5.4's transform is monotone, so it cannot move an AP -- but it moves every number read at a **fixed** threshold, and the
+phantom column is the fixed-threshold row this project leads with. Item 58 re-ran it: `utils/empty_scene.py` over all
+**72,533 person-free frames** of FROG `transferred`, three seeds, each stage 3 paired with the stage 2 whose candidates it
+learnt from, which is exactly how item 47 measured it. The script needed no change and no flag; `object_memory` restores the
+pair from the checkpoint, which is the point of shipping it there.
+
+| person-free frames, 3 seeds | uncalibrated (item 47) | **calibrated** (item 58) | change |
+| --- | ---: | ---: | ---: |
+| stage-2 candidates, FP/frame @0.3 | 2.1336 | **2.1336** | **identical** |
+| whole detector, FP/frame @0.3 | 0.6749 (sd 0.073) | **0.5956** (sd 0.045) | **-11.8%** |
+| — frames holding any @0.3 | 31.93% | **29.41%** | -2.52 pp |
+| — FP/frame @0.3, beyond the 10 s fade | 0.5240 | **0.4617** | -11.9% |
+| whole detector, FP/frame @0.9 | 0.0015 (sd 0.0023) | **0.0122** (sd 0.0022) | **8x worse** |
+| — detections @0.9, all three seeds | 106 (298 / 0 / 20) | **883** (820 / 767 / 1,061) | +777 |
+| — frames holding any @0.9 | 0.15% | **1.20%** | +1.05 pp |
+
+**The candidates row is identical to four decimal places, and that is the control.** The key is stored in stage 3; stage 2's
+candidates come from a network item 48 never touched. So every change in the rows below it belongs to the memory's score and
+to nothing else -- not to a different cache, a different split or a different decode.
+
+**The effect reverses with the threshold, and only measuring it would have said so.** Dividing by a temperature below 1
+sharpens in both directions: it pushes the bulk of the distribution down, which is why 0.3 improves, and it lifts the
+confident tail, which is why 0.9 gets eight times worse. Seed 1 is the clearest case -- **zero** detections above 0.9 across
+all 72,533 frames uncalibrated, **767** calibrated. Against stage 2's own 0.666 at that threshold the qualitative claim
+survives, **-98.2%** rather than -99.8%, but the number is not the one that was published.
+
+**At 0.3 the seeds also come closer together**, as §5.4's val measurements said they would, though less tidily than on val:
+the between-seed spread falls from 0.136 to 0.081 FP/frame and the sd from 0.073 to 0.045. **At 0.9 they do not converge at
+all** -- the sd is unchanged at 0.002 -- so that threshold sees a pure shift, not a shared operating point.
+
+**One uncalibrated figure was not computable and now is.** The recurrence share at 0.9 -- how many phantoms reappear within
+0.3 m in the next frame -- had no value for seed 1, which emitted nothing to recur; the three-seed figure is now **82.3%**,
+against 93.9% at 0.3. Both stay far below the 99.8% that real people score.
 
 ---
 

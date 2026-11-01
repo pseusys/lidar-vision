@@ -53,7 +53,7 @@ HEATMAP_HEIGHT, HEATMAP_DISTANCE = 0.3, 5      # `evaluate_auc`'s own peak rule 
 V2D = dict(blur_sigma=2.0, blur_win=11, bin_size=0.1, vote_collect_radius=0.5, min_thresh=1e-3)   # its vote-grid settings
 SELF_CONTAINED = ("algorithmic", "lfe_peaks", "lfe_ppn")    # released forms that preprocess, run and decode in one call
 TENSOR_IN = ("li2former",)      # the one detector whose `forward_one` takes a tensor; the rest take numpy and refuse one
-ORDER = ("algorithmic", "lfe_peaks", "lfe_ppn", "fullscan_tcn", "temporal_unet", "spacetime_cnn", "drow", "drspaam", "li2former")
+ORDER = ("algorithmic", "lfe_peaks", "lfe_ppn", "spacetime_cnn", "drow", "drspaam", "li2former")
 TAKHELIPED_LATENCY = _HERE.parent / "checkpoints_three_horizon" / "a61" / "latency_cpu_t4.json"
 
 
@@ -203,7 +203,7 @@ def total_of(row: Dict) -> Dict[str, Optional[float]]:
 
 
 DISPLAY = dict(algorithmic="AlgorithmicDetector *(rule-based, C++)*", lfe_peaks="LFE-Peaks", lfe_ppn="LFE-PPN",
-               fullscan_tcn="FullScanTCN", temporal_unet="TemporalUNet", spacetime_cnn="SpaceTimeCNN",
+               spacetime_cnn="SpaceTimeCNN",
                drow="DrowDetector (DROW3)", drspaam="DrSpaamDetector (DR-SPAAM)", li2former="Li2FormerDetector",
                takheliped="**TAKHeLiPeD**, whole detector")
 

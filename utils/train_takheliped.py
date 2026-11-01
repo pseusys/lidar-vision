@@ -766,6 +766,12 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
                       latest_value=SlotRules().latest_value if args.get("latest_value") is None else literal_eval(args["latest_value"]),
                       association=SlotRules().association if args.get("association") is None else args["association"],
                       cell_m=SlotRules().cell_m if args.get("cell_m") is None else float(args["cell_m"]))
+    # `TODO.md` item 48. A top-level key, not an entry in `args`: the pair is fitted on val *after* training by
+    # `calibrate_rescore.py`, so recording it as a training argument would claim something that never happened. Absent,
+    # the constructor's identity default applies and the checkpoint scores exactly as it did before the key existed.
+    fitted = checkpoint.get("calibration")
+    if fitted is not None:
+        shape["calibration"] = (float(fitted["temperature"]), float(fitted["bias"]))
     memory = ObjectMemory(rules, feature_dim=feature_dim, **{**shape, **overrides})
     state = checkpoint["model"]
     if memory.rescore is None:                           # A51 E12a drops the head, so its trained weights have nowhere to go

@@ -1,8 +1,61 @@
 # Gotchas
 
-*keywords:* encoding, unicode, cp1252, DirectML, venv, python3, ABI mismatch, pip install -e, JRDB, torch_utils, set_num_threads, OMP_NUM_THREADS, spin-wait, CPU time vs wall time
+*keywords:* encoding, unicode, cp1252, BOM, U+FEFF, utf-8-sig, mojibake, CRLF, DirectML, venv, python3, ABI mismatch, pip install -e, JRDB, torch_utils, set_num_threads, OMP_NUM_THREADS, spin-wait, CPU time vs wall time, docker, ROS, launch-docker-local, WSL
 
 Platform and environment traps that have cost real debugging time.
+
+- **`sed -i` from the Bash tool silently converts a CRLF file to bare LF, and the result is a whole-file diff.**
+  Every markdown file in this repo is CRLF (`core.autocrlf=true`, no `*.md` rule in `.gitattributes`). On 2026-10-30
+  two `sed -i` calls on `TODO.md` rewrote all 1,961 line endings to LF; `git diff --stat` then reported **3,918
+  changed lines for a 6-line edit**, and `git diff --ignore-all-space` was what revealed the real change. MSYS `head`,
+  `tail` and `cat` **do** preserve CRLF, so a head/tail/cat splice is safe.
+  **`awk` is not, and this entry said it was.** On 2026-11-01, item 31, seven `awk '{print}'` splices -- the obvious
+  tool for "insert these lines after line N" -- rewrote `TODO.md`, `CHANGELOG.md` and three `memory/` pages to LF,
+  one file at a time over four hours, because MSYS awk reads *and writes* in text mode. `cp`-ing an awk output over
+  the original carries it through. The sibling trap is in the next paragraph but one: the `grep` check says the file
+  is fine, so nothing looks wrong until `git diff --stat` reports a four-figure line count for a ten-line edit.
+  **Treat every MSYS text utility as LF-converting except `head`, `tail` and `cat`**, and verify with the byte count
+  below after *any* of them, not only after `sed -i`.
+  **Do not diagnose this with `grep -c $'\r$'`** -- MSYS grep reports a match on every line either way and will tell
+  you the file is still CRLF. Count bytes instead:
+  `.venv/Scripts/python.exe -c "import pathlib; b=pathlib.Path('F').read_bytes(); print(b.count(b'\r\n'), b.count(b'\n')-b.count(b'\r\n'))"`
+  and repair with `b.replace(b'\n', b'\r\n')` after asserting there are no CRLFs left to double.
+  **Prefer the `Edit` tool or a Python byte-level rewrite for in-place edits of tracked files.**
+  **And "a Python rewrite" means *bytes*, not `read_text`/`write_text`:** 2026-10-31, item 32, the same trap again
+  through a different door -- `path.read_text(encoding="utf-8")` applies universal newlines and hands back `\n`, so a
+  following `write_text(..., newline="")` writes the whole file LF and `utils/train.py`'s **88-line** edit reported
+  **4,478 changed lines**. Read with `read_bytes()`, decode, splice with `"\r\n"` in the search strings, and
+  `write_bytes()` back.
+  **Convert newlines in exactly one place.** The same day, a helper that took already-CRLF text and converted it again
+  turned every line ending of a 77-line `CHANGELOG.md` entry into `\r\r\n`. It renders correctly and `git diff` shows
+  nothing odd, but Python reading it with universal newlines sees a **blank line between every real one** -- which is how
+  it was found: `verify_memory.py` reported 36 new "more than 1 consecutive blank line" warnings in a file whose own
+  blank lines were all single. So when checking a file you rewrote, count `b'\r\r\n'` as well as bare `b'\n'`; a
+  CRLF count alone says the file is fine.
+
+- **Some of this repo's text files are not plain UTF-8, and two separate traps follow from it.**
+  Found 2026-10-31 by item 32's AST-based surface scan, which refused to parse four files and matched nothing in a fifth.
+  * **Four Python sources start with a UTF-8 BOM** -- `library/takheliped/detectors/takheliped.py`,
+    `utils/stage2_probe.py`, `tests/test_run_queue.py`, `tests/test_stage2_probe.py`. Python's *import* machinery strips
+    it, so they run fine and nothing has ever complained; `ast.parse()` on text read as plain `utf-8` does **not**, and
+    dies with `SyntaxError: invalid non-printable character U+FEFF`. Any tool here that reads source and parses it must
+    use **`encoding="utf-8-sig"`**, which is correct for a BOM-less file too.
+  * **`docs/RESEARCH.md` holds double-encoded punctuation.** Its em dashes are stored as the three characters
+    U+00E2 U+20AC U+201D (the UTF-8 bytes of `-` re-encoded as if Latin-1), so a search string containing a real em
+    dash matches **nothing** in that file while looking identical on screen -- a console will render both the same way.
+    `README.md` and the `memory/` pages are clean. **Anchor edits to that file on ASCII-only substrings.** Repairing the
+    mojibake itself is unclaimed work, deliberately not bundled into an unrelated item.
+
+- **This development host cannot build or run the ROS side at all** (verified 2026-10-30 at the owner's prompting).
+  There is **no `docker`** on `PATH`, no daemon, and **none inside WSL either**; WSL2/Ubuntu is installed but has **no ROS**
+  (`/opt/ros` absent, no `roscore`). So `make launch-docker-local`, `make launch-docker-robot` and `make build-image`
+  all fail here, and [`deployment.md`](deployment.md)'s "laptop only" next to the first of them means *a* laptop with
+  Docker, **not this one**. The image is `ros:noetic-ros-base-focal` via `deploy/docker/Dockerfile`.
+  **Consequence for planning:** anything whose value is realised on the robot cannot be verified in this repo's working
+  environment, only reasoned about -- so say so in the report instead of implying a deployment benefit was demonstrated.
+  Related: **there is no TAKHeLiPeD ROS node**. The only detector node is `deploy/takheliped/nodes/drow_detector.py`,
+  loading `DrowDetector`, and `deploy/conf.env`'s `DROW_DETECTOR_THRESHOLD=0.80` is **DROW's** threshold -- no deployed
+  node reads a TAKHeLiPeD score (`AGENTS.md` rule 5, `../TODO.md`'s NOT DEPLOYED section).
 
 - **A finished ROCm process can hang unkillably, and `taskkill /F /T` will not clear it -- `Invoke-CimMethod` will.**
   The teardown hang is already known (a finished process lingers past `os._exit`, which is why scripts here call it at all),

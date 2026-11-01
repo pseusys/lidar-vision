@@ -8,7 +8,7 @@ Sections
 --------
 1. Dataset verification  --verify : FoV coverage + annotation-alignment stats
 2. Algorithmic evaluation          : precision / recall on the test set
-3. NN model AUC          --drow / --drspaam / --spacetime-cnn / --fullscan-tcn / ...
+3. NN model AUC          --drow / --drspaam / --spacetime-cnn / ...
                                    : load checkpoint, compute AUC on CPU
 4. Throughput benchmark  --bench   : forward / backward timing on synthetic data
 
@@ -20,7 +20,7 @@ Usage
   # Evaluate trained models on FROG test set, also benchmark
   python evaluate.py --dataset frog --split test
                      --drspaam   checkpoints/drspaam.pth
-                     --fullscan-tcn checkpoints/fstcn.pth
+                     --spacetime-cnn checkpoints/stcnn.pth
                      --bench
 
   # Benchmark only (no dataset needed)
@@ -52,8 +52,6 @@ from takheliped.detectors import (
     DrSpaamDetector,
     Li2FormerDetector,
     SpaceTimeCNNDetector,
-    FullScanTCNDetector,
-    TemporalUNetDetector,
     LFEPeaksDetector,
     LFEPPNDetector,
 )
@@ -333,8 +331,7 @@ def eval_nn_model(det_name: str, weights_path: Path,
         # sizes, or a checkpoint saved with reduced capacity (e.g. the
         # overfitting-reduction experiments) would shape-mismatch on load.
         raw_ckpt = torch.load(weights_path, map_location="cpu")
-        arch_keys = ("channels", "n_spatial_stages", "tcn_channels",
-                    "backbone_channels", "unet_channels")
+        arch_keys = ("channels", "n_spatial_stages")
         overrides = {k: raw_ckpt[k] for k in arch_keys if k in raw_ckpt}
         if "n_time" in raw_ckpt:
             overrides["time_frame"] = raw_ckpt["n_time"]  # checkpoint key -> _default_args field name
@@ -405,7 +402,7 @@ def _temporal_consensus_filter(detections, seq_id, cache_by_seq,
     This is a pilot for testing whether a static "object" can be told apart
     from a "person" using persistence across several *independent* per-frame
     detections, as an alternative/complement to early-fusing raw scans before
-    the network (what SpaceTimeCNN/FullScanTCN/TemporalUNet do).
+    the network (what SpaceTimeCNN does).
 
     Note: matching is greedy nearest-neighbor per cached frame, not a proper
     multi-object tracker — fine for sparse single/few-person frames, may
@@ -798,7 +795,7 @@ def bench_model(model: torch.nn.Module, input_mode: str,
     opt = _make_optimizer(model.parameters(), lr=1e-3,
                           weight_decay=1e-4, using_dml=False)
 
-    # heatmap-head models (e.g. TemporalUNetDetector with head="heatmap")
+    # heatmap-head models (e.g. SpaceTimeCNNDetector with head="heatmap")
     # return a 1-tuple (heatmap,), not the (logits, vpred) 2-tuple every
     # other head returns — branch on it instead of assuming 2 outputs.
     _head_type = getattr(model, "head_type", "drow")
@@ -852,12 +849,6 @@ def _build_bench_models(T: int) -> List[Tuple[str, torch.nn.Module, str]]:
             "cutout"),
         ("SpaceTimeCNN",
             SpaceTimeCNNDetector(n_time=T),
-            "raw_scan"),
-        ("FullScanTCN",
-            FullScanTCNDetector(n_time=T),
-            "raw_scan"),
-        ("TemporalUNet",
-            TemporalUNetDetector(n_time=T, head="heatmap"),
             "raw_scan"),
     ]
 
@@ -948,8 +939,6 @@ _NN_MODELS = {
     "drspaam":       "drspaam",
     "li2former":     "li2former",
     "spacetime-cnn": "spacetime_cnn",
-    "fullscan-tcn":  "fullscan_tcn",
-    "temporal-unet": "temporal_unet",
 }
 
 # ONNX-based models evaluated via eval_lfe_model
@@ -1100,7 +1089,7 @@ def main():
                              "the default stopped being a hardcoded 1 (TODO.md "
                              "A15). Checkpoints saved before that carry no dtime "
                              "and fall back to 1. Applies to --spacetime-cnn/"
-                             "--fullscan-tcn/--temporal-unet/--drow/--drspaam/--li2former.")
+                             "--drow/--drspaam/--li2former.")
     parser.add_argument("--eval-history-mode", default="full",
                         choices=["full", "zero", "shuffle", "frozen"],
                         help="Temporal ablation at evaluation time only, no "
@@ -1129,18 +1118,17 @@ def main():
                         help="Must match --diff-channels used when *training* the "
                              "checkpoint being evaluated (default: False) — a "
                              "representation choice, not an augmentation, so eval "
-                             "has to reproduce it exactly. Applies to --spacetime-cnn/"
-                             "--fullscan-tcn/--temporal-unet.")
+                             "has to reproduce it exactly. Applies to --spacetime-cnn.")
     parser.add_argument("--eval-global-normalize", action="store_true", default=False,
                         help="Must match --global-normalize used when *training* the "
                              "checkpoint being evaluated (default: False) — a "
                              "representation choice, not an augmentation. Applies to "
-                             "--spacetime-cnn/--fullscan-tcn/--temporal-unet.")
+                             "--spacetime-cnn.")
     parser.add_argument("--eval-local-normalize-window", type=int, default=0,
                         help="Must match --local-normalize-window used when *training* "
                              "the checkpoint being evaluated (default: 0 = off) — a "
                              "representation choice, not an augmentation. Applies to "
-                             "--spacetime-cnn/--fullscan-tcn/--temporal-unet.")
+                             "--spacetime-cnn.")
     parser.add_argument("--consensus-window", type=int, default=1,
                         help="LFE only: late-fusion temporal consensus over the last "
                              "N frames' own detections (default: 1 = off, i.e. normal "

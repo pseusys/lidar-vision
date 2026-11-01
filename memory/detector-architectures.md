@@ -9,7 +9,8 @@ This file is the short, operational version: what an agent needs to predict a de
 
 Every detector in this project answers the same question — for each beam in a 2D LiDAR scan, is there a person/wheelchair/walker there, and where exactly — but takes one of two structurally different routes to it.
 **Cutout-based** detectors (`DrowDetector`, `DrSpaamDetector`, `Li2FormerDetector`) extract a fixed-width polar window around each beam and run a shared per-beam CNN over it independently, with no or only local cross-beam communication.
-**Full-scan** detectors (`SpaceTimeCNNDetector`, `FullScanTCNDetector`, `TemporalUNetDetector`, and the ONNX-only `LFEPeaksDetector`/`LFEPPNDetector`) process the entire raw scan at once, with dilated convolutions standing in for the cutout's fixed window.
+**Full-scan** detectors (`SpaceTimeCNNDetector`, and the ONNX-only `LFEPeaksDetector`/`LFEPPNDetector`) process the entire raw scan at once, with dilated convolutions standing in for the cutout's fixed window.
+(`FullScanTCNDetector` and `TemporalUNetDetector` were full-scan too and were **retired on 2026-10-31**, `TODO.md` item 32 — see *Lifecycle* below.)
 The research question this project started from: can a full-scan, non-recursive (no RNN, no attention) design match or beat the cutout-based state of the art, while being far cheaper per frame.
 **That framing was superseded on 2026-09-14.** `TAKHeLiPeD` (below) keeps the full-scan half and deliberately lifts the non-recursive constraint, because the evidence that separates a chair from a standing person only exists at a horizon of tens of seconds, which no feed-forward window can reach (`../docs/PAPER.md`).
 
@@ -167,7 +168,15 @@ subtends 42 beams at 2 m and 9 at 9 m. Costs nothing at inference -- same archit
 false positives **96.5%** against 96.43%, all well inside the 1.32 pp bar -- and it takes **28% off the memory phase**
 on the CPU, 9.30 -> 6.70 ms in a matched interleaved sweep whose own noise floor was 0.53 ms. Total CPU falls
 20.06 -> 17.73 ms and p99 margin against FROG's 25 ms frame period nearly doubles (2.3-2.8 -> 4.3-4.8 ms); stage 3's
-checkpoint drops from 706 KB to **195 KB**. It is the clearest efficiency result of the whole architecture sweep, and
+checkpoint drops from 706 KB to **195 KB**. **The freeze's own sweep reproduces the ratios** (item 47, 2026-10-30, the
+three frozen seeds against the same `dim 128` control, and repeated on a cold host as item 57): memory phase
+10.08 -> 7.23 ms (**-28.3%**, 34x that session's 0.084 ms floor) and total 22.34 -> 19.32 ms (-13.5%), with the control
+at **24.65 ms p99 against the frozen architecture's 21.67** -- inside the 25 ms budget by 0.35 ms, which is to say with
+nothing left for a slow frame. The absolute levels differ from the figures above by ~12% because those are a different
+session -- which is exactly why only the ratios are quoted across them, and the ratios agree. **The two 2026-10-30
+sweeps, warm and cold, agree with each other to 0.4% on the total**, so the level is a property of this environment and
+not of thermal state; the gap to the older sessions is unexplained and is not the checkpoint either (both stage 2s are
+960,323 parameters and aggregator-free, hence identical at inference). It is the clearest efficiency result of the whole architecture sweep, and
 it is on the axis the owner made decisive on 2026-10-19: an architecture that wins on accuracy and loses on CPU has not
 won, so one that ties on accuracy and takes a quarter off the dominant phase has. **`heads` stays at 4**, measured: the `heads 8` arm scored **85.99%** against the
 baseline's 86.20%, a tie inside the bar, and a head split redistributes attention without adding any -- so it leaves
@@ -240,13 +249,16 @@ Design rationale: [`../docs/PROPOSAL.md`](../docs/PROPOSAL.md). Evidence for eac
 
 ## The three earlier full-scan architectures — superseded
 
-Preceded TAKHeLiPeD and still in `DETECTOR_REGISTRY`; every accuracy number they carried is retracted (`performance-log.md`), so they are provenance, not results.
+Preceded TAKHeLiPeD; every accuracy number they carried is retracted (`performance-log.md`), so they are provenance, not results.
+**Two of the three were retired on 2026-10-31** (`TODO.md` item 32): nothing had trained on `FullScanTCNDetector` or `TemporalUNetDetector` since 2026-09 and neither influenced a project decision, so their code and their four private blocks (`DilatedScanBackbone`, `_TemporalTCNBlock`, the two U-Net blocks) are gone, last existing at commit **`98b0716`**.
+**`SpaceTimeCNNDetector` was deliberately kept** (the owner's refinement): the 2026-09-10 history ablation that reorganised `TODO.md` §A was measured on it, and a decision is only reproducible while the code behind it is.
+The four blocks it shares — `_gn`, `_SEBlock`, `_JointConvBlock`, `_MultiScaleBlock` — stayed with it, `_SEBlock` reached only through `_MultiScaleBlock`.
 
 | Detector | Beam communication | Temporal fusion order | Cost | Best FROG wp-AUC |
 | --- | --- | --- | --- | --- |
 | `SpaceTimeCNNDetector` (A) | local, joint with time from layer 1 | joint | ~9-12 ms/frame | retracted (`performance-log.md`) |
-| `FullScanTCNDetector` (B) | local, growing via dilation | time-then-space (causal TCN first) | ~2-3 ms/frame | retracted |
-| `TemporalUNetDetector` (C) | global (bottleneck) + local (skips) | joint (T input channels) | ~2-3 ms/frame | retracted |
+| ~~`FullScanTCNDetector`~~ (B) **retired** | local, growing via dilation | time-then-space (causal TCN first) | ~2-3 ms/frame | retracted |
+| ~~`TemporalUNetDetector`~~ (C) **retired** | global (bottleneck) + local (skips) | joint (T input channels) | ~2-3 ms/frame | retracted |
 
 A vs. B is a deliberate ablation: does fusing space and time jointly from the first layer beat collapsing time first and mixing space afterward?
 The accuracy ordering that used to sit in this table (A > B > C) is **retracted pending re-measurement** — every FROG number behind it carries at least one of the four 2026-09-10 measurement bugs, and A18 in particular hit A and B but not C, so the three were not even measured the same way.
@@ -272,7 +284,7 @@ A detector class not in this dict cannot be trained or evaluated through `train.
 - **`takheliped.py`** — TAKHeLiPeD: `beam_features`/`sanitize_ranges`, `CalibrationNetwork` (single-frame; `fold_legacy_calibration` carries older checkpoints over; `input_features="lfe"` swaps the ten beam features for LFE's one `lfe_features` channel, A59's attribution arm F1 only), `ObjectMemory` + `Slots`/`SlotRules`/`manage_slots`, and `calibration_network()`/`object_memory()` (in the trainer), which rebuild either stage the way its checkpoint was trained -- stage 2's range limit, input and widths through `network_shape`. Not in `DETECTOR_REGISTRY` — it is stateful and has its own trainer.
 - **`architectures.py`** — `DrSpaamDetector` (cutout + auto-regressive spatial attention).
 - **`drow_detector.py`** — `DrowDetector` (cutout + fixed temporal sum); the only detector the ROS deployment currently runs (`deployment.md`).
-- **`full_scan.py`** — `SpaceTimeCNNDetector`, `FullScanTCNDetector`, `TemporalUNetDetector`; this project's own novel designs.
+- **`full_scan.py`** — `SpaceTimeCNNDetector`; this project's own first novel design, and the only survivor of the three this file held until item 32.
 - **`li2former.py`** — `Li2FormerDetector` (cutout + temporal Transformer); no published weights exist, and training has never completed on this project's hardware (`gotchas.md` I4).
 - **`lfe_detector.py`** — `LFEPeaksDetector`/`LFEPPNDetector`, ONNX inference only, single-scan (no temporal window at all); the closest prior art to Architectures A-C.
 - **`algorithmic_detector.py`** — wraps the C++ `AlgorithmicDetector` (rule-based leg+chest clustering + tracking); the only detector with no confidence score, so it reports F1/precision/recall instead of AUC.

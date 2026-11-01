@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Source-level NMS/vote-clustering sweep for the two models that don't benefit
-from operating-threshold selection alone (utils/error_breakdown.py's
-precision-target analysis): FullScanTCN and LFE-PPN.
+Source-level NMS/vote-clustering sweep for LFE-PPN, the model that doesn't
+benefit from operating-threshold selection alone (utils/error_breakdown.py's
+precision-target analysis).
 
 Motivation: the error breakdown showed false positives dominate for every
-model; the threshold sweep showed SpaceTimeCNN/TemporalUNet/LFE-Peaks all
-have a favorable FP-for-FN trade at a stricter operating point, but
-FullScanTCN and LFE-PPN don't — their precision/recall curves are shaped
-differently, so picking a different point on the *same* curve doesn't help.
-This sweeps the parameters that actually generate that curve in the first
-place:
+model; the threshold sweep showed SpaceTimeCNN/LFE-Peaks have a favorable
+FP-for-FN trade at a stricter operating point, but LFE-PPN doesn't — its
+precision/recall curve is shaped differently, so picking a different point on
+the *same* curve doesn't help. This sweeps the parameters that actually
+generate that curve in the first place:
 
-  FullScanTCN (and any vote-based model): `votes_to_detections()`'s
-  `vote_collect_radius` (how far apart votes get merged into one detection)
-  and `min_thresh` (minimum vote-grid density to report anything at all).
+  (A third model used to be swept here: FullScanTCN, over
+  `votes_to_detections()`'s `vote_collect_radius` and `min_thresh`. Its arm
+  went with the detector in TODO.md item 32; for any future vote-based model
+  the same sweep is `eval_nn_model(..., v2d_conf=...)`.)
 
   LFE-PPN: its own constructor already exposes `score_thresh` (minimum
   objectness) and `nms_radius` (greedy NMS suppression radius) — no need to
@@ -25,7 +25,7 @@ fresh model/detector forward pass, not a fresh Python process) — much
 cheaper than N separate `evaluate.py` invocations for a small sweep.
 
   Both LFE detectors: the **range-aware** merge radius, `r(d) = a + b*d`
-  (`--skip fullscan_tcn lfe_ppn` to run only this). Tier 0 measured the single
+  (`--skip lfe_ppn` to run only this). Tier 0 measured the single
   scalar failing in both directions at 0.30 m -- ~5 pp of LFE-Peaks' recall
   spent merging adjacent people into one detection, while LFE-PPN emits 1.609
   duplicates per frame at the same value (`memory/static-detector-diagnosis.md`,
@@ -48,7 +48,7 @@ cheaper than N separate `evaluate.py` invocations for a small sweep.
 Usage
 -----
   python nms_sweep.py --dataset frog --eval-stride 40
-  python nms_sweep.py --skip fullscan_tcn lfe_ppn --eval-stride 5    # just A38
+  python nms_sweep.py --skip lfe_ppn --eval-stride 5    # just A38
 """
 
 import argparse
@@ -66,10 +66,8 @@ from takheliped.detectors import LFEPeaksDetector, LFEPPNDetector  # noqa: E402
 from takheliped.detectors.lfe_detector import _merge_nearby  # noqa: E402
 from takheliped.utils.drow_utils import project_cartesian_from_polar  # noqa: E402
 from scipy.optimize import linear_sum_assignment  # noqa: E402
-from evaluate import eval_nn_model, eval_lfe_model, _load_dataset, _subsample_dataset  # noqa: E402
+from evaluate import eval_lfe_model, _load_dataset, _subsample_dataset  # noqa: E402
 from error_breakdown import _best_f1_point, _breakdown, _total_gt  # noqa: E402
-
-_FULLSCAN_TCN_CKPT = Path("../checkpoints/fullscan_tcn.best.pth")
 
 
 def main():
@@ -81,11 +79,7 @@ def main():
     p.add_argument("--eval-stride", type=int, default=1)
     p.add_argument("--eval-batch-size", type=int, default=16)
     p.add_argument("--skip", nargs="*", default=[],
-                   choices=["fullscan_tcn", "lfe_ppn", "range_aware"])
-    p.add_argument("--radius-grid", type=float, nargs="+", default=[0.3, 0.5, 0.7],
-                   help="vote_collect_radius values to try (FullScanTCN)")
-    p.add_argument("--min-thresh-grid", type=float, nargs="+", default=[1e-3, 5e-3, 1e-2],
-                   help="min_thresh values to try (FullScanTCN)")
+                   choices=["lfe_ppn", "range_aware"])
     p.add_argument("--score-thresh-grid", type=float, nargs="+", default=[0.3, 0.4, 0.5],
                    help="score_thresh values to try (LFE-PPN)")
     p.add_argument("--nms-radius-grid", type=float, nargs="+", default=[0.5, 0.8, 1.2],
@@ -127,31 +121,6 @@ def main():
 
     total_gt = _total_gt(dataset)
     print(f"\nTotal wp GT annotations in evaluated set: {total_gt}\n")
-
-    # --- FullScanTCN: vote_collect_radius x min_thresh -------------------
-    if "fullscan_tcn" not in args.skip:
-        print(f"\n{'='*100}\n  FullScanTCN — vote_collect_radius x min_thresh sweep\n{'='*100}\n")
-        print(f"  {'radius':>7} {'min_thresh':>11} {'AUC':>7} {'Recall':>8} {'Prec':>8} "
-              f"{'F1':>7} {'TP':>8} {'FP':>8} {'FN':>8}")
-        base_v2d = {"blur_sigma": 2.0, "blur_win": 11, "bin_size": 0.1}
-        best = None
-        for radius, min_thresh in product(args.radius_grid, args.min_thresh_grid):
-            v2d = dict(base_v2d, vote_collect_radius=radius, min_thresh=min_thresh)
-            aucs = eval_nn_model("fullscan_tcn", _FULLSCAN_TCN_CKPT, dataset, cfg,
-                                 eval_r=args.eval_r, batch_size=args.eval_batch_size,
-                                 return_curves=True, v2d_conf=v2d)
-            curve = aucs.get("wp_curve")
-            if curve is None:
-                continue
-            r, prec, f1 = _best_f1_point(curve)
-            tp, fp, fn = _breakdown(r, prec, total_gt)
-            print(f"  {radius:>7.1f} {min_thresh:>11.4f} {aucs['wp']:>6.1%} {r:>7.1%} "
-                  f"{prec:>7.1%} {f1:>6.1%} {tp:>8.0f} {fp:>8.0f} {fn:>8.0f}")
-            if best is None or f1 > best[0]:
-                best = (f1, radius, min_thresh, aucs["wp"])
-        if best:
-            print(f"\n  Best F1: radius={best[1]}, min_thresh={best[2]} -> "
-                  f"F1={best[0]:.1%}, AUC={best[3]:.1%}\n")
 
     # --- LFE-PPN: score_thresh x nms_radius -------------------------------
     if "lfe_ppn" not in args.skip:

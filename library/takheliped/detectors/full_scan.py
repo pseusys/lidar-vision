@@ -1,10 +1,10 @@
 """
-Full-scan, non-recursive lidar-based person detectors.
+The full-scan, non-recursive lidar-based person detector.
 
-These detectors process the *entire* scan at once, using the full angular
-context available across all N_beams, in contrast to the per-beam cutout
-approach used by DROW and DR-SPAAM. All share two design choices, made
-deliberately for efficiency and explainability (see RESEARCH.md):
+It processes the *entire* scan at once, using the full angular context
+available across all N_beams, in contrast to the per-beam cutout approach
+used by DROW and DR-SPAAM. Two design choices, made deliberately for
+efficiency and explainability (see RESEARCH.md):
 
 * Non-recursive only: every block is a CNN or TCN layer (or pooling/norm/
   linear "glue"). No RNN/GRU/LSTM, no attention — all are fully
@@ -13,24 +13,21 @@ deliberately for efficiency and explainability (see RESEARCH.md):
   Prepared via drow_utils.raw_scan() (unaligned) or
   drow_utils.aligned_raw_scan() (rotation-corrected via odometry, default).
 
-SpaceTimeCNNDetector and FullScanTCNDetector share the same input/output
-contract as DrowDetector (default --head drow):
+SpaceTimeCNNDetector shares the same input/output contract as DrowDetector
+(default --head drow):
   forward(x)       → (logits (B*N_beams, 4), votes (B*N_beams, 2))
   forward_one(xb)  → (confs, votes)   numpy in / numpy out
 
-With --head heatmap (all full-scan detectors):
+With --head heatmap:
   forward(x)       → ((heatmap (B*N_beams, 1),),)
   forward_one(xb)  → (sigmoid_heatmap, zeros_votes)
 
-**Every** full-scan detector sets BEAM_BATCH=True (like DrSpaamDetector), so
-the DataLoader passes (B, N_beams, T, 1) rather than a (B*N_beams, T, 1)
-flattened batch. All three convolve along the beam axis, so flattening splices
-B frames into one long scan and lets normalization statistics, SE gates and
-the convolutions themselves leak between frames that happen to share a
-minibatch — which made measured accuracy a function of batch size (TODO.md
-A18). TemporalUNetDetector additionally pools over the beam axis, so it could
-never have been flattened at all. Its default head is "heatmap", matching
-LFE-Peaks.
+It sets BEAM_BATCH=True (like DrSpaamDetector), so the DataLoader passes
+(B, N_beams, T, 1) rather than a (B*N_beams, T, 1) flattened batch. It
+convolves along the beam axis, so flattening splices B frames into one long
+scan and lets normalization statistics, SE gates and the convolutions
+themselves leak between frames that happen to share a minibatch — which made
+measured accuracy a function of batch size (TODO.md A18).
 
 Input shape: (B, N_beams, T, 1); a bare (N_beams, T, 1) single scan is also
 accepted and treated as B=1.
@@ -39,121 +36,31 @@ Channel 0 is the raw range measurement, optionally rotation-aligned.
 Detectors
 ---------
   SpaceTimeCNNDetector  — 2D dilated Conv over (N_beams, T) grid, collapses T
-  FullScanTCNDetector   — Causal temporal TCN over T + dilated 1D CNN over beams
-  TemporalUNetDetector  — 1D U-Net with T input channels (Architecture C)
-
-Receptive field (DilatedScanBackbone, used by FullScanTCNDetector)
--------------------------------------------------------------------
-Four dilated Conv1d layers with dilation=1,2,4,8 and kernel_size=3 give a
-total receptive field of 31 beams.  At DROW's 0.5°/beam resolution this covers
-±7.5°.  At 3 m range that corresponds to ~0.8 m lateral extent — sufficient
-to cover a standing person (shoulder width ~0.5 m).
 
 Receptive field (SpaceTimeCNNDetector)
 --------------------------------------
 Three dilated Conv2d layers with beam-axis dilations 1,2,4 and kernel_size=3
 give a total beam receptive field of 15 beams (±3.75° at 0.5°/beam).
 
-Receptive field (TemporalUNetDetector)
---------------------------------------
-Three MaxPool1d(2) stages compress the beam axis to N//8; the bottleneck
-Conv1d(k=3) there has an effective RF of 8*3=24 beams in original beam space.
-Skip connections restore full spatial resolution without limiting the global RF.
+Two retired siblings
+--------------------
+This module held three architectures until TODO.md item 32 (2026-10-31).
+FullScanTCNDetector (causal temporal TCN over T + a dilated 1D CNN over beams,
+on a shared DilatedScanBackbone) and TemporalUNetDetector (a 1D U-Net with T
+input channels, heatmap head by default) were retired: nothing had trained on
+either since 2026-09 and neither influenced a project decision. SpaceTimeCNN
+stayed because the 2026-09-10 history ablation that reorganised the whole
+queue was measured on it, and keeping the class is what keeps that
+reproducible. Their own measurements are kept, marked removed, in
+memory/performance-log.md, with the commit where the code last existed; four
+blocks they shared with this detector — _gn, _SEBlock, _JointConvBlock and
+_MultiScaleBlock — stayed with it.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-# ---------------------------------------------------------------------------
-# Shared dilated backbone
-# ---------------------------------------------------------------------------
-
-class DilatedScanBackbone(nn.Module):
-    """
-    Dilated 1D CNN applied over the beam (angular) dimension.
-
-    Processes the full scan with an exponentially growing receptive field
-    (dilation = 1, 2, 4, 8).  Each timestep is treated independently as a
-    batch element.
-
-    Input:  (N_beams, T, in_channels)
-    Output: (N_beams, T, out_channels)
-    """
-
-    def __init__(self, in_channels: int = 3, out_channels: int = 64,
-                 dropout: float = 0.1):
-        super().__init__()
-        self.dropout_p   = dropout
-        mid              = out_channels
-
-        self.conv1 = nn.Conv1d(in_channels, mid, 3, padding=1,  dilation=1)
-        self.bn1   = nn.BatchNorm1d(mid)
-        self.conv2 = nn.Conv1d(mid,         mid, 3, padding=2,  dilation=2)
-        self.bn2   = nn.BatchNorm1d(mid)
-        self.conv3 = nn.Conv1d(mid,         mid, 3, padding=4,  dilation=4)
-        self.bn3   = nn.BatchNorm1d(mid)
-        self.conv4 = nn.Conv1d(mid,         mid, 3, padding=8,  dilation=8)
-        self.bn4   = nn.BatchNorm1d(mid)
-        # 1×1 projection for the end-to-end residual skip connection
-        self.skip  = nn.Conv1d(in_channels, out_channels, 1, bias=False)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (N_beams, T, in_channels)
-        N, T, C = x.shape
-        x_t = x.permute(1, 2, 0)                           # (T, in_channels, N_beams)
-        res = self.skip(x_t)                                # (T, out_channels, N_beams)
-
-        x_t = F.relu(self.bn1(self.conv1(x_t)))
-        x_t = F.dropout(x_t, p=self.dropout_p, training=self.training)
-        x_t = F.relu(self.bn2(self.conv2(x_t)))
-        x_t = F.dropout(x_t, p=self.dropout_p, training=self.training)
-        x_t = F.relu(self.bn3(self.conv3(x_t)))
-        x_t = F.dropout(x_t, p=self.dropout_p, training=self.training)
-        x_t = F.relu(self.bn4(self.conv4(x_t)) + res)      # residual before final activation
-
-        return x_t.permute(2, 0, 1)                        # (N_beams, T, out_channels)
-
-
-# ---------------------------------------------------------------------------
-# Temporal TCN building block (for FullScanTCNDetector)
-# ---------------------------------------------------------------------------
-
-class _TemporalTCNBlock(nn.Module):
-    """
-    Causal dilated 1-D conv block over the time axis — one TCN layer.
-
-    Every beam is processed independently (T is the conv's spatial axis,
-    N_beams is the batch axis), so this is fully parallel across beams —
-    no recurrence.  Causal "chomp" padding (pad left by (k-1)*dilation, drop
-    the trailing dilation*(k-1) positions of the symmetric-padded conv output)
-    means output position t depends only on input positions <= t, mirroring
-    an RNN's left-to-right dependency without sequential recurrence.
-
-    Input / output: (N_beams, C, T) — same T, channels may change.
-    """
-
-    def __init__(self, C_in: int, C_out: int, dilation: int, dropout: float = 0.1):
-        super().__init__()
-        self._chomp = 2 * dilation                # (kernel_size - 1) * dilation, kernel_size=3
-        self.conv   = nn.Conv1d(C_in, C_out, 3, padding=self._chomp,
-                                dilation=dilation, bias=False)
-        self.norm   = _gn(C_out)
-        self.skip   = (nn.Conv1d(C_in, C_out, 1, bias=False)
-                      if C_in != C_out else nn.Identity())
-        self.dropout_p = dropout
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        out = self.conv(x)[:, :, :-self._chomp]    # drop the non-causal (future-looking) tail
-        out = F.relu(self.norm(out))
-        out = F.dropout(out, p=self.dropout_p, training=self.training)
-        return out + self.skip(x)
-
-
-# ---------------------------------------------------------------------------
-# Full-scan detectors
-# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # SpaceTimeCNNDetector building blocks
@@ -465,319 +372,6 @@ class SpaceTimeCNNDetector(nn.Module):
             channels         = channels,
             n_spatial_stages = ckpt.get("n_spatial_stages", 3),
             head             = ckpt.get("head", "drow"),
-        )
-        model.load_state_dict(ckpt["model"])
-        return model
-
-
-class FullScanTCNDetector(nn.Module):
-    """
-    Full-scan detector: causal temporal TCN (per beam) + dilated spatial CNN.
-
-    Architecture
-    ------------
-      Per-beam causal TCN over T   (2 layers, dilation 1, 2 — full T=5 receptive
-                                     field — collapses T to a single per-beam
-                                     "now" summary, analogous to a GRU's final
-                                     hidden state but fully feed-forward)
-        → DilatedScanBackbone        (shared spatial block, mixes across beams)
-        → detection heads
-
-    Inverts SpaceTimeCNNDetector's fusion order: there, beam and time are
-    mixed jointly from the first layer; here, each beam's own 5-frame history
-    is contextualised by the TCN *first*, then DilatedScanBackbone mixes
-    across beams — e.g. a cluster of beams that are all approaching together
-    is visible to the spatial step as such, which a joint-from-layer-1 design
-    has to learn implicitly instead.
-
-    Cheaper than a per-timestep spatial CNN would be: the spatial backbone
-    runs once per scan (T collapsed to 1 beforehand) instead of once per
-    timestep.
-
-    Fully feed-forward (no recurrence): trains and infers via convolutions only.
-    """
-
-    INPUT_MODE = "raw_scan"
-    # (B, N_beams, T, 1) -- the spatial backbone convolves along the beam axis,
-    # so a flattened batch would splice B frames into one long scan. See
-    # forward().
-    BEAM_BATCH = True
-
-    def __init__(self, n_time: int = 5, tcn_channels: int = 64,
-                 backbone_channels: int = 64, dropout: float = 0.1,
-                 head: str = "drow"):
-        super().__init__()
-        assert head in ("drow", "heatmap"), f"head must be 'drow' or 'heatmap', got {head!r}"
-        self.n_time        = n_time
-        self.head_type     = head
-        self.temporal_tcn  = nn.ModuleList([
-            _TemporalTCNBlock(1,            tcn_channels, dilation=1, dropout=dropout),
-            _TemporalTCNBlock(tcn_channels, tcn_channels, dilation=2, dropout=dropout),
-        ])
-        self.backbone       = DilatedScanBackbone(tcn_channels, backbone_channels, dropout)
-        if head == "heatmap":
-            self.head_heatmap = nn.Linear(backbone_channels, 1)
-        else:
-            self.head_logits  = nn.Linear(backbone_channels, 4)
-            self.head_votes   = nn.Linear(backbone_channels, 2)
-
-    def forward(self, x: torch.Tensor):
-        """
-        x : (B, N_beams, T, 1)  from DataLoader / evaluate_auc (BEAM_BATCH=True)
-            (N_beams, T, 1)     a bare single scan (forward_one, ROS node)
-
-        Returns ((B*N, 1),) for heatmap, or ((B*N, 4), (B*N, 2)) for drow head.
-
-        The temporal TCN is per-beam and never leaked, but the spatial
-        backbone did: it convolves along the beam axis, and a flattened
-        `(B*N_beams, ...)` batch handed it B frames concatenated end to end, so
-        its dilated kernels (receptive field 31 beams) reached across the seam
-        between one frame and the next. Keeping B separate makes each frame its
-        own row of the backbone's batch (TODO.md A18).
-        """
-        if x.dim() == 3:
-            x = x.unsqueeze(0)                              # (N, T, 1) → (1, N, T, 1)
-        B, N = x.shape[:2]
-
-        rows = x.reshape(B * N, *x.shape[2:])                # (B*N, T, 1)
-        x_t = rows.permute(0, 2, 1)                          # (B*N, 1, T) — conv1d over T per beam
-        for block in self.temporal_tcn:
-            x_t = block(x_t)                                 # (B*N, tcn_channels, T)
-        beam_feat = x_t[:, :, -1]                            # (B*N, tcn_channels) — causal "now" summary
-
-        # DilatedScanBackbone reads (N_beams, items, C) and treats dim 1 as
-        # independent batch elements -- one frame per element here, so its
-        # beam-axis convolutions never cross a frame boundary.
-        spatial_in  = beam_feat.reshape(B, N, -1).permute(1, 0, 2)   # (N, B, tcn_channels)
-        spatial_out = self.backbone(spatial_in)                       # (N, B, backbone_channels)
-        pooled      = spatial_out.permute(1, 0, 2).reshape(B * N, -1)  # (B*N, backbone_channels)
-        if self.head_type == "heatmap":
-            return (self.head_heatmap(pooled),)             # ((B*N, 1),)
-        return self.head_logits(pooled), self.head_votes(pooled)
-
-    @torch.no_grad()
-    def forward_one(self, xb) -> tuple:
-        """Numpy in, numpy out.  xb: (N_beams, T, 1)
-
-        Heatmap head: returns (sigmoid(heatmap), zeros) where heatmap is
-        (N_beams, 1).  For proper peak-based person detection use
-        evaluate_auc() or call forward() + scipy.signal.find_peaks directly.
-        """
-        import numpy as np
-        self.eval()
-        x = torch.from_numpy(np.asarray(xb, dtype=np.float32))
-        if self.head_type == "heatmap":
-            (h,) = self(x)
-            return torch.sigmoid(h).cpu().numpy(), np.zeros((h.shape[0], 2), dtype=np.float32)
-        logits, votes = self(x)
-        return F.softmax(logits, dim=-1).cpu().numpy(), votes.cpu().numpy()
-
-    def save_weights(self, path, dataset: str = ""):
-        torch.save({
-            "type":              "FullScanTCNDetector",
-            "n_time":            self.n_time,
-            "tcn_channels":      self.temporal_tcn[0].conv.out_channels,
-            "backbone_channels": self.backbone.conv4.out_channels,
-            "head":              self.head_type,
-            "model":             self.state_dict(),
-            "dataset":           dataset,
-        }, path)
-
-    @classmethod
-    def load(cls, path, map_location: str = "cpu") -> "FullScanTCNDetector":
-        ckpt  = torch.load(path, map_location=map_location)
-        model = cls(
-            n_time=ckpt.get("n_time", 5),
-            tcn_channels=ckpt.get("tcn_channels", 64),
-            backbone_channels=ckpt.get("backbone_channels", 64),
-            head=ckpt.get("head", "drow"),
-        )
-        model.load_state_dict(ckpt["model"])
-        return model
-
-
-# ---------------------------------------------------------------------------
-# TemporalUNetDetector building blocks
-# ---------------------------------------------------------------------------
-
-class _UNetEncoderBlock(nn.Module):
-    """Two Conv1d + GroupNorm + ReLU encoder (or bottleneck) block."""
-
-    def __init__(self, C_in: int, C_out: int, dropout: float = 0.1):
-        super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv1d(C_in,  C_out, 3, padding=1, bias=False), _gn(C_out), nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Conv1d(C_out, C_out, 3, padding=1, bias=False), _gn(C_out), nn.ReLU(inplace=True),
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.block(x)
-
-
-class _UNetDecoderBlock(nn.Module):
-    """Upsample → cat(skip) → two Conv1d decoder block.
-
-    Parameters
-    ----------
-    C_up   : channels of the upsampled feature map
-    C_skip : channels of the skip connection from the encoder
-    C_out  : output channels after the two convolutions
-    """
-
-    def __init__(self, C_up: int, C_skip: int, C_out: int, dropout: float = 0.1):
-        super().__init__()
-        self.block = nn.Sequential(
-            nn.Conv1d(C_up + C_skip, C_out, 3, padding=1, bias=False), _gn(C_out), nn.ReLU(inplace=True),
-            nn.Dropout(dropout),
-            nn.Conv1d(C_out,         C_out, 3, padding=1, bias=False), _gn(C_out), nn.ReLU(inplace=True),
-        )
-
-    def forward(self, x_up: torch.Tensor, x_skip: torch.Tensor) -> torch.Tensor:
-        # Upsample to exactly match the skip's spatial size (handles non-power-of-2 N).
-        x_up = F.interpolate(x_up, size=x_skip.shape[-1], mode='linear', align_corners=False)
-        return self.block(torch.cat([x_up, x_skip], dim=1))
-
-
-# ---------------------------------------------------------------------------
-# TemporalUNetDetector (Architecture C)
-# ---------------------------------------------------------------------------
-
-class TemporalUNetDetector(nn.Module):
-    """
-    Architecture C: multi-frame 1-D U-Net with T range scans as input channels.
-
-    NOT a port of LFE-Peaks/LFE-PPN's own backbone. This is a from-scratch,
-    textbook 1-D U-Net (Ronneberger et al., MICCAI 2015: symmetric
-    encoder/decoder, two-conv blocks, MaxPool downsampling, concatenation
-    skips) given a T-channel stem Conv1d(T, C) instead of Conv1d(1, C).
-    LFE's actual backbone is a different design entirely — three residual
-    blocks of depthwise-separable multi-kernel convs (k=9,7,5) with an
-    internal residual add and a "global aggregator" (global max-pool
-    concatenated at every position), roughly constant ~32-channel width, and
-    2x/3x (not three successive 2x) downsampling — see docs/RESEARCH.md
-    Section 5.3 for the full comparison. This model shares LFE's general
-    "full-scan, U-Net-family backbone + heatmap head" idea and its default
-    head, not its specific backbone topology; do not describe results from
-    this model as isolating "temporal context only" relative to LFE.
-
-    Differences from LFE, for what they're worth as a from-scratch design:
-
-      * T input channels (vs LFE's 1) — the key temporal extension
-      * GroupNorm throughout (vs LFE's Keras BatchNorm, which degrades at B=1)
-      * Trained from scratch (vs LFE's published ONNX weights)
-      * Raw range input (vs LFE's (1-r/10) normalization; raw is fine with GN)
-      * Channel-doubling U-Net topology (vs LFE's constant-width residual
-        blocks) — a topology difference, not just a normalization/input choice
-
-    This model pools over the beam axis, so individual beams from the same
-    scan cannot be separated into the PyTorch batch dimension.  BEAM_BATCH=True
-    tells the training loop to pass (B, N_beams, T, 1) as a unit.
-
-    Architecture (default unet_channels=32, 3 encoder stages)
-    ----------------------------------------------------------
-    Encoder:
-      E1: Conv1d(T→C,   k=3)×2  + GN + ReLU    at  N_beams          (skip_1)
-      MaxPool1d(2)
-      E2: Conv1d(C→2C,  k=3)×2  + GN + ReLU    at  N//2             (skip_2)
-      MaxPool1d(2)
-      E3: Conv1d(2C→4C, k=3)×2  + GN + ReLU    at  N//4             (skip_3)
-      MaxPool1d(2)
-    Bottleneck:
-      B:  Conv1d(4C→8C, k=3)×2  + GN + ReLU    at  N//8
-    Decoder:
-      D3: Upsample → cat(B, skip_3) → Conv1d(12C→4C, k=3)×2         at  N//4
-      D2: Upsample → cat(D3, skip_2) → Conv1d(6C→2C,  k=3)×2        at  N//2
-      D1: Upsample → cat(D2, skip_1) → Conv1d(3C→C,   k=3)×2        at  N
-    Head:
-      heatmap (default): Linear(C, 1) — per-beam logit; sigmoid gives probability
-      drow:              Linear(C, 4) + Linear(C, 2) — logits + vote offsets
-    """
-
-    BEAM_BATCH = True        # training loop must pass (B, N, T, 1), not (B*N, T, 1)
-    INPUT_MODE = "raw_scan"
-
-    def __init__(self, n_time: int = 5, unet_channels: int = 32,
-                 dropout: float = 0.1, head: str = "heatmap"):
-        super().__init__()
-        assert head in ("drow", "heatmap"), f"head must be 'drow' or 'heatmap', got {head!r}"
-        self.n_time        = n_time
-        self.unet_channels = unet_channels
-        self.head_type     = head
-        C = unet_channels
-
-        self.enc1       = _UNetEncoderBlock(n_time, C,   dropout)
-        self.enc2       = _UNetEncoderBlock(C,      C*2, dropout)
-        self.enc3       = _UNetEncoderBlock(C*2,    C*4, dropout)
-        self.pool       = nn.MaxPool1d(2)
-        self.bottleneck = _UNetEncoderBlock(C*4,    C*8, dropout)
-
-        self.dec3 = _UNetDecoderBlock(C*8, C*4, C*4, dropout)
-        self.dec2 = _UNetDecoderBlock(C*4, C*2, C*2, dropout)
-        self.dec1 = _UNetDecoderBlock(C*2, C,   C,   dropout)
-
-        if head == "heatmap":
-            self.head_heatmap = nn.Linear(C, 1)
-        else:
-            self.head_logits  = nn.Linear(C, 4)
-            self.head_votes   = nn.Linear(C, 2)
-
-    def forward(self, x: torch.Tensor):
-        """
-        x : (B, N_beams, T, 1)  from DataLoader / evaluate_auc (BEAM_BATCH=True)
-            (1, N_beams, T, 1)  from forward_one (after unsqueeze)
-
-        Returns (B*N, 1) for heatmap, or ((B*N, 4), (B*N, 2)) for drow head.
-        """
-        if x.dim() == 3:
-            x = x.unsqueeze(0)                             # (N, T, 1) → (1, N, T, 1)
-        B, N, T, _ = x.shape
-
-        h = x.squeeze(-1).permute(0, 2, 1)                # (B, T, N) — T as channels
-
-        e1 = self.enc1(h)                                  # (B, C,  N)
-        e2 = self.enc2(self.pool(e1))                      # (B, 2C, N//2)
-        e3 = self.enc3(self.pool(e2))                      # (B, 4C, N//4)
-        b  = self.bottleneck(self.pool(e3))                # (B, 8C, N//8)
-
-        d3 = self.dec3(b,  e3)                             # (B, 4C, N//4)
-        d2 = self.dec2(d3, e2)                             # (B, 2C, N//2)
-        d1 = self.dec1(d2, e1)                             # (B, C,  N)
-
-        out = d1.permute(0, 2, 1).reshape(B * N, -1)      # (B*N, C)
-        if self.head_type == "heatmap":
-            return (self.head_heatmap(out),)               # ((B*N, 1),)
-        return self.head_logits(out), self.head_votes(out)
-
-    @torch.no_grad()
-    def forward_one(self, xb) -> tuple:
-        """Numpy in, numpy out.  xb: (N_beams, T, 1)"""
-        import numpy as np
-        self.eval()
-        x = torch.from_numpy(np.asarray(xb, dtype=np.float32)).unsqueeze(0)  # (1, N, T, 1)
-        if self.head_type == "heatmap":
-            (h,) = self(x)                                 # (N, 1) since B=1
-            return torch.sigmoid(h).cpu().numpy(), np.zeros((h.shape[0], 2), dtype=np.float32)
-        logits, votes = self(x)
-        return F.softmax(logits, dim=-1).cpu().numpy(), votes.cpu().numpy()
-
-    def save_weights(self, path, dataset: str = ""):
-        torch.save({
-            "type":          "TemporalUNetDetector",
-            "n_time":        self.n_time,
-            "unet_channels": self.unet_channels,
-            "head":          self.head_type,
-            "model":         self.state_dict(),
-            "dataset":       dataset,
-        }, path)
-
-    @classmethod
-    def load(cls, path, map_location: str = "cpu") -> "TemporalUNetDetector":
-        ckpt  = torch.load(path, map_location=map_location)
-        model = cls(
-            n_time        = ckpt.get("n_time", 5),
-            unet_channels = ckpt.get("unet_channels", 32),
-            head          = ckpt.get("head", "heatmap"),
         )
         model.load_state_dict(ckpt["model"])
         return model

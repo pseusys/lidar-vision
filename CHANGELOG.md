@@ -38,6 +38,542 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 56: the tracking baselines on the frozen candidates -- +2.16 pp over the tuned tracker, and a queue defect that nearly reported +3.5 (2026-10-31)
+
+*keywords: item 56, a74, queue_item56.py, track_rows.json, EXIT_GRACE_SECONDS, best_classical, bytetrack_cbmot, rule_cbmot, report_focus, test_queue_declarations.py, FRZ, +2.16, 86.29, 84.13, first_frame, GOSPA 0.435, lidar_item56*
+
+`docs/PAPER.md`'s argument 2 -- "the gain is the learned memory, not association" -- is the one a tracking reviewer will
+attack, and its table was measured on the **superseded** stage 2. No arithmetic on the old row could answer the question,
+because a better stage 2 helps a tracker too, by an amount only measurement gives. So A61's full protocol, re-run on the
+frozen candidates: three seeds of `rule` + `track` + `arms` + `report`, then `summary`; FROG test every 5th annotated
+frame; 95% block-bootstrap intervals per seed. **09:15-20:39, about 13 h as estimated.**
+
+**The margin barely moved.** The memory 86.29% (sd 0.16) against the tuned ByteTrack+CBMOT's 84.13% (sd 0.14) and its own
+candidates' 82.80%: **+2.16 pp over the tuned tracker (+1.98 / +2.34 / +2.16), all three intervals above zero**, against
+the superseded line's +2.36. GOSPA agreed (0.435 against the candidates' 0.481, the tracker 0.458). Two findings are new.
+**The memory's own bookkeeping, applied after the threshold, loses 9 pp** -- `rule_cbmot` at 74.00%, where A56's E15 had
+it within 1 pp of the best tracker on the old candidates -- which is the sharpest control yet for argument 2: the gain is
+not the fade and coast rules, it is that they are learned state inside the model rather than a rescoring of thresholded
+output. And **the memory is first to a person**, detecting them on their first frame 92.8% of the time against the
+tracker's 80.6%, never finding 8 of 672 people where the tracker never finds 34. It wins on the occluded stratum (78.2%
+against 71.5%) and beyond 8 m (95.2% against 91.6%), and loses inside 2 m (92.7% against 95.2%) and on recall at a
+matched false-positive rate (95.17% against 95.39%) -- so the AP lead is curve shape and operating point, not dominance.
+
+**Two defects were found, and the first nearly put +3.5 pp in the paper.** `queue_item56.py`'s `track` declared only
+`track_rows.json` as its output. `run_queue.spawn_process` starts a 600 s kill timer the moment every declared output
+exists, and the coordinate descent writes that file **ten minutes before** the eight replays finish -- so seed 0 survived
+by six seconds (606 s) and seeds 1 and 2 were killed mid-replay, each losing `bytetrack_cbmot`'s test pickle. `run_report`
+then dropped the method **without a word** (`methods = {m: p for m, p in methods.items() if p["test"].exists()}`), scored
+three classical pipelines instead of four, and `best_classical` fell from `bytetrack_cbmot` to `sort_m1` -- reading the
+memory's margin as **+3.56 pp** on seed 1 and +3.44 on seed 2. Exit code 1 was not the signal: this chain's jobs exit 1
+on a ROCm teardown hang routinely, which is why the runner judges by outputs. The signal was a **missing file**, caught by
+listing seed 1's directory against seed 0's. Second defect: `report_focus` (then an inline expression) hardcoded
+`startswith("E13:")`, A61's arm label, so item 56's `FRZ` arm was excluded from every strata and first-detection-latency
+table -- which is why those numbers above did not exist before today.
+
+Both fixed, tests first. `tests/test_queue_declarations.py` pins the rule a queue module must follow -- **a job declares
+the files it writes last, not the first file it happens to produce** -- including the exact condition that started the
+timer. `report_focus` became a named function taking any `label:run` arm, tested over three labels. The six affected jobs
+re-ran in 30 minutes (20:46-21:16), the cached coordinate descent skipping straight to the replays; `track_s1` and
+`track_s2` both exited **0** this time. Seed 0's report, re-run with the same pickles, reproduced +1.98 pp [+1.10, +2.90]
+bit-identically, which is the control proving the re-run changed only what it should. **1145 tests pass, ruff clean.**
+
+## Item 58: the phantom column on the calibrated checkpoints, better at 0.3 and eight times worse at 0.9 (2026-10-31)
+
+*keywords: item 58, phantom column, person-free, transferred, 72533, empty_scene.py, queue_item58.py, empty_scene_cal, calibration, fixed threshold, 0.5956, 0.0122, lidar_item58, ARCHITECTURE 5.5*
+
+Item 48 shipped a `(temperature, bias)` in the three frozen stage-3 checkpoints. Monotone, so no rank-based number could
+move -- and **every number read at a fixed threshold had to be re-measured**, which item 48 recorded as its own debt rather
+than leaving implied. This pays the headline part of it: `utils/empty_scene.py` over all **72,533 person-free frames** of
+FROG `transferred`, three seeds, each stage 3 paired with the stage 2 whose candidates it learnt from, exactly as item 47
+measured it. The script needed **no change and no flag** -- `object_memory` restores the pair from the checkpoint, which is
+what shipping it there was for.
+
+| person-free frames, 3 seeds | uncalibrated (item 47) | **calibrated** (item 58) | change |
+| --- | ---: | ---: | ---: |
+| stage-2 candidates, FP/frame @0.3 | 2.1336 | **2.1336** | **identical** |
+| whole detector, FP/frame @0.3 | 0.6749 (sd 0.073) | **0.5956** (sd 0.045) | **-11.8%** |
+| per seed @0.3 | 0.706 / 0.591 / 0.727 | **0.573 / 0.567 / 0.648** | |
+| frames holding any @0.3 | 31.93% | **29.41%** | -2.52 pp |
+| FP/frame @0.3, beyond the 10 s fade | 0.5240 | **0.4617** | -11.9% |
+| whole detector, FP/frame @0.9 | 0.0015 (sd 0.0023) | **0.0122** (sd 0.0022) | **8x worse** |
+| detections @0.9, three seeds together | 106 (298 / 0 / 20) | **883** (820 / 767 / 1,061) | +777 |
+| frames holding any @0.9 | 0.15% | **1.20%** | +1.05 pp |
+
+### The control worked, and it is what makes the rest attributable
+
+**The candidates row is identical to four decimal places**, at both thresholds, on both the whole split and the
+beyond-fade subset. The key lives in stage 3 and stage 2's candidates come from a network item 48 never touched, so this
+is what identical *should* look like -- and it rules out the alternative explanations for the rows below it, which on a
+re-measurement months apart would otherwise be live: a rebuilt candidate cache, a different split, a changed decode. It
+also confirms the cache was reused rather than regenerated: pointing at the originals under `checkpoints_three_horizon/`
+rather than the archive copies kept `candidate_cache_path`'s key intact, and each seed took **17 minutes** instead of the
+~45 that includes building it.
+
+### The effect reverses with the threshold, and the prediction was half wrong
+
+Item 58's own row predicted the count would **fall**, reasoning that every fitted temperature sharpens and two of three
+biases are positive, so 0.3 sits further out on the calibrated scale -- and it noted seed 0's negative bias ran the other
+way, "which is precisely why it has to be measured rather than argued".
+
+At **0.3 the prediction held**, including for seed 0, whose sharpening dominated its negative bias. At **0.9 it failed
+completely**: dividing by a temperature below 1 lifts the confident tail as surely as it lowers the bulk, and at 0.9 the
+tail *is* the measurement. **Seed 1 emitted zero detections above 0.9 across all 72,533 frames uncalibrated and emits
+767 calibrated.** Against stage 2's own 0.666 at that threshold the qualitative claim survives -- **-98.2%** rather than
+-99.8% -- but the published number is 8x its old value, and no amount of reasoning from the fitted pairs would have got
+there. The 0.9 row was the one most worth re-measuring and the one the row's prediction did not cover.
+
+**At 0.3 the seeds converge, as item 48's val fits said they would, but less tidily than on val**: the between-seed
+spread falls from 0.136 to 0.081 FP/frame, the sd from 0.073 to 0.045. **At 0.9 they do not converge at all** -- the sd
+is unchanged at 0.002 -- so that threshold takes a pure shift rather than a shared operating point. An independent split
+the transform was never fitted against therefore supports item 48's convergence finding at the operating point and not
+beyond it.
+
+**One figure was previously not computable.** The recurrence share at 0.9 -- phantoms reappearing within 0.3 m in the
+next frame, the measure that separates furniture from noise -- had no value for seed 1, which emitted nothing to recur,
+so the three-seed mean was `nan`. It is now **82.3%**, against 93.9% at 0.3; both stay far below the 99.8% real people
+score, so the added detections are furniture-like rather than flicker.
+
+### Mechanics
+
+`utils/queue_item58.py` under `run_queue.py`, three jobs, gate first. Launched 08:15 through the Task Scheduler and done
+at **09:07:49** -- 52 minutes against the row's ~3 h estimate, because the candidate cache was warm. Each seed exited
+**1** on the ROCm teardown hang after writing its JSON and was killed by the runner on its outputs, as designed; no
+retries, no intervention. The chain points at the originals under `checkpoints_three_horizon/`, deliberately not at
+`weights_archive/frozen-frog-2026-10-31-calibrated/`, because `candidate_cache_path` keys the ~1 GB cache on the stage-2
+checkpoint's run directory, file name and mtime and a copy rebuilds it.
+
+**Not re-run, deliberately:** the accuracy and CPU tables. Monotonicity answers them, and re-running invites the
+cross-session comparison the house rules ban. **Still uncalibrated:** the precision/recall/FP/FN cells at 0.3 on the
+**FROG benchmark** split, which this item did not cover -- only the person-free column was re-measured, and
+`docs/ARCHITECTURE.md` §5.2 and both manifests say which is which.
+
+**Documented in the same step:** `docs/ARCHITECTURE.md` §5.2's two rows now lead with the calibrated value and carry the
+uncalibrated one beside it, the §5.2 caveat blockquote is rewritten from "queued, not done" to what was found, §5.3's
+citation rule is sharpened to "2026-10-30 for the rank-based numbers, 2026-10-31 for everything read at a fixed
+threshold", new **§5.5** holds the table and the mechanism, `memory/performance-log.md`'s person-free table carries the
+calibrated row with the uncalibrated one italicised under it, and the calibrated archive's manifest no longer says the
+re-measurement is pending.
+
+## Item 32: two of the three first architectures retired, and two encoding traps found by the test that enforces it (2026-10-31)
+
+*keywords: item 32, retirement, FullScanTCNDetector, TemporalUNetDetector, SpaceTimeCNNDetector, DilatedScanBackbone, _TemporalTCNBlock, _UNetEncoderBlock, _UNetDecoderBlock, _SEBlock, _MultiScaleBlock, DETECTOR_REGISTRY, test_detector_retirement.py, reachable_names, utf-8-sig, U+FEFF, mojibake, 98b0716*
+
+`library/takheliped/detectors/full_scan.py` held this project's first three architectures. **`FullScanTCNDetector` and
+`TemporalUNetDetector` are gone**; nothing had trained on either since 2026-09 and neither influenced a project
+decision. **`SpaceTimeCNNDetector` stays** -- the owner's refinement, and the whole shape of the item: the 2026-09-10
+history ablation that reorganised `TODO.md` §A was measured on it, and *a decision is only reproducible while the code
+behind it is*. Six definitions went: the two detectors and the four blocks only they used (`DilatedScanBackbone`,
+`_TemporalTCNBlock`, `_UNetEncoderBlock`, `_UNetDecoderBlock`). Four stayed because the survivor reaches them --
+`_gn`, `_SEBlock`, `_JointConvBlock`, `_MultiScaleBlock` -- `_SEBlock` only *through* `_MultiScaleBlock`, which is why
+reachability was checked rather than assumed, and is now asserted.
+
+**Their measurements are kept, marked retired rather than deleted**, in `memory/performance-log.md`: the accuracy
+table, the person-free-frame table and both CPU latency tables (`TemporalUNet` 5.48 ms, `FullScanTCN` 5.52 ms at 4
+threads). **A measurement stays true after its code goes** -- what is lost is reproducibility, not validity, so each
+record now names **commit `98b0716`**, the last one carrying the classes, the way A60 kept `LAST_TEMPORAL_COMMIT`. No
+constant was added for it here, because nothing in the code would read one.
+
+### The surface, made checkable rather than asserted
+
+The scope said "nine scripts list them as `--detector` choices or in skip-lists". Counting them by hand is exactly the
+kind of sweep that misses one, so `tests/test_detector_retirement.py` walks the **AST** of every file in `utils/`,
+`tests/` and `library/takheliped/` and fails on any identifier or non-docstring string literal containing a retired
+name. Docstrings and comments are deliberately exempt: a file may *say* what was removed and why -- the record depends
+on that -- it may not *offer* it. The scan found **eleven** files, not nine, and the two extras were real: `evaluate.py`'s
+`arch_keys` still read three dead checkpoint fields, and `nms_sweep.py` carried a whole sweep arm
+(`vote_collect_radius` x `min_thresh`) that only FullScanTCN used, with `--radius-grid` and `--min-thresh-grid` behind
+it. One simplification fell out: with `temporal_unet` gone, nothing defaults `--head` to `heatmap`, so two
+`"heatmap" if detector == ... else "drow"` resolutions collapsed to a plain `default="drow"`.
+
+**22 tests, written before the removal and watched to fail**: the registry keys gone
+while every surviving key still resolves to a class, the six definitions gone from the module and the package, the
+four shared blocks still defined *and still reached*, `_SEBlock` reached only through `_MultiScaleBlock`, and the
+survivor still answering the raw-scan contract on both heads including a bare unbatched frame and `forward_one`'s
+numpy round trip. `tests/test_batch_independence.py` is about SpaceTimeCNN's own batch-leakage bug, so it stayed and
+lost only its parametrization over the two deleted classes. `tests/test_train_eval_consistency.py` needed **no**
+change: it uses SpaceTimeCNN as a stand-in for shared train/eval machinery, and SpaceTimeCNN survived -- the scope's
+"repoint it, 16 places" was written for the superseded whole-file scope.
+
+### Two encoding traps, found by the scan refusing to parse
+
+Neither is item 32's doing; both were sitting in the tree and only an AST-based tool would hit them.
+
+- **Four Python sources start with a UTF-8 BOM** -- `library/takheliped/detectors/takheliped.py`, `utils/stage2_probe.py`,
+  `tests/test_run_queue.py`, `tests/test_stage2_probe.py`. Python's import machinery strips it, so they have always run
+  and nothing has ever complained; `ast.parse()` on text read as plain `utf-8` dies with
+  `SyntaxError: invalid non-printable character U+FEFF`. The fix is `encoding="utf-8-sig"`, correct for a BOM-less file too.
+- **`docs/RESEARCH.md` holds double-encoded punctuation**: its em dashes are the three characters U+00E2 U+20AC U+201D,
+  the UTF-8 bytes of one re-encoded as if Latin-1. A search string containing a real em dash therefore matches
+  **nothing** in that file while looking identical on screen. Edits to it are now anchored on ASCII only. `README.md`
+  and the `memory/` pages are clean. **Repairing the mojibake is unclaimed and was deliberately not bundled in here.**
+
+Both are in `memory/gotchas.md`. So is a third, earned twice in one session: the CRLF bullet already warned that
+`sed -i` flattens line endings, and the same trap arrived through a different door -- `read_text(encoding="utf-8")`
+applies universal newlines, so a following `write_text(..., newline="")` wrote whole files as LF and turned an 88-line
+edit to `utils/train.py` into a **4,478-line** diff. Repaired by byte-level rewrite, and the bullet now says to splice
+bytes.
+
+### Documentation, and what did not change
+
+`docs/RESEARCH.md` §6.3 and §6.4 **stay as written**: §6 is the design record, and the audit of a design does not
+expire with its implementation. What changed there is the status column, the two headings, and the one line that was a
+*runnable command* offering the retired detectors. Same rule elsewhere: every command that would now fail was fixed
+(`memory/commands.md`'s `--detector` list, its `train_all` and resume examples, both `nms_sweep` lines, and
+`docs/PAPER.md`'s merge-radius command), while every statement of something that *was measured* stayed and gained a
+retired marker (`memory/interpreting-evaluation.md`'s FN/FP ratio sentence, `memory/rejected-ideas.md`'s `dtime=20`
+entry, which now names the commit to restore the class from).
+
+**No accuracy or speed number moved**, and none could: nothing was retrained, re-scored or re-timed, and the surviving
+detector's weights and forward pass are untouched. **Full suite 1137 passed**, against 1134 before the item: +22 from the new file,
+-19 parametrized arms that went with the deleted classes. `ruff` clean.
+
+## Item 48: the score calibration, and two label defects that nearly got it wrong (2026-10-31)
+
+*keywords: item 48, calibration, temperature, bias, calibrate_rescore.py, queue_item48.py, apply_calibration, greedy_labels, AP_TOLERANCE, float32 ties, common operating point, frozen-frog-2026-10-31-calibrated*
+
+A51 phase 1b's conclusion was "the fix is calibration of the rescore head, not slots, association or architecture",
+and nothing had ever been built. The measurement behind it: the head does not suppress true positives selectively, it
+shifts the **whole** score distribution down -- a median -3.292 logits on people it keeps against -1.497 on people it
+loses -- which leaves rank-based AP better while silently decalibrating any fixed threshold. This is that fix, done
+post-hoc:
+
+    calibrated_logit = (logit + bias) / temperature
+
+Fitted on **val** per seed and stored in the stage-3 checkpoint under a `calibration` key. `ObjectMemory` applies it
+in `_rescored` and **only** there -- without a coasting head `_coasting` pins that logit at `SILENT_COAST_LOGIT`, and
+a bias applied there would un-silence a head item 24 removed, inventing slot reports out of nothing. The constructor
+default is the exact identity `(1.0, 0.0)`: `x + 0.0` and `x / 1.0` are both exact in IEEE 754, so a checkpoint
+written before the key existed scores bit-identically, which is the same rule `network_shape` and `object_memory`
+already follow.
+
+**Done post-hoc rather than as a loss, deliberately.** A monotone transform cannot reorder detections, so AP and
+every other rank-based number is invariant and the frozen headline (86.29%, item 47) cannot move. As a training loss
+it would have changed the weights and had to precede the freeze.
+
+| | seed 0 | seed 1 | seed 2 |
+| --- | ---: | ---: | ---: |
+| temperature | 0.7917 | 0.7424 | 0.7082 |
+| bias | **-0.1792** | **+0.1580** | **+0.0807** |
+| val AP, uncalibrated -> calibrated | 81.8096 -> **81.8096%** | 81.6475 -> **81.6475%** | 81.7778 -> **81.7778%** |
+| val precision @0.3 | 65.50 -> **70.20%** | 67.96 -> **68.86%** | 66.46 -> **69.04%** |
+| val recall @0.3 | 84.75 -> 81.52% | 82.56 -> 81.91% | 83.91 -> 82.05% |
+| val FP/frame @0.3 | 1.436 -> **1.114** | 1.252 -> **1.192** | 1.363 -> **1.184** |
+| val NLL | 0.20333 -> **0.19509** | 0.19018 -> **0.18296** | 0.19711 -> **0.18746** |
+| label check at 0.3 | 84.64 vs 84.75% | 82.45 vs 82.56% | 83.79 vs 83.91% |
+
+**The finding is the convergence, not the per-seed gain.** Every temperature sharpens, but the biases do not share a
+sign, so the miscalibration belongs to the individual seed and not to the architecture -- which is the argument for
+storing the pair per checkpoint rather than publishing one recommended threshold. The per-seed gain varies far too
+much to quote as a headline (seed 0 buys 4.70 pp of precision for 3.23 pp of recall; seed 1 only 0.90 for 0.65). What
+is consistent is that the three seeds end up at the same operating point:
+
+| spread across the three seeds | uncalibrated | calibrated |
+| --- | ---: | ---: |
+| precision @0.3 | 2.46 pp | **1.33 pp** |
+| recall @0.3 | 2.19 pp | **0.53 pp** |
+| FP/frame @0.3 | 0.184 | **0.078** |
+
+A fixed threshold therefore means nearly the same thing on all three, which is what a deployment with one number in a
+config file needs and what an uncalibrated seed could not offer.
+
+### Two label defects, and a first attempt thrown away
+
+Neither was in the transform; both were in what the fit was told a true positive is, and the first run was discarded
+over them after about an hour of compute.
+
+**The gate refused a non-disagreement.** The cross-check compared the label positives over *every* candidate against
+`score_detections`' recall **at 0.3**, and reported seed 0 as disagreeing by 10.18 pp (94.92% against 84.75%). That
+gap was not a disagreement at all: it is simply the recall that thresholding gives up, since the labels' figure was
+the all-candidates ceiling. A gate whose refusal has to be explained away is worse than no gate, so the comparison
+now happens at the operating threshold on both sides, where the two are comparable. All three seeds then agree to
+~0.001 against a 0.02 tolerance.
+
+**The labels were score-blind, and this one would have corrupted the fit.** They came from `candidate_targets`, which
+was the obvious thing to reuse and the wrong tool: it minimises **distance** over all candidates at once with no
+reference to score, so it hands a person to a candidate 0.1 m away scoring 0.05 instead of one 0.3 m away scoring
+0.9 -- labelling the detection the metric itself counts as the true positive a negative. Label noise anti-correlated
+with the score is the one kind a temperature fit cannot survive: it sees confident detections "being wrong" and
+flattens the score to suit. `greedy_labels` now follows the metric's own rule -- detections accepted in descending
+score order, one-to-one within the match radius, exactly as `_prec_rec_2d` accepts its prefix -- and
+`TestTheLabelCrossCheck::test_the_label_recall_equals_the_metrics_own` holds the two together. The fitted pair moved
+from (0.8113, -0.1826) to (0.7917, -0.1792) on seed 0, a small change in the numbers and a large one in whether they
+were trustworthy.
+
+**The transferable lesson:** `candidate_targets` answers "which candidate should this head regress towards", which is
+a *training-target* question with a fixed anchor, and it is not the same question as "which detection does the metric
+score as a hit". Reusing it for the second question looks like reuse and is a change of definition.
+
+### The 6e-8 that is not a counterexample
+
+Seeds 0 and 2 report AP differing between the two columns by **+5.96e-8** and **-5.96e-8** -- one float32 ulp near
+0.82 -- with seed 1 at exactly 0. The written gate said "exactly equal", so it failed, and the failure was chased
+rather than loosened. Across all three seeds and 6.4 M detections:
+
+* **zero inversions.** Not one pair of detections swaps order; rounding to nearest is itself monotone, so it cannot
+  invert what the exact transform ordered.
+* **24,812 to 26,010 adjacent pairs per seed become tied** that were distinct before, because every fitted
+  temperature sharpens and pushes logits onto a coarser part of the sigmoid's float32 grid.
+
+`_prec_rec_2d` accepts tied detections in mergesort order, so a collapsed tie can reorder *within its group* and move
+AP by a hair. It is a property of float32 scoring, not of the transform. `apply_calibration` therefore gates on
+`AP_TOLERANCE = 1e-6` -- two orders of magnitude below the 0.01 pp this repo reports to -- plus the mathematical
+guarantee, a positive temperature, which the constructor already enforces. **"Bit-identical AP" was the wrong
+operationalisation of "the ranking cannot change"**, and it is the second gate in this one item to have compared the
+wrong two things.
+
+### Mechanics, and where the hour actually goes
+
+**The chain is `utils/queue_item48.py` under `run_queue.py`, not a shell loop.** The first attempt was a loop, and
+`calibrate_rescore.py` calls `os._exit` yet leaves the process **lingering** -- the ROCm teardown hang -- so the next
+seed cannot start until somebody kills it. Seed 0's hang sat for 18 minutes. The runner judges a job by **its
+outputs, not its exit code** and kills a child that lingers after writing them, which capped the hang at one
+`EXIT_GRACE_SECONDS` on all three seeds (seed 0: JSON 20:40, killed 20:50:42) with no intervention.
+
+**The cost split was measured, and it was not where it was first guessed.** A seed is ~8 min of GPU replay and
+~55 min of single-core `score_detections`, called **twice** -- uncalibrated and calibrated, which is the report -- with
+`_prec_rec_2d` walking 2.06-2.22 M detections in score order re-running a gated assignment per frame at each one. So
+`--frames`, which caches the replayed frames beside the JSON, buys **reproducibility rather than wall clock**: a
+re-fit needs neither the GPU, the checkpoints nor the 1 GB candidate cache, but still costs most of an hour.
+
+**`--apply` exists for the same reason.** Writing a pair by re-running `--write` would redo both scoring passes,
+~2.75 h across three seeds, to store two floats already sitting in the JSON. `apply_calibration` re-checks the
+report's gates -- the label cross-check, the AP tolerance, a positive temperature, and that the JSON's `memory` path
+is the checkpoint being written, which is what catches three seeds and one mismatched argument -- then writes. `--write`
+now delegates to it, so there is one writer and the two cannot drift.
+
+### Artifact, and what this invalidates
+
+**`weights_archive/frozen-frog-2026-10-31-calibrated/`**, 12 MB, with its own manifest. Every weight tensor is
+`torch.equal` to `frozen-frog-2026-10-30/`; the `calibration` key is the only key added. **Cite 2026-10-30 for what
+was measured and 2026-10-31 for what is shipped.**
+
+**Unchanged and still quotable:** 86.29% wp-AUC, 85.19% at the 0.3 m radius, 95.2% recall at each seed's own
+threshold (that threshold being chosen by sweeping to a false-positive budget, hence rank-based), and the whole CPU
+table. **Invalidated for the calibrated checkpoints:** every number read at the **fixed 0.3 threshold**, including
+`docs/ARCHITECTURE.md` §5.2's phantom column (0.675 FP/frame on person-free frames, 0.0015 at 0.9). Those were
+measured before the key existed, remain correct for the uncalibrated model and reproducible from the 2026-10-30
+archive, and are **not** what a calibrated checkpoint now reports at those thresholds. Re-measuring them is queued.
+
+**This does not close the deployment gap**, and must not be reported as doing so. Verified 2026-10-30 at the owner's
+instruction: this host cannot build or run the ROS side at all, and there is no TAKHeLiPeD ROS node -- the only
+detector node loads `DrowDetector`, and `deploy/conf.env`'s fixed threshold is DROW's. Item 48 makes the
+*checkpoint's* threshold meaningful so that whenever such a node is written it inherits one that does; wiring the
+detector in and rebuilding the image is separate work (`AGENTS.md` rule 5, `TODO.md`'s NOT DEPLOYED section).
+
+**Tests:** 33 in `tests/test_score_calibration.py`, written before the implementation and watched to fail -- the
+identity default and its bit-identical loading, the transform's algebra, a non-positive temperature refused, the
+coasting logit staying exactly silent, AP invariance asserted *through* `score_detections` rather than argued from
+monotonicity, the fit recovering a known miscalibration, one-class labels refused, the label rule's score-ordering,
+the float32 round trip never inverting while collapsing ties, and `--apply`'s four refusals plus its no-op on refusal.
+Full suite **1134**, `ruff` clean.
+
+## Item 57: the frozen CPU figure reproduces on a cold host, and two hypotheses die (2026-10-30)
+
+*keywords: item 57, item 47, cold host, CPU latency, stage2 phase, thermal refuted, 19.32 ms, noise floor, lat_frz2*
+
+Item 47's closing sweep ran two minutes after a 7-hour GPU job and its `stage2` phase -- byte-identical work, and
+therefore the one quantity comparable across sessions -- read **10.49 ms** against item 49's 9.35 ms and the
+2026-10-11 end-to-end row's 8.44 ms, the latter on the **aggregator-ful** stage 2, which does strictly more
+arithmetic. Thermal state was the obvious suspect, so the sweep was repeated on a host idle for **63 minutes** (CPU
+0-2.7% across three samples, nothing written to `results/` since the previous job ended). Same protocol: three frozen
+arms plus the `dim 128` control, 3 rounds, interleaved, one `--stage2`, `--device cpu --threads 4`, 2,000 scans.
+`results/lat_frz2_*`.
+
+### It reproduces, so the thermal hypothesis is dead
+
+| | warm (item 47) | cold (item 57) | agreement |
+| --- | ---: | ---: | ---: |
+| `stage2` phase, 12 runs | 10.56 | **10.45** | 0.9% |
+| frozen total, median | 19.39 | **19.32** | 0.4% |
+| frozen total, p99 | 21.78 | **21.67** | 0.5% |
+| control total, median | 22.71 | 22.34 | 1.7% |
+| memory-phase saving | -28.8% | **-28.3%** | -- |
+| total saving | -14.6% | **-13.5%** | -- |
+
+**The second hypothesis died without a measurement.** The two stage-2 checkpoints involved -- item 49's
+`a69_no_aggregator_s0` and the freeze's `a71_soft_label_s0` -- are **both 960,323 parameters and both
+aggregator-free**, differing only in `label_sigma_m`, which is a training target and not a layer. Their forward
+arithmetic is identical, so a latency probe between them could only have measured noise and was not run.
+
+So the `stage2` level is a property of **this environment**, not of thermal state and not of the checkpoint, and the
+gap to 2026-10-27's 9.35 ms and 2026-10-11's 8.44 ms is **narrowed and still unexplained**. That is precisely the
+situation `memory/commands.md`'s ban on cross-session CPU totals exists for: every conclusion in item 47 and item 49
+is a within-session comparison, and none of them is touched by it.
+
+### The cold floor is four times tighter, and it changes a claim
+
+Per-arm `stage2` means on identical work: 10.403 / 10.477 / 10.457 for the three seeds and 10.487 for the control --
+a **0.084 ms** noise floor against the warm sweep's 0.36 ms. The frozen seeds' totals spread 0.14 ms, below it. The
+memory-phase difference of 2.85 ms is therefore **34x the floor**, where warm it was 8x.
+
+**Retracted: "the control is over the 25 ms budget at p99."** Item 47's entry and `docs/ARCHITECTURE.md` said so on
+the warm sweep's 25.29 ms. Cold it reads **24.65 ms**, inside the period. The claim was session-dependent and is
+withdrawn in both places. What survives is weaker and defensible: against FROG's 25 ms the frozen architecture leaves
+**3.33 ms at p99** and the control **0.35 ms**, so the control fits with nothing left for a slow frame, a busy robot
+or a second node. `dim 64` buys the only usable margin there is -- which was always the real argument.
+
+**One protocol observation worth keeping:** in both sweeps the **first run of a round** is the slow one (warm `ctl r1`
+at 11.19 ms `stage2`, cold `fs2 r1` at 10.75 and a 23.60 ms p99 against its siblings' ~21.3). Three rounds and
+reading the floor absorb it; one round would not.
+
+**The deliverable was the caveat, not the number.** The upper-bound warning is gone from `docs/ARCHITECTURE.md`,
+`docs/PAPER.md`, `memory/performance-log.md`'s footnote 12 and speed row, `memory/detector-architectures.md` and the
+artifact's `MANIFEST.md`, and the artifact now carries both sweeps' JSON (`latency_cpu_t4_*` warm,
+`latency_cold_t4_*` cold) so the pair is checkable. **The frozen figure is 19.32 ms median / 21.67 p99**, measured
+twice in two independent sessions.
+
+## Item 47: the three-seed freeze of the adopted architecture (2026-10-30)
+
+*keywords: item 47, freeze, a71_freeze_s0, a71_freeze_s1, a71_freeze_s2, three seeds, 86.29%, queue_freeze.py, soft label, dim 64*
+
+The adopted architecture -- aggregator-free stage 2 on the soft Gaussian beam target, stage 3 at 256 slots / `dim 64` /
+4 heads / minGRU, no exchange, no learned match, no coasting, no curriculum -- run end to end at three seeds, one seed
+at a time, 2026-10-29 to 2026-10-30. This combination had never been measured before: `dim 64` was priced on the
+hard-label stage 2 and the soft target adopted afterwards, so seed 0 was run as a **gate** before the other two.
+
+**The gate passed and so did the other two seeds.** Test stride 5, memory column, FROG `official`:
+
+| seed | memory AP | candidates AP | memory gain | P | R | FP/frame | FN/frame | own thr. | R at own thr. | epochs | best |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 86.11% | 82.76% | +3.35 | 72.0% | 85.8% | 1.023 | 0.434 | 0.072 | 95.0% | 33 | 25 |
+| 1 | 86.33% | 82.73% | +3.60 | 74.6% | 83.3% | 0.867 | 0.513 | 0.061 | 95.3% | 44 | 36 |
+| 2 | **86.43%** | 82.92% | +3.51 | 72.9% | 85.3% | 0.969 | 0.451 | 0.078 | 95.2% | 42 | 34 |
+| **mean** | **86.29%** | **82.80%** | **+3.49** | 73.2% | 84.8% | 0.953 | 0.466 | -- | **95.2%** | -- | -- |
+
+**Spread 0.32 pp, sample sd 0.17 pp** -- tighter than stage 2's own 0.30 pp run-to-run spread, so stage 3 adds no
+variance of its own. At the 0.3 m radius the same three are 85.04 / 85.20 / 85.34%, mean **85.19%**: the ordering and
+the spread both survive the tighter match.
+
+**The honest headline is "confirmed", not "improved".**
+
+| against | value | 3-seed mean vs it | verdict |
+| --- | ---: | ---: | --- |
+| the old control `a66_mingru_s0` | 86.40% | **-0.11 pp** | tie, deep inside E13's 1.32 pp bar |
+| the hard-label reference `a74_fixed256_s0` | 85.73% | **+0.56 pp** | gain, but also inside the bar, and the reference is one seed |
+
+So the two adopted changes -- the soft target and the halved slot width -- **compose without a surprise**, and nothing
+needs rolling back. Every seed clears the 84.4% acceptance floor by about 2 pp.
+
+### Two claims from the seed-0 and two-seed reports are retracted
+
+**"The soft target transferred at about half strength" is wrong.** It was read off seed 0 alone, whose stage-3 gain
+(+3.35 pp) happened to be the lowest of the three. Measured in the same column across all three, stage 3's gain is
+**unchanged** by the better candidates it works from:
+
+| arm | candidates AP | memory AP | stage-3 gain |
+| --- | ---: | ---: | ---: |
+| `a74_fixed256_s0` (hard label, 1 seed) | 82.24% | 85.73% | +3.48 |
+| the freeze (soft label, 3-seed mean) | 82.80% | 86.29% | **+3.49** |
+
+The soft target is worth +0.56 pp at the candidate stage and **all of it arrives at the output**, because stage 3
+contributes the same absolute gain over the higher base. The earlier reading had stage 3 absorbing half of it.
+
+**"A consistent precision-leaning drift" is also wrong.** The two-seed report read FP 1.220 -> 1.023 -> 0.867 and
+precision 68.7 -> 72.0 -> 74.6% across the reference and seeds 0 and 1 as a trend caused by the adopted changes. Seed 2
+lands *between* the other two on both (FP 0.969, P 72.9%), so the monotone run was **seed noise in a two-point
+sample**. What does hold across all three is that recall at each arm's own threshold is stable at 95.0-95.3%: the
+deployment-relevant operating point is unaffected by where the AP-optimal threshold happens to fall, which is the
+reason to quote it.
+
+### The CPU figure, matched and interleaved on an idle host (2026-10-30)
+
+Item 29's protocol: the three frozen arms plus the old control, 3 rounds, interleaved inside one session on an idle
+host, 2,000 consecutive scans at batch 1, `--device cpu --threads 4`, and **one** `--stage2` for every arm so the
+`stage2` phase is byte-identical work. `results/lat_frz_{fs0,fs1,fs2,ctl}_r{1,2,3}/latency_cpu_t4.json`.
+
+**Read the `stage2` phase first.** Per-arm means on identical work: 10.57 / 10.43 / 10.47 ms for the three freeze
+seeds, 10.79 ms for the control -- a **0.36 ms noise floor**, and it runs *against* the control, which went last in
+each round. Anything the table below attributes to the architecture has to clear that.
+
+| arm | stage2 | decode | memory | **total median** | total p99 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `a71_freeze_s0` | 10.57 | 1.75 | 7.25 | 19.51 | 21.79 |
+| `a71_freeze_s1` | 10.43 | 1.73 | 7.17 | 19.30 | 21.70 |
+| `a71_freeze_s2` | 10.47 | 1.73 | 7.18 | 19.37 | 21.86 |
+| **freeze, 9 runs** | 10.49 | 1.74 | **7.20** | **19.39** | **21.78** |
+| control `a66_mingru_s0` (`dim 128`) | 10.79 | 1.75 | 10.12 | 22.71 | 25.29 |
+
+**The three frozen seeds are indistinguishable in cost, as they must be**: identical shape, different weights, total
+medians spread 0.216 ms -- *below* the 0.36 ms floor. That is the sanity check this sweep exists to pass.
+
+**`dim 64` costs 2.92 ms less in the memory phase, 8.0x the floor**, i.e. **-28.8%**; the total falls 3.32 ms
+(**-14.6%**), of which 0.36 ms is the floor's bias in the control's favour, leaving **~2.96 ms** attributable -- which
+matches the memory-phase difference exactly, as it should, since nothing else differs. Item 49 measured -28% and
+-11.6% on the same two shapes in a different session, so the **ratios reproduce**.
+
+**Against FROG's 25 ms frame period** (owner, 2026-10-19: the CPU number is the one that decides deployment):
+
+| | median | headroom | p99 | headroom |
+| --- | ---: | ---: | ---: | ---: |
+| the frozen architecture | **19.39 ms** | **5.61 ms (22%)** | **21.78 ms** | **3.22 ms** |
+| the `dim 128` control | 22.71 ms | 2.29 ms | 25.29 ms | **-0.29 ms, over budget** |
+
+On this sweep that read as the control missing the frame period at p99; the cold repeat (item 57) puts it at 24.65 ms,
+inside the budget with **0.35 ms** to spare against the frozen architecture's 3.33. **The claim is withdrawn and the
+weaker one stands**: `dim 64` buys the only usable margin there is.
+
+**Do not read this against item 49's 17.73 ms as a regression.** The `stage2` phase, which is byte-identical work in
+both sweeps, reads 10.49 ms here against 9.35 ms there -- a **12% session drift** on arithmetic that cannot have
+changed. That is precisely why cross-session CPU rows are not comparable and why this protocol interleaves; the
+*ratios* are what this sweep establishes, and they reproduce.
+
+**Repeated on a cold host as item 57, and the level reproduced**, so the suspicion recorded here was wrong. The
+`stage2` phase read 10.45 ms on a host idle 63 minutes against 10.56 ms warm, and the total 19.32 against 19.39 ms --
+0.9% and 0.4% apart. It is not thermal, and not the stage-2 checkpoint either (both are 960,323 parameters and
+aggregator-free, hence identical at inference). The gap to item 49's 9.35 ms `stage2` is narrowed and unexplained, and
+cross-session totals stay banned. **The quoted figure is now the cold sweep's 19.32 ms / 21.67 p99**, and the
+"over the 25 ms budget at p99" claim below is withdrawn -- cold, the control reads 24.65 ms, inside it.
+
+### The phantom column, three seeds (2026-10-30)
+
+`utils/empty_scene.py` over all 72,533 person-free frames of FROG `transferred`, each seed's stage 3 paired with the
+stage 2 whose candidates it learnt from. `results/empty_scene_frz_s{0,1,2}.json`.
+
+| at threshold 0.3 | stage 2 alone | whole detector | change |
+| --- | --- | --- | --- |
+| FP/frame | 2.134 (2.106 / 2.156 / 2.139) | **0.675** (0.706 / 0.591 / 0.727) | **-68.4%** |
+| frames with >=1 | 61.4% | **31.9%** | -29.5 pp |
+| recur within 0.3 m next frame | 85.8% | 93.6% | +7.8 pp |
+| FP/frame, beyond the 10 s fade (41,797 frames) | 1.984 | **0.524** | **-73.5%** |
+| FP/frame at threshold 0.9 | 0.666 | **0.0015** | -99.8% |
+| frames with >=1 at threshold 0.9 | 32.7% | **0.15%** | -32.5 pp |
+
+**Every qualitative finding of the 2026-10-09 measurement survives the architecture change**, which is why it was
+repeated: the memory is a phantom filter, the cut is *larger* beyond the fade horizon so it is not stale-memory
+bookkeeping, what survives recurs next frame and is therefore furniture, and the high-confidence count is
+categorically better than any published detector's.
+
+**The absolute count improved; the relative cut did not; the absolute one is what matters.** 0.675 against the
+superseded 0.740 is fewer phantoms, but the cut reads 68.4% against 72% because the frozen stage 2 hands the memory
+**fewer candidates to begin with** (2.134 against 2.622). A ratio against a different denominator is not a
+like-for-like comparison, and a robot sees the numerator. At threshold 0.9 the frozen detector emits **0.0015
+FP/frame** against the superseded 0.010 -- 298, **0** and 20 detections in 72,533 frames, one seed emitting none at
+all.
+
+**Coasting contributes exactly zero by construction**, not by measurement: the frozen architecture has no coasting head
+(item 24), so `from_coasting` is 0 at every threshold in every seed. Item 27's reading is therefore exact rather than
+merely small -- **every** person-free phantom is a candidate stage 2 emitted and the memory failed to suppress.
+
+**This column is ~50x noisier across seeds than AP**, and no single seed should be quoted from it. The three counts
+spread 0.136 FP/frame around the 0.675 mean (sd 0.073, 11% relative) against the same seeds' 0.32 pp around 86.29%
+(0.2% relative). Seed 1 is best on phantoms and middling on AP; seed 2 is best on AP and worst on phantoms --
+consistent with seeds placing their AP-optimal threshold differently, not with any seed being better.
+
+**Operationally, the job hung after every seed**, after writing its JSON and before exiting, the same ROCm teardown
+hang `step3a` has. Seed 0's hang went unnoticed for **1h49m** because the single background waiter had expired at its
+30-minute ceiling, and it blocks the *next* seed rather than merely wasting its own time. The fix was a cron fallback
+beside the event waiter, and the rule and the symptom are now in `memory/long-running-tasks.md`. The cache rebuild
+that precedes each seed is also silent and took 1654 / 1665 / 1648 s -- predictable to within 17 s, so it is no longer
+a reason to suspect a hang.
+
+### Cost and mechanics
+
+6.86 h, 7.2 h (including 39 min of candidate-cache rebuild, since `candidate_cache_path` keys on the stage-2
+checkpoint's write time and each seed brings a new one) and 6.93 h of wall clock -- about **21 h for the three**, close
+to the 22 h estimate. `run_queue.py` reported `exit 1` for all three arms, as every `step3a` job does; the runner
+judges by outputs, and `step3a_results.json` was written in each case.
+
 ## Item 53: the clip that fixes item 42, and the cost that may retire it (2026-10-28)
 
 *keywords: item 42, item 53, state_grad_clip, gradient clip hook, LayerNorm refuted, CPU latency, iterations, 25 ms budget*

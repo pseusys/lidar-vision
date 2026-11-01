@@ -29,9 +29,10 @@ python -c "import takheliped; from takheliped.detectors import AlgorithmicDetect
 
 ```bash
 python train.py --detector spacetime_cnn --dataset frog --dtime 10               # defaults are now --epochs 100 --patience 15
-python train_all.py --dataset frog --out-dir ../checkpoints                      # spacetime_cnn, fullscan_tcn, temporal_unet, li2former, in sequence
-python train.py --detector temporal_unet --dataset frog --resume ../checkpoints/temporal_unet.best.pth --epochs 40   # resume: runs 40 MORE epochs, not "up to 40 total"
+python train_all.py --dataset frog --out-dir ../checkpoints                      # spacetime_cnn, li2former, in sequence
+python train.py --detector spacetime_cnn --dataset frog --resume ../checkpoints/spacetime_cnn.best.pth --epochs 40   # resume: runs 40 MORE epochs, not "up to 40 total"
 python train.py --detector spacetime_cnn --dataset frog --init-weights ../checkpoints/spacetime_cnn.best.pth --lr 1e-4   # fine-tune from another checkpoint's weights only (fresh optimiser/epoch count, unlike --resume)
+
 ```
 
 **TAKHeLiPeD**, the three-horizon detector (`TODO.md` A43, A51), trains with its own script, because it streams recordings rather than sampling frames:
@@ -49,6 +50,11 @@ python slot_experiments.py cost --memory ... --stage2 ...                       
 python slot_experiments.py odometry --memory ... --stage2 ... --out ../results/<name>.json   # --out names the results file; without it every run of a mode overwrites the same a51_<mode>.json, which destroyed E2's and E4's numbers once
 python empty_scene.py --stage2 <step2 ckpt> --memory <step3a ckpt>               # detections per frame on FROG transferred's 72,533 person-free frames, where every one is a false positive (A50 phase 1 item 7)
 python score_memory.py --memory ... --stage2 ... --out <json>                    # score an interrupted run's best checkpoint (A51)
+python calibrate_rescore.py --memory ... --stage2 ... --out <json> [--frames <npz>]  # item 48: fit (temperature, bias) on val so a fixed threshold means something (~65 min/seed)
+python calibrate_rescore.py --memory ... --apply <json>                          # item 48: store an already-fitted pair in the checkpoint, re-checking its gates; seconds, no re-measurement
+python queue_item48.py --list                                                    # item 48: the three-seed chain, run via run_queue.py so the ROCm teardown hang cannot block the next seed
+python queue_item58.py --list                                                    # item 58: the phantom column re-measured on the calibrated checkpoints; empty_scene.py unchanged, the key comes from the checkpoint
+python queue_item56.py --list                                                    # item 56: A61's rule/track/arms/report at three seeds on the frozen candidates, then summary (~13 h); `report` is blocked if `rule` fails
 python judge_arms.py                                                            # every A51 arm's deltas and verdicts against a control's three-sigma bars; stdlib only, safe beside a running job
 python train_takheliped.py step3a --stage2 ... --visibility                   # give the coasting head the free space the laser saw past each slot (A51 S2); rebuilds the candidate cache once
 python tracking_baselines.py rule                                               # A56 E15: the memory's bookkeeping with a rule score, 54-config grid on val, then test (~2.5 h)
@@ -149,6 +155,35 @@ phase is read first**: it is byte-identical work across arms, so its spread *is*
 catches ordering bias -- in the 2026-10-27 sweep it showed `dim 64` running 0.31 ms slower on identical work purely
 because it went second.
 
+**`calibrate_rescore.py` is post-hoc and monotone, and that is the whole safety argument** (`TODO.md` item 48). It fits
+`calibrated = (logit + bias) / temperature` on **val** by binary NLL, so **AP, recall at matched false positives and
+every other rank-based number cannot move** -- only the fixed-threshold columns do, which is the decalibration A51
+phase 1b measured and never fixed. Four things to know before using it:
+
+- **It refuses `--split test`**, because a transform chosen on the split it is reported on is not a measurement.
+- **The fitted pair lives in the checkpoint's top-level `calibration` key**, not in `args`: it is fitted after training,
+  so recording it as a training argument would claim something that never happened. `object_memory` reads it back and
+  **falls back to the identity `(1.0, 0.0)`**, so every checkpoint written before the key scores bit-identically.
+- **It is applied to the candidate logit only**, never to the coasting head's. Without that head `_coasting` pins the
+  slot logit at `SILENT_COAST_LOGIT`, and a bias there would un-silence a head item 24 removed.
+- **A write refuses when the label cross-check disagrees** with the reported metric by more than 2 pp, or when AP moved
+  by more than `AP_TOLERANCE` (1e-6). `_prec_rec_2d` is deliberately *not* refactored to supply the labels, because
+  every published number in this repo rests on it, so the two must be compared rather than assumed equal — **at the
+  operating threshold on both sides**, which is the only place they are comparable. All three freeze seeds agreed to
+  ~0.001.
+- **The labels follow the metric's rule, not `candidate_targets`'.** `greedy_labels` accepts detections in descending
+  score order, one-to-one within the match radius, exactly as `_prec_rec_2d` accepts its prefix. `candidate_targets`
+  minimises **distance** and is score-blind, so it gives a person to a candidate 0.1 m away scoring 0.05 over one
+  0.3 m away scoring 0.9 — labelling the metric's own true positive a negative. That noise is anti-correlated with the
+  score, which is the one kind a temperature fit cannot survive. It cost the first attempt (`CHANGELOG.md`, item 48).
+- **Use `--apply <json>` to store a pair, not a fresh `--write`.** Writing is two floats; re-running the fit to do it
+  redoes ~55 min of scoring per seed. **Where the hour goes:** ~8 min of GPU replay, then `score_detections` **twice**
+  (uncalibrated and calibrated) over 2.1 M detections. So `--frames` buys reproducibility — a re-fit needs no GPU, no
+  checkpoints and no 1 GB candidate cache — and **not** wall clock.
+- **Run the seeds through `run_queue.py`** (`utils/queue_item48.py`), never a shell loop: the script's `os._exit` still
+  leaves the process lingering, and in a loop that hang blocks the next seed. The runner caps it at one
+  `EXIT_GRACE_SECONDS`.
+
 **`--state-grad-clip FLOAT`** (`TODO.md` item 53) bounds each frame's gradient at the carried slot state, in the
 training loop rather than the model, so the forward is bit-identical. **It is off by default and must stay off** for
 any arm being compared with one already measured: `a74_fixed256_s0`'s 85.73% trained without it. It is needed only by
@@ -175,7 +210,8 @@ which is how item 16's wrong `gru_cpu` row (23.87 ms against a true 20.57) was p
 It is **stored in the checkpoint**, so `evaluate.py` defaults to the partition the weights were trained under and refuses to score two differently-partitioned checkpoints in one pass.
 `transferred` shares `official`'s train and val exactly, so one checkpoint serves both; `balanced` does not, and its val contains a recording the published baselines trained on.
 
-`--detector` choices: `algorithmic` (eval only, not trainable), `spacetime_cnn`, `fullscan_tcn`, `temporal_unet`, `li2former`.
+`--detector` choices: `algorithmic` (eval only, not trainable), `spacetime_cnn`, `li2former`.
+(`fullscan_tcn` and `temporal_unet` were retired on 2026-10-31, `TODO.md` item 32; their code last existed at commit `98b0716`.)
 `--dataset {drow,frog,jrdb}`, `--dtime N` (temporal stride — **also stored in the checkpoint**, so `evaluate.py` picks it up automatically), `--no-align-scans` (disable odometry-based rotation correction), `--no-frame-cache` (trade time for ~2.6 GB less RAM on FROG's full train split).
 
 **Resuming is safe, with one gotcha.** `.best.pth` is written atomically (temp + rename) on every wp-AUC improvement and carries weights, optimizer state, epoch and the `val_wp_auc` it was selected on — so a crashed run loses at most one epoch, and resuming will not overwrite a better checkpoint with a worse one.
@@ -235,8 +271,8 @@ python horizon_sweep.py --detector lfe-peaks            # how long a horizon eac
 python horizon_sweep.py --discrimination                # the role-C bound on POPULATED frames, where a filter can destroy people too (A45)
 python range_probe.py                                   # recall vs range, and the sub-threshold miss budget
 python repr_probe.py                                    # scale vs capacity, 1-NN over four window parameterisations
-python nms_sweep.py --skip fullscan_tcn lfe_ppn         # range-aware merge radius r(d) = a + b*d (A38)
-python nms_sweep.py --skip fullscan_tcn lfe_ppn --score-by operating-point   # the same radius, scored on recall/duplicates/close-pairs instead of AP (A40)
+python nms_sweep.py --skip lfe_ppn         # range-aware merge radius r(d) = a + b*d (A38)
+python nms_sweep.py --skip lfe_ppn --score-by operating-point   # the same radius, scored on recall/duplicates/close-pairs instead of AP (A40)
 python persistence_map.py                               # role C: world-location persistence over detections (A41)
 python persistence_map.py --background                  # role C: background model from raw scan returns (A44)
 python slot_budget.py                                   # how many object-memory slots K stage 3 needs, per retire window (A43)

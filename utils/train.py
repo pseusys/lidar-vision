@@ -8,10 +8,9 @@ use evaluate.py --drow / --drspaam to evaluate them.
 Trainable detectors
 -------------------
   spacetime_cnn — SpaceTimeCNNDetector (2-D conv over N_beams×T grid)
-  fullscan_tcn  — FullScanTCNDetector (causal temporal TCN over T + dilated CNN over beams)
 
-Both are non-recursive (CNN/TCN only, no RNN/attention) and consume raw,
-unaligned, single-channel range scans — see RESEARCH.md for why.
+It is non-recursive (CNN only, no RNN/attention) and consumes raw, unaligned,
+single-channel range scans — see RESEARCH.md for why.
 
 Eval-only
 ---------
@@ -26,7 +25,7 @@ All detectors produce (default --head drow):
   logits : (N_beams, 4)   raw class logits  [bg, wc, wa, wp]
   votes  : (N_beams, 2)   vote offsets (dx, dy) in window space
 
-With --head heatmap (all full-scan detectors; default for temporal_unet):
+With --head heatmap:
   heatmap : (N_beams, 1)  raw logit; sigmoid gives per-beam person probability.
   Decoded at eval time via scipy.signal.find_peaks(sigmoid(heatmap), height=0.3,
   distance=5).  See RESEARCH.md §2.3 ("Alternative detection head") for rationale.
@@ -63,12 +62,6 @@ Usage
 
   # Train with early stopping and cosine LR schedule
   python train.py --detector spacetime_cnn --epochs 50 --patience 10 --lr-schedule cosine
-
-  # Train FullScanTCN (causal temporal TCN + dilated spatial CNN)
-  python train.py --detector fullscan_tcn --dataset frog --epochs 30
-
-  # Train TemporalUNet (Architecture C — LFE-with-time, heatmap head by default)
-  python train.py --detector temporal_unet --dataset frog --epochs 30
 
   # Disable odometry alignment (reproduce unaligned baseline for ablation)
   python train.py --detector spacetime_cnn --no-align-scans --epochs 30
@@ -214,7 +207,7 @@ def _make_optimizer(params, lr: float, weight_decay: float,
 
 from takheliped.detectors import (
     DrowDetector, DrSpaamDetector,
-    SpaceTimeCNNDetector, FullScanTCNDetector, TemporalUNetDetector,
+    SpaceTimeCNNDetector,
     Li2FormerDetector,
 )
 from takheliped.utils.drow_utils import (
@@ -299,20 +292,14 @@ def _build_model(args):
 
     Supports architecture tuning for the full-scan models:
       --dropout            applied to all models (default 0.5)
-      --backbone-channels  DilatedScanBackbone channels (FullScanTCN; default 64)
       --channels           internal channel width (SpaceTimeCNN; default 96)
       --n-spatial-stages   spatial inception stages 1–4 (SpaceTimeCNN; default 3)
-      --tcn-channels       temporal TCN channel width (FullScanTCN; default 64)
-      --unet-channels      base channels for TemporalUNet encoder (default 32)
     """
     det = args.detector
     dr  = getattr(args, "dropout",           0.5)
-    bc  = getattr(args, "backbone_channels", 64)
     ch  = getattr(args, "channels",          96)
     nss = getattr(args, "n_spatial_stages",  3)
     tf  = getattr(args, "time_frame",        5)
-    tcc = getattr(args, "tcn_channels",      64)
-    uc  = getattr(args, "unet_channels",     32)
 
     if det == "drow":
         return DrowDetector(dropout=dr, time_frame_size=tf, verbose=False)
@@ -320,16 +307,10 @@ def _build_model(args):
         return DrSpaamDetector(dropout=dr, num_scans=tf)
     if det == "li2former":
         return Li2FormerDetector(dropout=dr, num_scans=tf)
-    # Full-scan models share the --head flag; temporal_unet defaults to heatmap.
-    hd  = getattr(args, "head", "heatmap" if det == "temporal_unet" else "drow")
+    hd  = getattr(args, "head", "drow")
     if det == "spacetime_cnn":
         return SpaceTimeCNNDetector(n_time=tf, channels=ch,
                                     n_spatial_stages=nss, dropout=dr, head=hd)
-    if det == "fullscan_tcn":
-        return FullScanTCNDetector(n_time=tf, tcn_channels=tcc,
-                                   backbone_channels=bc, dropout=dr, head=hd)
-    if det == "temporal_unet":
-        return TemporalUNetDetector(n_time=tf, unet_channels=uc, dropout=dr, head=hd)
     raise ValueError(f"'{det}' cannot be trained (algorithmic and LFE detectors are eval-only)")
 
 
@@ -1387,14 +1368,9 @@ def _arch_metadata(net) -> dict:
     shape-mismatching against _default_args()'s hardcoded sizes.
     """
     meta = {}
-    for attr in ("n_time", "channels", "n_spatial_stages", "unet_channels"):
+    for attr in ("n_time", "channels", "n_spatial_stages"):
         if hasattr(net, attr):
             meta[attr] = getattr(net, attr)
-    # FullScanTCNDetector doesn't keep tcn_channels/backbone_channels as
-    # plain attributes — derive them the same way its own save_weights() does.
-    if hasattr(net, "temporal_tcn") and hasattr(net, "backbone"):
-        meta["tcn_channels"] = net.temporal_tcn[0].conv.out_channels
-        meta["backbone_channels"] = net.backbone.conv4.out_channels
     return meta
 
 
@@ -1481,9 +1457,9 @@ def _default_args(**overrides) -> SimpleNamespace:
 
     Notes
     -----
-    Both full-scan models (spacetime_cnn, fullscan_tcn) are non-recursive
-    (CNN/TCN only) and DirectML-compatible; force_cpu is provided for parity
-    with other backends but neither model needs it.
+    The full-scan model (spacetime_cnn) is non-recursive (CNN only) and
+    DirectML-compatible; force_cpu is provided for parity with other backends
+    but the model does not need it.
     """
     defaults = dict(
         detector="spacetime_cnn",
@@ -1509,11 +1485,8 @@ def _default_args(**overrides) -> SimpleNamespace:
         batch_size=4,
         frame_cache=True,
         # full-scan architecture hyperparams
-        backbone_channels=64,
         channels=96,
         n_spatial_stages=3,
-        tcn_channels=64,
-        unet_channels=32,
         # alignment
         align_scans=True,
         history_mode="full",
@@ -1524,8 +1497,8 @@ def _default_args(**overrides) -> SimpleNamespace:
         out=Path("weights_trained.pth"),
         resume=None,
         weights=None,
-        # detection head (full-scan models only) — resolved below, after
-        # `overrides` is applied, so it can depend on the final `detector`
+        # detection head (full-scan models only)
+        head="drow",
         heatmap_sigma=2.0,
         # evaluation
         eval_only=False,
@@ -1536,11 +1509,6 @@ def _default_args(**overrides) -> SimpleNamespace:
         force_cpu=False,
     )
     defaults.update(overrides)
-    if "head" not in overrides:
-        # temporal_unet defaults to heatmap (matches LFE-Peaks); every other
-        # full-scan model defaults to the DROW-style head. Mirrors the CLI's
-        # post-parse resolution in main() — see the comment there.
-        defaults["head"] = "heatmap" if defaults["detector"] == "temporal_unet" else "drow"
     return SimpleNamespace(**defaults)
 
 
@@ -1628,8 +1596,7 @@ def train_model(args) -> dict:
     _input_mode     = getattr(net, "INPUT_MODE", "cutout")
     _nsamp          = getattr(net, "N_SAMP", DrowDetector.N_SAMP)
     _frame_cache    = getattr(args, "frame_cache", True)
-    _head           = getattr(args, "head",
-                              "heatmap" if args.detector == "temporal_unet" else "drow")
+    _head           = getattr(args, "head", "drow")
     _heatmap_sigma  = getattr(args, "heatmap_sigma", 2.0)
     _align_scans    = getattr(args, "align_scans", True)
     _history_mode   = getattr(args, "history_mode", "full")
@@ -1919,9 +1886,7 @@ def tune_model(args) -> dict:
     Parameters tuned for every model:
         lr, weight_decay, dropout
     Additional parameters for full-scan models:
-        backbone_channels                  (fullscan_tcn)
         channels, n_spatial_stages         (spacetime_cnn)
-        tcn_channels                       (fullscan_tcn only)
     """
     try:
         import optuna
@@ -1946,15 +1911,9 @@ def tune_model(args) -> dict:
         t.weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-2, log=True)
         t.dropout      = trial.suggest_float("dropout",      0.0,  0.6,  step=0.1)
 
-        if det == "fullscan_tcn":
-            t.backbone_channels = trial.suggest_categorical(
-                "backbone_channels", [32, 64, 128])
-            t.tcn_channels = trial.suggest_categorical("tcn_channels", [32, 64, 128])
         if det == "spacetime_cnn":
             t.channels         = trial.suggest_categorical("channels", [72, 96, 120])
             t.n_spatial_stages = trial.suggest_int("n_spatial_stages", 2, 4)
-        if det == "temporal_unet":
-            t.unet_channels = trial.suggest_categorical("unet_channels", [16, 24, 32, 48])
 
         # Shorter run; skip AUC inside trials (expensive)
         t.epochs    = tune_epochs
@@ -2009,7 +1968,7 @@ def main():
     _TRAINABLE = [
         "algorithmic",
         "li2former",
-        "spacetime_cnn", "fullscan_tcn", "temporal_unet",
+        "spacetime_cnn",
     ]
     parser.add_argument(
         "--detector",
@@ -2097,20 +2056,12 @@ def main():
                              "time for memory (~2.6 GB for FROG's full train split "
                              "in raw_scan mode) — use on RAM-constrained machines.")
     # Architecture hyperparams (full-scan models only)
-    parser.add_argument("--backbone-channels", type=int, default=64,
-                        help="Conv channels in DilatedScanBackbone "
-                             "(FullScanTCN; default: 64)")
     parser.add_argument("--channels",        type=int, default=96,
                         help="Internal channel width (SpaceTimeCNN; default: 96, "
                              "must be divisible by 3×8=24 for GroupNorm)")
     parser.add_argument("--n-spatial-stages", type=int, default=3,
                         help="Spatial inception stages 1–4 (SpaceTimeCNN; default: 3). "
                              "Beam RF: 3->17, 4->49, 5->177, 6->689 beams.")
-    parser.add_argument("--tcn-channels", type=int, default=64,
-                        help="Temporal TCN channel width (FullScanTCN; default: 64)")
-    parser.add_argument("--unet-channels", type=int, default=32,
-                        help="Base encoder channel width (TemporalUNet; default: 32). "
-                             "Doubles at each encoder stage: 32->64->128->256.")
     # Odometry alignment
     parser.add_argument("--align-scans", dest="align_scans", action="store_true",
                         default=True,
@@ -2132,10 +2083,8 @@ def main():
                              "Architecture, shape and parameter count are identical "
                              "in every mode. See TODO.md A21.")
     # Detection head (full-scan models only)
-    parser.add_argument("--head", choices=["drow", "heatmap"], default=None,
-                        help="Detection head for full-scan models (default: 'drow' "
-                             "for spacetime_cnn/fullscan_tcn, 'heatmap' for "
-                             "temporal_unet — resolved after parsing if omitted). "
+    parser.add_argument("--head", choices=["drow", "heatmap"], default="drow",
+                        help="Detection head for full-scan models (default: 'drow'). "
                              "'drow': 4-class logits + vote-offset regression, same "
                              "head as DROW/DR-SPAAM — enables direct comparison. "
                              "'heatmap': 1D Gaussian heatmap + BCE loss + peak "
@@ -2199,13 +2148,6 @@ def main():
                         help="Epochs per trial — keep short (default: 10)")
     args = parser.parse_args()
     args.val_split = args.val_split.strip() or None
-    if args.head is None:
-        # temporal_unet defaults to heatmap (matches LFE-Peaks); every other
-        # full-scan model defaults to the DROW-style head for a head-neutral
-        # comparison. Only resolved here if the user didn't pass --head
-        # explicitly (an explicit choice, e.g. --head drow on temporal_unet
-        # for the ablation in docs/RESEARCH.md §5.5, is always respected).
-        args.head = "heatmap" if args.detector == "temporal_unet" else "drow"
 
     # ------------------------------------------------------------------
     # AlgorithmicDetector: eval-only (not an nn.Module)

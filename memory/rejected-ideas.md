@@ -612,6 +612,7 @@ Widen the temporal window from `T=5` consecutive frames (~125 ms of real time) t
 
 **What was tried.**
 A full retrain of `FullScanTCNDetector` on FROG with `--time-frame 10 --dtime 20`, otherwise identical hyperparameters to the existing `fullscan_tcn.best.pth` baseline.
+**`FullScanTCNDetector` was retired on 2026-10-31** (`TODO.md` item 32); to re-run this, the class lives at commit `98b0716`.
 Early-stopped at epoch 8 (best at epoch 3), final val-set wp-AUC 54.8% — a ~15-point regression from the `dtime=1` baseline's 69.5-69.7%.
 
 **Why rejected.**

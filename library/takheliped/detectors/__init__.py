@@ -2,7 +2,7 @@ from .detector import Detector
 from .drow_detector import DrowDetector
 from .algorithmic_detector import AlgorithmicDetector
 from .architectures import DrSpaamDetector
-from .full_scan import SpaceTimeCNNDetector, FullScanTCNDetector, TemporalUNetDetector
+from .full_scan import SpaceTimeCNNDetector
 from .li2former import Li2FormerDetector
 from .lfe_detector import LFEPeaksDetector, LFEPPNDetector
 
@@ -17,9 +17,7 @@ DETECTOR_REGISTRY: dict = {
     "drow":          DrowDetector,
     "drspaam":       DrSpaamDetector,
     "li2former":     Li2FormerDetector,
-    "spacetime_cnn":   SpaceTimeCNNDetector,
-    "fullscan_tcn":    FullScanTCNDetector,
-    "temporal_unet":   TemporalUNetDetector,
+    "spacetime_cnn": SpaceTimeCNNDetector,
     # LFE detectors are ONNX-based and not registered for PyTorch training
     "lfe_peaks":     LFEPeaksDetector,
     "lfe_ppn":       LFEPPNDetector,

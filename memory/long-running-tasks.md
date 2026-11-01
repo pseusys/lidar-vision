@@ -1,6 +1,6 @@
 # Long-running tasks: launch, watch, report
 
-*keywords:* long run, background, monitor, watchdog, heartbeat, status report, timestamp, stale, crash, lingering process, resume, relaunch, progress.txt, hourly check, what is the progress
+*keywords:* long run, background, monitor, watchdog, heartbeat, status report, timestamp, stale, crash, lingering process, resume, relaunch, progress.txt, hourly check, what is the progress, EXIT_GRACE_SECONDS, declared outputs, finished(), killed mid-work
 
 A training run here takes 4-20 hours, and this machine interrupts them: the GPU driver bugchecks under load, a finished process can
 hang instead of exiting, and a careless second job exhausts the host's memory.
@@ -51,6 +51,28 @@ schtasks /run   /tn "lidar_<item>"
 Python module that builds `Job`s and calls `main`, and the runner owns retries, the skip-if-done rule, the guard classification
 and the progress lines. It takes `--list`, `--steps` and `--progress`. Every launcher incident in `TODO.md` A57's table came
 from the eight hand-copied copies, so write a queue module and do not copy a launcher again.
+
+**A job declares the files it writes LAST, and this is not a style preference.** `spawn_process` polls
+`finished(job) or _printed_its_last(log)` and, once either is true, waits `EXIT_GRACE_SECONDS` (600) and then **kills the
+child**. The grace exists for the ROCm teardown hang, where a job lingers after writing everything. It also means a job
+that declares an **early** file is a job the runner will cut off mid-work. Item 56's `track` declared only
+`track_rows.json`, which its coordinate descent writes ten minutes before the eight replays finish: seed 0 escaped by six
+seconds (606 s), seeds 1 and 2 were killed, and each lost `bytetrack_cbmot`'s test pickle. `run_report` then dropped the
+method **silently** -- it keeps only methods whose pickle exists -- scored three classical pipelines instead of four, and
+inflated the memory's margin from +1.98 to +3.56 pp. **An exit code could not have caught this** (these jobs exit 1 on the
+teardown hang as a matter of course) and neither could a growing log; what caught it was listing one seed's output
+directory against another's. `tests/test_queue_declarations.py` pins the rule. **When writing a queue module, read the
+subcommand's write order and declare its last files** -- and when a job finishes suspiciously early, diff its outputs
+against a seed that worked.
+
+**`run_queue.ordered()` sorts in levels, and declaration order only decides between jobs at the same level.** It is Kahn's
+algorithm emitting every currently-ready job before any job that depends on one, so **a single `needs` reorders the whole
+queue**: item 56's three `report` jobs each named only their own seed's three replays, and all three reports landed behind
+all nine replays -- turning "seed 0 first, inspect, then the rest" into "everything, then three reports 13 hours later".
+The fix is to name the **predecessor** as well as the real data dependencies, which makes the written order the executed
+one. **`--list` prints the real execution order: read it before launching**, since that is the whole point of a flag that
+runs nothing. The trade it buys is deliberate -- a strict chain means one failure blocks what follows, recovered by
+relaunching, which is cheaper than a partial result set that looks complete.
 
 **It happened again on 2026-10-16, and this is what it looks like from the logs.** The step-1 chain was launched with
 `Start-Process` from the session rather than through the Task Scheduler -- the mistake this section exists to prevent -- and
@@ -139,6 +161,15 @@ written, so: no results file means work remains -- leave it alone. Results file 
 means the hang -- kill it. Confirm with two CPU samples a few seconds apart if you want a second signal, but remember
 CPU burn alone is not proof of progress (a crashed-but-hanging process also burns CPU); the file is the evidence.
 
+**`empty_scene.py` has both phases and the hang blocks the whole chain** (2026-10-30, item 47's phantom column). It
+rebuilds its own `transferred` candidate cache per stage-2 seed -- **1654 s, 27.5 min**, before it scores a frame --
+and it prints nothing while doing so, because the launcher's `Out-File` buffers the pipeline, so the log is *empty*
+rather than merely stale. It then hangs after writing its JSON, exactly like `step3a`. In a loop over three seeds that
+hang stops the next seed from starting at all: seed 0's work finished at 13:25 and its process sat alive until 15:15,
+**1h49m of nothing**, because the single background waiter had already expired at its 30-minute ceiling and no cron
+fallback was armed. **A multi-seed loop over a hanging script needs the cron**, not a waiter -- one watcher that dies
+silently turns N hangs into N dead ends.
+
 **Report bad news at once**, never at the next heartbeat.
 
 ## Reporting
@@ -149,21 +180,33 @@ CPU burn alone is not proof of progress (a crashed-but-hanging process also burn
   would now cost.
 - **The `Running` line of every answer** already carries the same duty (`../AGENTS.md`): one line, every job in flight, with its
   progress.
-- **Every observer report carries two clocks: `now` and `next`** (owner, 2026-10-27). `now` is the wall-clock time the check
-  was taken; `next` is when the report itself says the next thing is due -- the next epoch line, the arm's earliest stop, the
-  chain's expected finish. Give both as times, not as durations.
+- **Every observer report on a long task carries two clocks: `now` and `next`** (owner, 2026-10-27, scoped 2026-10-30).
+  `now` is the wall-clock time the check was taken. **`next` is when the cron job fires again** -- not a guess at when
+  the work will finish. Give both as times, not as durations.
+
+  **`next` is omitted, not invented**, for a short task and for any task with no cron fallback armed: there is then no
+  next awakening to name, and predicting one is the mistake this rule replaces. **For a task of unknown length, arm a
+  cron** -- that is the case the fallback exists for, and the case where a guessed finish time is worth least.
+
+  *Why the next awakening and not the expected finish* (owner, 2026-10-30). A predicted finish is a guess, and a wrong
+  guess in that slot reads as a hang when the job is healthy and as health when the job has hung. A cron firing is a
+  fact about the watcher: it says *someone will look at this, at this time*. A reader scrolling the session history
+  then sees a column of `now` stamps against a column of promised awakenings, and a real hang shows up as an awakening
+  that produced no progress -- or as a `now` that ran past a `next` nobody honoured, which means the watcher died, not
+  the job. The estimate still belongs in the report; it belongs in `Next`, as a suggestion, not in a clock slot where
+  it masquerades as a commitment.
 
   *Why two and not one.* A single check can only say "the log is N minutes old", which is meaningless without knowing the
   cadence -- and the cadence changes per arm (582 s an epoch for `dim 64`, 1,888 s during one unexplained excursion, 25 minutes
-  while a candidate cache rebuilds). A **reader scrolling the session history** sees a column of `now` stamps against a column
-  of `next` predictions, and a hang shows up as the moment `now` runs past a `next` that never arrived. That is a property of
-  the *sequence* of reports, which no single report can carry, and it is why the pair has to be in every one of them rather
-  than only in the ones that look interesting.
+  while a candidate cache rebuilds, 27.5 minutes while an `empty_scene.py` cache rebuilds). The pair is a property of the
+  *sequence* of reports, which no single report can carry, and that is why it goes in every one of them rather than only
+  in the ones that look interesting.
 
-  It also disciplines the writer: predicting `next` forces an explicit model of what the job should do, so a missed prediction
-  is visible rather than absorbed. Three times in the 2026-10-26/27 sweep an estimate was wrong -- a "50-epoch ceiling" that
-  was 100, a patience of 8 read as 12, a "twenty minute" resume that reset its own patience window and ran for hours -- and
-  each would have been caught a check earlier by a `next` that did not come true.
+  *What the estimate is still for.* An expected finish, stated in `Next`, disciplines the writer: it forces an explicit
+  model of what the job should do, so a missed prediction is visible rather than absorbed. Three times in the 2026-10-26/27
+  sweep an estimate was wrong -- a "50-epoch ceiling" that was 100, a patience of 8 read as 12, a "twenty minute" resume
+  that reset its own patience window and ran for hours -- and each would have been caught a check earlier by an estimate
+  that did not come true. Keep making it; just do not put it where `next` goes.
 
 ## After a session restart
 

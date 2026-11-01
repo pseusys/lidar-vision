@@ -20,7 +20,6 @@ patience=5, lr_schedule=plateau, dropout=0.5, epochs=30) except:
 Usage
 -----
   python finetune_on_drow.py
-  python finetune_on_drow.py --skip temporal_unet
 """
 
 import argparse
@@ -32,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from train import _default_args  # noqa: E402
 from train_all import _run_in_subprocess, _train_worker, _fmt  # noqa: E402
 
-_DETECTORS = ["spacetime_cnn", "fullscan_tcn", "temporal_unet"]
+_DETECTORS = ["spacetime_cnn"]
 
 
 def _parse():

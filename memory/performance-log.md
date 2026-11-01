@@ -36,11 +36,11 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 | DR-SPAAM | published | 69.6% *(RA-L'22: 72%+)* | **75.6%** *(`T=5`)* / 73.7% *(`T=1`)* | 84.9% *(official repo README, merged 1091-point 360° scans)* |
 | Li2Former | published | 76.4% | gap² | 81.4% |
 | **SpaceTimeCNN** | ours, superseded | not measured | **63.0%**³ | n/a |
-| **FullScanTCN**, **TemporalUNet** | ours, superseded | not measured | not measured | n/a |
-| **TAKHeLiPeD, stages 1-2** (calibration network) | ours, novel | gap | **82.2%**⁹ *(old recipe 77.7%⁴)* | n/a |
-| **TAKHeLiPeD, stages 1-3** (+ object memory) | ours, novel | gap | **86.0%**¹¹ *(with the coasting head 85.9%⁹; old recipe 83.3%⁵)* | n/a |
+| **FullScanTCN**, **TemporalUNet** | ours, **retired 2026-10-31** | not measured | not measured | n/a |
+| **TAKHeLiPeD, stages 1-2** (calibration network) | ours, novel | gap | **82.8%**¹² *(superseded recipe 82.2%⁹; old recipe 77.7%⁴)* | n/a |
+| **TAKHeLiPeD, stages 1-3** (+ object memory) | ours, novel | gap | **86.3%**¹² *(superseded architecture 86.0%¹¹; with the coasting head 85.9%⁹; old recipe 83.3%⁵)* | n/a |
 
-**DR-SPAAM `T=5` at 75.6% on FROG was the number to beat, and the frozen detector clears it by 10.4 pp.**
+**DR-SPAAM `T=5` at 75.6% on FROG was the number to beat, and the frozen detector clears it by 10.7 pp.**
 That margin was **7.7 pp** while this file still led with the old recipe's 83.3%, and the sentence outlived the number by three weeks -- which is the failure `TODO.md` item 4 existed to fix and the reason each cell here now carries the configuration it was measured on.
 That is ours measured here, three seeds, against theirs published, one paper figure — read footnote 11 and [`interpreting-evaluation.md`](interpreting-evaluation.md) before quoting it.
 
@@ -48,12 +48,19 @@ That is ours measured here, three seeds, against theirs published, one paper fig
 
 | what reads TAKHeLiPeD's stage-2 candidates | AP, 3 seeds | vs the candidates |
 | --- | --- | --- |
-| nothing | 82.19% | -- |
-| SORT (`min_hits` 1) / ByteTrack, as published | 82.31% / 81.17% | +0.13 / -1.02 |
-| ByteTrack + CBMOT track confidence, tuned on val | 83.51% | +1.32, every seed's interval above zero |
-| **object memory, no attention (E13), frozen** | **86.01%** | **+3.82; +2.36 over the tuned tracker (+2.84 / +2.31 / +1.94), every seed's interval above zero** |
+| nothing | 82.80% | -- |
+| SORT (`min_hits` 1) / ByteTrack, as published | 82.85% / 81.46% | +0.05 / -1.34 |
+| the memory's own fade/coast rules, applied after the threshold | 74.00% | -8.80, every seed far below zero |
+| ByteTrack + CBMOT track confidence, tuned on val | 84.13% | +1.33, every seed's interval above zero |
+| **object memory, no attention (E13), frozen** | **86.29%** | **+3.49; +2.16 over the tuned tracker (+1.98 / +2.34 / +2.16), every seed's interval above zero** |
 
-At one matched false-positive rate the two now find the same people (95.47 against 95.56%); the memory's lead is ranking, not recall at a threshold. On the old recipe (A56, 2026-10-03, vote-grid candidates) the rows read 77.66 / 77.40 / 76.49 / 80.96 / 83.86%, the memory +2.90 over the tuned tracker. All on FROG's official test labels, which include 2,254 duplicate circles that only a second detection can match; on the old recipe, without them every row rose 0.7-1.05 pp and the memory's margin over the tuned tracker was +2.71, still above zero at every seed ([`interpreting-evaluation.md`](interpreting-evaluation.md), 2026-10-05).
+**Re-measured 2026-10-31 on the frozen candidates (item 56); the rows above are no longer the superseded stage 2's.** The
+previous line read 82.19 / 82.31 / 81.17 / 83.51 / 86.01% with the memory +2.36 over the tuned tracker. GOSPA moved with
+it: the memory 0.435 against its candidates' 0.481, the tuned tracker 0.458. First-detection latency is new in this
+table, because `report_focus` used to exclude any arm not labelled `E13:` -- the memory finds a person on their **first**
+frame 92.78% of the time against the candidates' 90.48% and the tuned tracker's 80.56%.
+
+At one matched false-positive rate the tuned tracker is marginally ahead (95.39 against the memory's 95.17%); the memory's lead is ranking, not recall at a threshold. On the old recipe (A56, 2026-10-03, vote-grid candidates) the rows read 77.66 / 77.40 / 76.49 / 80.96 / 83.86%, the memory +2.90 over the tuned tracker. All on FROG's official test labels, which include 2,254 duplicate circles that only a second detection can match; on the old recipe, without them every row rose 0.7-1.05 pp and the memory's margin over the tuned tracker was +2.71, still above zero at every seed ([`interpreting-evaluation.md`](interpreting-evaluation.md), 2026-10-05).
 
 **TAKHeLiPeD** (`T`emporal `A`daptive `K`nee-`He`ight `Li`dar `Pe`rson `D`etector, named 2026-09-23) is what earlier entries in this file, `CHANGELOG.md` and `TODO.md` call *the three-horizon detector*. **The code followed on 2026-10-11** (item 9 / A52): the package, the C++ namespace, the ROS package and every script say `takheliped`. Only `checkpoints_three_horizon/` keeps the old name, deliberately -- each checkpoint stores the absolute path of its own stage 2.
 
@@ -297,18 +304,60 @@ Every detection is a false positive by construction, so the metric is a count.
 | --- | --- | --- | --- | --- |
 | LFE-Peaks | **1.39** | **55.7** | **51.0%** | **1.33** (−4%, −0.1pp AP) |
 | LFE-PPN | **3.17** | **127.2** | **64.0%** | stale (1.87 was measured at `nms_radius = 0.8`) |
-| **TAKHeLiPeD, stage 2 alone** | **2.62** (sd 0.20) | **105.1** | **67.2%** | — |
-| **TAKHeLiPeD, whole detector** | **0.74** (sd 0.14) | **29.7** | **34.1%** | — (the memory is the filter) |
+| **TAKHeLiPeD, stage 2 alone** (frozen) | **2.13** (sd 0.03) | **85.6** | **61.4%** | — |
+| **TAKHeLiPeD, whole detector** (frozen, **calibrated**) | **0.596** (sd 0.045) | **23.9** | **29.4%** | — (the memory is the filter) |
+| *the same, uncalibrated, item 47* | *0.675 (sd 0.073)* | *27.0* | *31.9%* | — |
+| *the same two, superseded architecture, 2026-10-09* | *2.62 (sd 0.20) / 0.74 (sd 0.14)* | *105.1 / 29.7* | *67.2% / 34.1%* | — |
 | SpaceTimeCNN | gap | gap | gap | gap |
-| FullScanTCN | gap | gap | gap | gap |
-| TemporalUNet | gap | gap | gap | gap |
+| FullScanTCN *(retired)* | gap | gap | gap | gap |
+| TemporalUNet *(retired)* | gap | gap | gap | gap |
 
 0.3 is LFE-PPN's own published operating point.
+
+**The whole-detector row is the calibrated one since item 58 (2026-10-31)**, and it is a fixed-threshold row, so item 48's
+`(temperature, bias)` moves it where it cannot move an AP.
+The stage-2 row is **bit-identical** either way -- the key is in stage 3 and stage 2's candidates come from an untouched
+network -- which is the control that makes the whole-detector change the memory's and nothing else's.
+**At threshold 0.9 the same calibration goes the other way**, and badly: 0.0015 FP/frame becomes **0.0122**, 106 detections
+across the three seeds becoming 883, because dividing by a temperature below 1 lifts the confident tail as surely as it
+lowers the bulk.
+Seed 1 emitted **zero** detections above 0.9 on all 72,533 person-free frames uncalibrated and emits **767** calibrated.
+Against stage 2's own 0.666 at that threshold the qualitative claim survives -- -98.2% rather than -99.8% -- but the number
+is 8x its old value, and nothing but measuring it would have said so: at 0.3 the prediction was right and at 0.9 it was
+wrong (`CHANGELOG.md`, item 58).
 The three `gap` rows are the pre-TAKHeLiPeD architectures and stay gaps: they belong to the superseded line of work (`TODO.md` A33-A36), and nothing in it is queued.
+
+**`FullScanTCN` and `TemporalUNet` are marked *retired*, not deleted, throughout this file.**
+`TODO.md` item 32 removed their code on 2026-10-31 -- nothing had trained on either since 2026-09 and neither influenced a
+project decision -- and it is marked rather than deleted because **a measurement stays true after its code goes**.
+What is lost is reproducibility, not validity: these rows can no longer be re-run from this tree, only from commit
+**`98b0716`**, the last one that carries the classes. `SpaceTimeCNN`'s rows stay reproducible, which is why that one was
+kept.
 
 **LFE-PPN's row was stale here until 2026-10-09**, at the pre-recalibration **1.94 / 50.9**; the 2026-09-11 recalibration of `nms_radius` from 0.8 m to 0.30 m took it to **3.174 /frame** and `CHANGELOG.md` recorded that, but this table kept the old figure while its *frames-with-a-phantom* cell was updated to the new 64.0%.
 The "with SORT" cell is stale for the same reason and is not reconstructed here: `tracker_sweep.py` was re-run (A37), and at `min_hits = 3` it leaves 34.7% of person-free frames with a phantom against the old 47.1%, but no corrected FP/frame was recorded.
 **A row that is half-updated is worse than one that is wholly stale**, because nothing about it looks wrong.
+
+### TAKHeLiPeD, the frozen architecture, measured 2026-10-30 (`TODO.md` item 47)
+
+Three seeds of the **frozen** architecture — the aggregator-free stage 2 on the soft Gaussian target paired with its own `dim 64` memory — over all 72,533 person-free frames, `utils/empty_scene.py`, `results/empty_scene_frz_s{0,1,2}.json` (archived as `weights_archive/frozen-frog-2026-10-30/results/empty_scene_s{0,1,2}.json`):
+
+| at threshold 0.3 | stage 2 alone | whole detector | change |
+| --- | --- | --- | --- |
+| FP/frame | 2.134 (2.106 / 2.156 / 2.139) | **0.675** (0.706 / 0.591 / 0.727) | **−68.4%** |
+| frames with ≥1 | 61.4% | **31.9%** | −29.5 pp |
+| recur within 0.3 m next frame | 85.8% | 93.6% | +7.8 pp |
+| FP/frame, the 41,797 frames where nobody has been in view for 10 s | 1.984 | **0.524** | **−73.5%** |
+| FP/frame at threshold 0.9 | 0.666 | **0.0015** | −99.8% |
+| frames with ≥1 at threshold 0.9 | 32.7% | **0.15%** | −32.5 pp |
+
+**Every qualitative finding of the 2026-10-09 measurement below survives the architecture change**, which is the point of repeating it: the memory is a phantom filter, the reduction is *larger* beyond the fade horizon so it is not stale-memory bookkeeping, what survives recurs next frame and is therefore furniture, and the high-confidence count is categorically better than any published detector's.
+
+**The absolute count improved and the relative cut did not, and the absolute one is what matters.** 0.675 against the superseded model's 0.740 is fewer phantoms, but the cut reads 68.4% against 72% because the frozen stage 2 hands the memory **fewer candidates to begin with** (2.134 against 2.622). A ratio against a different denominator is not a like-for-like comparison; a robot sees the numerator. The same applies to the 0.9 row, where the frozen detector's **0.0015 FP/frame** is about 7x better than the superseded 0.010 — 298, **0** and 20 detections in 72,533 frames each, and one seed emitting none at all.
+
+**Coasting contributes exactly zero, by construction rather than by measurement.** The frozen architecture has no coasting head (item 24), so `from_coasting` is 0 at every threshold in every seed. That makes item 27's reading exact instead of merely small: **every** person-free phantom is a candidate stage 2 emitted and the memory failed to suppress. The 2026-10-09 figures below measured the same thing on a model that *had* the head, and found 2, 0 and 0 reports at the 0.3 threshold — which is what justified removing it.
+
+**This column is far noisier across seeds than AP is**, and a single seed should not be quoted from it. The three phantom counts spread **0.136 FP/frame** around a 0.675 mean (sd 0.073, about 11% relative), while the same three seeds' AP spread 0.32 pp around 86.29% (0.2% relative) — fifty times tighter. Seed 1 is the best on phantoms (0.591) and middling on AP; seed 2 is the best on AP (86.43%) and the worst on phantoms (0.727), consistent with seeds placing their AP-optimal threshold differently rather than with any seed being better. Report the mean.
 
 ### TAKHeLiPeD, measured 2026-10-09 (A50 phase 1 item 7)
 
@@ -429,8 +478,8 @@ every budget 1.53x too generous.
 | AlgorithmicDetector *(rule-based, C++)* | -- | 0.05 | -- | -- | **0.05 ms** | 0.07 | **0%** |
 | LFE-Peaks | -- | 1.14 | -- | -- | **1.14 ms** | 1.82 | **7%** |
 | LFE-PPN | -- | 2.06 | -- | -- | **2.06 ms** | 3.65 | **15%** |
-| TemporalUNet | 0.13 | 5.27 | 0.07 | -- | **5.48 ms** | 7.21 | **29%** |
-| FullScanTCN | 0.13 | 3.71 | 1.66 | -- | **5.52 ms** | 7.91 | **32%** |
+| TemporalUNet *(retired)* | 0.13 | 5.27 | 0.07 | -- | **5.48 ms** | 7.21 | **29%** |
+| FullScanTCN *(retired)* | 0.13 | 3.71 | 1.66 | -- | **5.52 ms** | 7.91 | **32%** |
 | SpaceTimeCNN | 0.13 | 14.36 | 1.75 | -- | **16.29 ms** | 25.93 | **104%** |
 | **TAKHeLiPeD**, whole detector | -- | 8.44 | 1.51 | 9.14 | **19.15 ms** | 22.07 | **88%** |
 | DrowDetector (DROW3) | 2.25 | 317.33 | 1.34 | -- | **320.93 ms** | 339.86 | **1359%** |
@@ -509,11 +558,11 @@ The paper's own figures in parentheses are **GPU** numbers and are not comparabl
 | LFEPPNDetector | **1.46 ms**⁴ | **1.56 ms**⁴ *(paper, GPU: 1.49 ms)* | re-measure⁵ |
 | PeTra | — | 28.17 ms *(paper, GPU)* | — |
 | **SpaceTimeCNN** | **8.7 ms** | **12.1 ms** | **12.5 ms** |
-| **FullScanTCN** | **2.1 ms** | **2.6 ms** | **3.1 ms** |
-| **TemporalUNet** | **2.0 ms** | **2.7 ms** | **2.3 ms** |
+| **FullScanTCN** *(retired)* | **2.1 ms** | **2.6 ms** | **3.1 ms** |
+| **TemporalUNet** *(retired)* | **2.0 ms** | **2.7 ms** | **2.3 ms** |
 | **TAKHeLiPeD, stages 1-2 + decode** | n/a | **~10.4 ms**⁶ | n/a |
 | **TAKHeLiPeD, stage 3 alone** (object memory) | n/a | **4.4-4.6 ms**⁷ | n/a |
-| **TAKHeLiPeD, whole detector streaming** (A60 recipe and memory) | n/a | **20.8 ms** *(4 threads, p99 24.1)*⁹ *(old recipe 19.5 ms, GPU 12.9 ms⁸)* | n/a |
+| **TAKHeLiPeD, whole detector streaming** (the frozen architecture) | n/a | **19.3 ms** *(4 threads, p99 21.7, cold host)*¹² *(the same on a warm host 19.4, p99 21.8; superseded architecture 20.8 ms, p99 24.1⁹; old recipe 19.5 ms, GPU 12.9 ms⁸)* | n/a |
 
 ¹⁰ **The windowed form**, which encodes five scans per frame; the published streaming detector encodes one and attends to its
 carried template, so this row overstates it. Re-timed under one protocol in `TODO.md` §A item 29.
@@ -530,6 +579,8 @@ Both LFE rows are otherwise real-data measurements (300 scans each) taken after 
 It is quoted only against the sensor: FROG's measured mean frame period is 24.99 ms (~40 Hz, corrected 2026-09-17 from a long-standing 26.2 Hz), so stages 1-2 plus the memory's 4.4 ms still stream in real time, with roughly a third of the budget spare. A proper single-frame latency benchmark of the whole detector, on one machine with the other rows, is `TODO.md` A50 phase 1.
 
 ⁷ Measured 2026-09-17 and confirmed across B0's three seeds (2026-09-19) by `memory_ms_per_frame`, timing one stream on the RX 9060 XT under ROCm: **4.42 ms** on the fixed end-of-run block, 4.5-4.6 ms across the seeds. Same caveat as footnote 6 -- not comparable with the CPU rows above.
+
+¹² **The freeze, three seeds, 2026-10-30** (`a71_freeze_s0`, `a71_freeze_s1`, `a71_freeze_s2`; FROG `official` test, every 5th annotated frame; `TODO.md` item 47, full entry in `CHANGELOG.md`): the whole detector **86.29%** (86.11 / 86.33 / 86.43), sample sd **0.17 pp**, over candidates of **82.80%** — the memory worth **+3.49 pp**. AP@0.3 **85.19%**. At the AP-optimal threshold P 73.2% / R 84.8% / 0.953 false positives per frame; at each seed's own threshold recall is **95.2%** (95.0 / 95.3 / 95.2), which is the deployment-relevant operating point and the figure to quote when a threshold is being chosen rather than swept. **This is the architecture the project now proposes** and it is *not* footnote 11's: aggregator-free stage 2 trained against the **soft Gaussian beam target** (σ = 0.3 m), stage 3 at 256 slots, **`dim 64`**, 4 heads, **minGRU** recurrence, no slot exchange, no learned matching, no coasting head, no chunk curriculum. Against footnote 11's 86.01% that is **+0.28 pp**, inside the 1.32 pp bar — **this row replaces it because it measures the proposed model, not because it is better**, and the honest summary of the freeze is "confirmed". CPU **19.32 ms median / 21.67 p99** at 4 threads, batch 1, under item 29's matched interleaved protocol on a host idle for 63 minutes (item 57); the warm sweep that first produced this row read **19.39 / 21.78**, so the figure is **measured twice in two independent sessions and reproduces to 0.4%**. The `dim 128` control, interleaved in both, costs 22.34 ms median and 24.65 ms p99 — the memory phase falls 10.08 → 7.23 ms (−28.3%) and the total −13.5%, matching item 49's −28% and −11.6% on the same two shapes. Cold, the `stage2` phase spreads only **0.084 ms** across arms, so the floor is four times tighter than the warm sweep's 0.36 ms. **Still not comparable with footnote 9's 20.79 ms**, and the discrepancy with the older `stage2` levels (9.35 ms on 2026-10-27, 8.44 ms on 2026-10-11, the latter on the *aggregator-ful* network, which does more work) is **narrowed but unexplained**: it is not thermal, since the cold host reproduces the level, and not the stage-2 checkpoint, since `a69_no_aggregator_s0` and `a71_soft_label_s0` are both 960,323 parameters and both aggregator-free and therefore identical at inference. Something in the environment changed; every conclusion drawn rests on within-session comparisons, which that cannot touch.
 
 ¹¹ **The frozen architecture, three seeds, 2026-10-19** (`a64_no_coast_s0`, `a65_frozen_s1`, `a65_frozen_s2`; FROG `official` test, every 5th annotated frame): **86.01%** (86.08 / 86.08 / 85.88), 0.958 false positives per frame, recall 84.03%, over candidates of 82.19% -- the memory worth **+3.82 pp**. This is the model `memory/detector-architectures.md` freezes: the C1 stage-2 recipe over a fixed-beam U-Net, E13's memory, and **no coasting head** (item 24). The 85.9% of footnote 9 is the same model *with* that head -- 0.14 pp apart, inside the 1.32 pp three-sigma bar. The seed spread fell from 0.86 to 0.21 pp, which is suggestive and **not** a claim three seeds can support.
 

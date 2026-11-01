@@ -6,9 +6,8 @@ DROW and DR-SPAAM use published pre-trained weights and are excluded.
 Calls train_model() from train.py for each detector and collects the final
 val-loss and AUC results in a summary table.
 
-spacetime_cnn, fullscan_tcn and temporal_unet are all non-recursive
-(CNN/TCN/U-Net only, no RNN/attention) and DirectML-compatible — no
-force_cpu juggling needed.
+spacetime_cnn is non-recursive (CNN only, no RNN/attention) and
+DirectML-compatible — no force_cpu juggling needed.
 
 Usage
 -----
@@ -165,8 +164,6 @@ def _run_in_subprocess(target, args):
 # every detector below has no published weights and is trained from scratch)
 _ALL_DETECTORS = [
     "spacetime_cnn",
-    "fullscan_tcn",
-    "temporal_unet",
     "li2former",
 ]
 
@@ -174,7 +171,7 @@ _ALL_DETECTORS = [
 # batch size ("DML allocator out of memory" -> "The GPU device instance has
 # been suspended") — this is a memory-pressure issue, not a hard operator
 # incompatibility: batch_size=1 trains fine on DirectML (with some ops
-# falling back to CPU per-op, same as temporal_unet's unsupported ops).
+# falling back to CPU per-op, as any unsupported op does).
 # CPU-only training was measured at ~1.5 fr/s (days per epoch at full scale)
 # vs. ~8.6 fr/s on DirectML at batch_size=1 — GPU-with-small-batch, not CPU,
 # is the right fallback here.
