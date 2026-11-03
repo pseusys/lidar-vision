@@ -727,10 +727,10 @@ an experiment.
 > against the backbone it was run on whatever is decided for the other five -- which is option (b) for that row by necessity
 > rather than by choice. The other five (D2, T1, T2, O1, O2) remain expressible on the adopted recipe.
 >
-> **Still open inside the item, unaffected by the decision:** D4 (`step3a --learn-value`, implemented 2026-09-20, never run) and
-> D5 (a learned association width, not implemented), which are the live form of A50 phase 1b item 4 -- whether the hand-coded
-> bookkeeping's constants are the right ones. D4 is one run; D5 needs code first, and A51's own reading is that it is "only worth
-> it if D4 moves".
+> **Both of the arms that were open inside the item are now closed, and neither needed the decision above.** D4 (`step3a --learn-value`) ran 2026-10-11 and
+> D5 (a learned association width) was rejected without a run on 2026-10-22. Between them they answered whether the hand-coded
+> bookkeeping's constants are the right ones: **they are.** Training `gain` and `fade_time_s` from the hand-set 0.1 and 10 s moves
+> them 15% and 11%, to 0.085 and 8.94 s, and buys **+0.86 AP inside a 1.32 pp bar** -- a null with a direction (`CHANGELOG.md`, 2026-10-11). The association gate was then shown flat across a 3x range, so a learned width had 0.8% of people to recover and no gradient in the measurement pointing at them (`memory/rejected-ideas.md`).
 >
 > **Closed, with reasons, so they are not reopened by accident:**
 >
@@ -900,8 +900,8 @@ constants, so the loss cannot shape which slots survive.
 
 | # | what could become trainable | how, without breaking the discrete parts | expected |
 | --- | --- | --- | --- |
-| D4 | the **value rule's constants**: `gain` and `fade_time_s` | **implemented 2026-09-20** as `step3a --learn-value`: `manage_slots` keeps its discrete decisions under `no_grad` and takes the constants as detached floats, while the value the network reads is recomputed with gradient, so the rule moves as the parameters train (+2 parameters) | one run; tests whether the two hand-set constants are the right ones |
-| D5 | the **association width** | the 0.6 m gate is a hard cut inside a discrete assignment, so it has no gradient; give the *value* update a distance weight `exp(-d^2 / 2 sigma^2)` with learned `sigma` while the assignment stays discrete | one run; only worth it if D4 moves |
+| ~~D4~~ | ~~the **value rule's constants**: `gain` and `fade_time_s` | **implemented 2026-09-20** as `step3a --learn-value`: `manage_slots` keeps its discrete decisions under `no_grad` and takes the constants as detached floats, while the value the network reads is recomputed with gradient, so the rule moves as the parameters train (+2 parameters) ~~ **ANSWERED 2026-10-11: they defend themselves** -- `gain` 0.100 -> 0.085, `fade_time_s` 10.0 -> 8.94 s, AP +0.86 against a 1.32 pp bar, 12.4 h over 51 epochs (`a51_d4_learn_value_s0`) |
+| ~~D5~~ | ~~the **association width** | the 0.6 m gate is a hard cut inside a discrete assignment, so it has no gradient; give the *value* update a distance weight `exp(-d^2 / 2 sigma^2)` with learned `sigma` while the assignment stays discrete ~~ **REJECTED WITHOUT A RUN 2026-10-22, owner's call**: the gate sweep is flat at 99.1 / 99.2 / 99.2% across 0.3 / 0.6 / 1.0 m, so there are 0.8% of people to recover and nothing pointing at them (`memory/rejected-ideas.md`) |
 | -- | the spawn and eviction decisions themselves | `argmin`/`argsort` over slots, so a relaxation (Gumbel, straight-through) or a soft assignment would be needed -- a research-scale change, and `docs/PROPOSAL.md` §12 already lists the MOTR-style alternative | not now |
 
 **Phase 3b read so far, 2026-09-21** (one seed each, B0 mean 83.34%, threshold ~1.5 pp):
