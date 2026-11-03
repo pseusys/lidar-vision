@@ -228,6 +228,38 @@ Three by-products worth keeping:
 Their metric also reports **peak F1 52.5% and EER 52.3%** at `d = 0.5` (48.9% and 48.5% at `d = 0.3`), which are the first
 such figures for any detector in this project and have no published counterpart: their paper quotes AP alone.
 
+## FROG `balanced`: the published pair, and the two retracted numbers that turn out to have been right
+
+**Measured 2026-11-03**, the first time anything has been run on this partition (`queue_balanced.py`'s
+`published_baselines`, 48 min on the CPU over all 110,846 test frames; `evaluate.py --frog-mode balanced
+--split test --lfe-peaks --lfe-ppn`). `balanced`'s test is 16-41 + 15-53, which holds out **both** recordings
+LFE's authors trained on, so unlike its val this split is an honest place to score them.
+
+| detector | `balanced` test | `official` test (ours) | published | difference |
+| --- | ---: | ---: | ---: | ---: |
+| LFE-Peaks | **59.8%** | 65.1% | 65.6% | **-5.3 pp** |
+| LFE-PPN | **63.5%** | 69.6% | 69.2% | **-6.1 pp** |
+| AlgorithmicDetector | F1 **1.4%** | F1 1.7% | -- | -0.3 pp |
+
+**Do not read that difference as worse generalisation**, and this is the cross-regime trap `AGENTS.md` rule 3
+exists for. `official`'s test is one recording, populated frames only, every 5th frame annotated.
+`balanced`'s is two recordings with **19.1% person-free frames**, and a person-free frame can only contribute
+false positives -- there is no true positive in it to find -- so it lowers precision at every threshold and
+therefore the AUC, before any question of generalisation arises. Several of those 5-6 points are bought by
+composition alone. The like-for-like comparison is the `official`-test subset of the same pass, which is
+extractable (verified: 40,022 frames, 100% of `official`'s test) but has no entry point yet -- `TODO.md` item
+69. **Expect this project's own number to drop on `balanced` for the same free reason**, so the one-seed
+decision rule should be read against the subset, not against the whole split.
+
+**And the two figures reproduce the ones retracted on 2026-10-10 exactly.** `docs/PAPER.md` carried LFE-Peaks
+**59.8%** and LFE-PPN **63.5%** on this split; both were deleted because no `CHANGELOG.md` entry, no
+`memory/` page and no `TODO.md` row recorded the measurement, and the owner's recollection was that nothing
+had ever been run on `balanced`. Measured now, cold, they come back **59.8%** and **63.5%**. Two independent
+AUCs agreeing to a tenth of a point is not coincidence, so a run did happen and nothing wrote it down.
+**That does not make the retraction wrong**: a number nobody can trace is unpublishable whatever it later
+turns out to equal, and the retraction is what made this check possible, because it recorded both values
+instead of only deleting them. Keep doing that.
+
 ## Why stage 2 beats LFE and DR-SPAAM: what it is *not*
 
 **What the lead is made of, measured on fixed weights** (FROG `official` test, 0.5 m match radius). Each row changes one thing and keeps everything above it, so the deltas add to the whole gap:

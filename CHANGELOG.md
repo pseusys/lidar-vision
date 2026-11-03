@@ -38,6 +38,47 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The first `balanced` numbers, and they reproduce the two figures retracted as unmeasured (2026-11-03)
+
+*keywords: balanced, LFE-Peaks 59.8, LFE-PPN 63.5, retraction reproduced, A32 closed, person-free composition, cross-regime, rule 3, item 69*
+
+**The first thing ever run on FROG `balanced`** is `queue_balanced.py`'s cheap job: LFE-Peaks and LFE-PPN over
+all 110,846 test frames, 48 min on the CPU. That split is 16-41 + 15-53, which holds out **both** recordings
+their authors trained on, so it is an honest place to score them -- unlike its val, which contains 11-36.
+
+| detector | `balanced` test | `official` test (ours) | published | difference |
+| --- | ---: | ---: | ---: | ---: |
+| LFE-Peaks | **59.8%** | 65.1% | 65.6% | **-5.3 pp** |
+| LFE-PPN | **63.5%** | 69.6% | 69.2% | **-6.1 pp** |
+| AlgorithmicDetector | F1 **1.4%** | F1 1.7% | -- | -0.3 pp |
+
+**That closes A32**, the premise check, whose last open row had been "LFE across the modes: `balanced` left"
+since the three modes were defined.
+
+**The difference is not a generalisation result and must not be quoted as one.** `official`'s test is one
+recording, populated frames only, every 5th frame annotated; `balanced`'s is two recordings including **19.1%
+person-free frames**, and a person-free frame can only contribute false positives, so it lowers precision at
+every threshold and with it the AUC before generalisation enters the question. Several of those 5-6 points are
+composition. The like-for-like comparison is the `official`-test subset of the same pass, which **is**
+extractable -- 40,022 frames, 100% of `official`'s test, verified frame for frame -- but has no entry point
+yet (item 69). **This project's own `balanced` number will drop for the same free reason**, so the one-seed
+decision rule should be read against that subset rather than against the whole split, and item 69 is now worth
+more than it looked this morning.
+
+**And then the part worth sitting with.** On 2026-10-10 `docs/PAPER.md` was found carrying LFE-Peaks **59.8%**
+and LFE-PPN **63.5%** on exactly this split, supporting a claim about what our own architectures had to beat.
+No `CHANGELOG.md` entry, no `memory/` page and no `TODO.md` row recorded the measurement, the owner's
+recollection was that nothing had ever been run on `balanced`, and both figures were deleted as unverified.
+Measured now, cold, on code that could not even address this partition until today: **59.8%** and **63.5%**.
+Two independent AUCs agreeing to a tenth of a point is not coincidence. **A run happened in 2026-10 and
+nothing wrote it down.**
+
+**The retraction was still correct, and this is the useful conclusion rather than a vindication.** A number
+nobody can trace is unpublishable whatever it later turns out to equal -- a reader cannot audit a value on the
+strength of its being right. What deserves copying is *how* it was retracted: the entry recorded both values
+instead of merely deleting them, which is the only reason this comparison could be made at all. Retract by
+writing the number down somewhere it can be checked later, never by erasing it.
+
 ## FROG `balanced` becomes trainable, is verified against the real recordings, and the one-seed chain is queued (2026-11-03)
 
 *keywords: balanced, FROG partition, --frog-mode, train_takheliped, load_frames, frog_mode in checkpoint, resume guard, check_balanced_partition, 133367, 121329, 110846, run-up, official test subset, queue_balanced, LFE on balanced, item 67 68 69*

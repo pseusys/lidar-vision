@@ -373,6 +373,15 @@ Written and measured: the theory, the dataset design, the baseline table, every 
 
 **Two `balanced` figures were removed from this draft on 2026-10-10, because the measurement behind them never happened.** It carried LFE-Peaks at 59.8% and LFE-PPN at 63.5% on `balanced` test, with the claim that "the target any temporal architecture of ours must beat is fixed". No `CHANGELOG.md` entry and no file under `memory/` holds those numbers, `TODO.md` still listed the measurement as pending, and the owner confirms **nothing has ever been run on `balanced`** — the partition exists in the loader and has never been exercised. The figures are gone rather than corrected, and this note stays in their place: a number that reaches a draft without a measurement behind it is the failure this document's traceability rule exists to prevent, and it got as far as being quoted in a claim about what our own architecture must beat.
 
+> **Re-measured 2026-11-03, and both values reproduce exactly: LFE-Peaks 59.8%, LFE-PPN 63.5%.** The first
+> run ever made on `balanced` returns the two numbers that were deleted for having no measurement behind
+> them, to a tenth of a point each, so a run did happen in 2026-10 and nothing recorded it. The deletion was
+> still right -- an untraceable number is unpublishable whatever it later turns out to equal -- and the figures
+> are now traceable (`../memory/performance-log.md`, `CHANGELOG.md` 2026-11-03). **They remain out of the
+> argument above**, which claims nothing about `balanced`; what has changed is that the cell is measured
+> rather than empty, and that these two numbers are not comparable with the `official` ones without the
+> composition caveat the performance log states.
+
 Not yet written, and not yet measured:
 
 - **Anything at all on `balanced`.** The partition is defined in the loader, no model of ours and no published baseline has been evaluated on it, and this draft therefore makes no claim about it. It is the first step of the cross-dataset work, because every model needs retraining there.

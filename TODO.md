@@ -214,7 +214,7 @@ credited, and the fastest row in the table.
 | --- | --- | --- | --- |
 | **1 — data** | ~~A30 three loading modes~~ | **done 2026-09-10** | — |
 | | ~~A31 the metric each mode needs~~ | **done 2026-09-10** | — |
-| **2 — premise** | **A32** LFE across the modes | **`official` and `transferred` done**; `balanced` left | ~2 min |
+| **2 -- premise** | ~~**A32** LFE across the modes~~ | **DONE 2026-11-03**: `balanced` was the last mode left, and LFE-Peaks scores **59.8%** there against 65.1% on `official`, LFE-PPN **63.5%** against 69.6% -- a drop substantially bought by `balanced`'s 19.1% person-free frames rather than by generalisation (`memory/performance-log.md`) | -- |
 | | **A32b** hold training data constant — the confound that would invalidate every mode comparison | — | design |
 | | **A32c** port LFE to PyTorch from its ONNX graph, for a retrainable control | A32b | code + weight-port check |
 | | **A32d** our LFE reproductions overshoot their published AP | **mostly resolved 2026-09-11**: Peaks -0.5pp, PPN +0.4pp after both merge radii were recalibrated | — |
@@ -261,7 +261,7 @@ So empty scenes do not *cause* the failure; the benchmark's ratio metric was *co
 The claim that survives is sharper than the one filed: *the separating evidence between a chair and a standing person exists only at a horizon of tens of seconds*, which is why a shuffled five-frame window costs just 0.5pp.
 Argument in `docs/PAPER.md`; numbers in `CHANGELOG.md` and `memory/performance-log.md`.
 
-### A32. Finish the premise check: LFE on `balanced`
+### A32. Finish the premise check: LFE on `balanced` -- **DONE 2026-11-03, and it reproduced the two retracted figures exactly**
 
 **Done, and it reframed the question.** LFE-Peaks and LFE-PPN on `official` test (**65.1%** / **69.6%** AP, **1.76** / **5.03** FP/frame, **0.63** / **0.38** FN/frame) and on `transferred`'s 72,533 person-free frames (**1.39** / **3.17** FP/frame at 0.3). *(LFE-PPN re-measured 2026-09-11 after its `nms_radius` recalibration — `CHANGELOG.md`.)*
 The false-positive rate barely moves between them: the benchmark was concealing a constant absolute error inside a ratio, not failing to provoke one.
