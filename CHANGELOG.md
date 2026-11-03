@@ -38,6 +38,50 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 55 fixed: step 3b now fine-tunes against the objective stage 2 actually minimised (2026-11-03)
+
+*keywords: item 55, step3b, joint_frame_loss, make_targets, nearest, label_radius, label_sigma_m, beam_heatmap, soft_labels, stage2_training, dropout, calibration_network, mutation test, feedback contribution*
+
+**The defect, and why nothing ever failed.** `joint_frame_loss` called `make_targets` on its bare defaults, so step 3b
+fine-tuned stage 2 against the **last-listed** assignment for a beam inside two people's radii and the **hard** per-beam
+label -- while the weights it loads were trained with `--label-assign nearest` and a **0.3 m Gaussian**. Dropout was a
+third, smaller divergence: `calibration_network` rebuilds a checkpoint's *shape*, and dropout is not a shape, so the net
+came back at 0.0 where stage 2 trained at 0.1. The loss was finite and the gradients flowed throughout; what the step
+exists to measure, the feedback contribution, would simply have carried a target change inside it.
+
+**The fix reads the convention out of the checkpoint, not out of a flag.** `--label-assign`, `--label-radius` and
+`--label-sigma-m` are **step-2** arguments -- `TODO.md`'s own prescription, `args.label_assign`, would have raised an
+`AttributeError` on step 3b's namespace -- and the only correct value is what those weights were trained under. New
+`stage2_training(args)` reads all four, `joint_frame_loss` takes the three target arguments as **required keyword-only**
+parameters, and `train_joint` passes the dropout to `calibration_network` as an override and prints the whole
+convention at startup.
+
+**Its fallbacks are history, not today's defaults.** A flag written before it existed arrives missing or as the string
+`"None"`, and the honest reconstruction is that era's behaviour: last-listed, 0.6 m, and **no soft target** -- because
+`--label-sigma-m` defaults to 0.3 for a *new* run, and reading that back would hand a Gaussian to weights trained on a
+hard label. That case has its own test.
+
+**No defaults on the loss, deliberately.** The divergence survived five weeks by being silent, so the three parameters
+are required and a caller that omits them gets a `TypeError`. Two existing tests did exactly that and were updated to
+state the adopted convention, which is the guard proving itself on its first use.
+
+**Tested, and the guards were mutation-tested** because their red phase was a module-level `ImportError` rather than
+each assertion failing for its own reason: dropping `nearest=` fails the assignment test, dropping the radius fails the
+radius test, and dropping `soft_labels=` fails both soft-target tests. The soft-target equality is asserted as a
+*difference* between the Gaussian and hard runs, since the stage-3 focal terms are non-zero even for an empty
+annotation and would otherwise have to be re-implemented in the test to be subtracted.
+
+**Nothing is invalidated and no run is owed.** Step 3b is off the frozen path: the headline 86.29% is step 3a, no
+published number came from joint fine-tuning, and the one step-3b result on record (2026-09-16's regression diagnosis)
+stands as a record of what happened under the old behaviour. What changes is that any *future* feedback-path number is
+now measured against the right objective -- which is what the item asked for.
+
+**Tested:** 1,227 pass (1,218 plus this item's 9), `ruff` clean on `library utils tests`. Two documentation defects
+fixed on the way: `--label-sigma-m`'s help still said "0, the default" eight days after 0.3 was adopted, and
+`memory/commands.md` now records where step 3b's targets come from. The transferable rule is in
+`memory/dos-and-donts.md`: a fine-tuning path inherits its pre-training objective, reads it from the checkpoint, and
+gets no defaults.
+
 ## FROG `official` closes: its last open decision had already been answered by a run (2026-11-03)
 
 *keywords: six design arms, D2 D3 T1 T2 O1 O2, step 1, selective vs minGRU, 0.52 pp tie, backbone label, D4 learn_value, D5 association width, A55, Adrenalin, 32.0.32015.7029, bugcheck 0x7E, owner's call*

@@ -961,6 +961,10 @@ class TestFramePeriods:
 
 class TestJointFrameLoss:
 
+    #: Stage 2's own objective has to be stated, because the loss has no defaults for it -- the reason is in
+    #: `tests/test_joint_targets.py`, which pins that each half of it reaches the targets.
+    ADOPTED = dict(vote_collect_radius=0.6, nearest=True, sigma_m=0.3)
+
     def _frame(self):
         parts = TestJointStep()._parts()
         net, memory, scans, poses, dt = parts
@@ -970,13 +974,13 @@ class TestJointFrameLoss:
 
     def test_an_unannotated_frame_contributes_nothing(self):
         net, joint, scans = self._frame()
-        loss = joint_frame_loss(joint, scans, net.angles.numpy(), [None], [None])
+        loss = joint_frame_loss(joint, scans, net.angles.numpy(), [None], [None], **self.ADOPTED)
         assert loss.item() == 0.0
 
     def test_an_annotated_frame_trains_stage_2_and_stage_3(self):
         net, joint, scans = self._frame()
         polar = np.array([[2.0, 0.0]])
-        loss = joint_frame_loss(joint, scans, net.angles.numpy(), [polar], [np.array([[0.0, 2.0]])])
+        loss = joint_frame_loss(joint, scans, net.angles.numpy(), [polar], [np.array([[0.0, 2.0]])], **self.ADOPTED)
         assert torch.isfinite(loss) and loss.item() > 0
         loss.backward()
         assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in net.parameters())

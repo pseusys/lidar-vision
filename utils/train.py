@@ -418,8 +418,8 @@ def beam_heatmap(scan: np.ndarray, angles: np.ndarray, gt_per_class: dict,
                  sigma_m: float = 0.3, vote_collect_radius: float = 0.6) -> np.ndarray:
     """A soft Gaussian per-beam target, `exp(-d^2 / 2 sigma^2)` in **metres**.
 
-    The classification half of an LFE-style heatmap objective, for use with the vote head and `nms-mean` **kept**. Item
-    44 was split because `memory/static-detector-diagnosis.md` already measured the *decoder*: our own network read
+    The classification half of an LFE-style heatmap objective, for use with the vote head and `nms-mean` **kept**. The question
+    was split because `memory/static-detector-diagnosis.md` already measured the *decoder*: our own network read
     through LFE-Peaks' own decoder scores 71.26% against `nms-mean`'s 79.88%, and 50.3% against 81.6% at 8-10 m, and
     2.84 pp of that gap is centre regression a voteless head cannot recover. What that page cannot bound is its own
     caveat -- "the network's +6.15 is a lower bound, since our probability map was trained for votes, not for peaks" --

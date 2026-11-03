@@ -7,8 +7,8 @@
 It is the strongest available attack on this project's own contribution: if one scene-level state matches 256
 addressable per-object slots, the slots are decoration. That is exactly why it is worth running.
 
-The arm is a fair like-for-like because the frozen memory only **rescores** candidates -- the coasting head went in item
-24 -- so neither arm places a detection and both differ only in whether the memory is addressable. `manage_slots` is the
+The arm is a fair like-for-like because the frozen memory only **rescores** candidates -- the coasting head was ablated
+away -- so neither arm places a detection and both differ only in whether the memory is addressable. `manage_slots` is the
 slot mechanism, so this arm does not run it at all: there is no association, no spawn, no eviction and no per-slot decay.
 
 **Attention pooling, not a masked mean** (the owner's call, 2026-10-22): run the strongest variant first to estimate the

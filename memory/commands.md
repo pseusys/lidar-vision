@@ -57,6 +57,8 @@ bar in a redirected log at all (`gotchas.md`).
 python train_takheliped.py step2 --checkpoint-every 0.25   # stages 1-2 on single frames, the adopted recipe by default (nms-mean, mirror, nearest labels, dropout 0.1); then average_checkpoints.py; --max-range-m sets the model range (default 10 m)
 python train_takheliped.py step3a --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth     # stage 3 on stage 2's candidates (builds their cache first)
 python train_takheliped.py step3b --stage2 ../checkpoints_three_horizon/step2_calibration.best.pth --memory ../checkpoints_three_horizon/step3a_object_memory.best.pth   # whole detector with feedback
+#   step3b takes no --label-* flags: it reads the beam target, its radius and the dropout out of the stage-2
+#   checkpoint and prints them, because fine-tuning has to minimise the objective those weights already minimised.
 python train_takheliped.py step4 --stage2 ... --memory ... --joint ../checkpoints_three_horizon/step3b_joint.best.pth   # SORT and slot-count ablations, no training
 python scan_anomalies.py --dataset frog    # raw-scan noise report: no-return encodings, invalid runs, spikes, jitter, timestamps (also drow)
 python slot_experiments.py horizon --memory <step3a ckpt> --stage2 <step2 ckpt>    # how long a memory the model uses: AP against how often it is emptied

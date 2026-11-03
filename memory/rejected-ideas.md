@@ -142,8 +142,8 @@ coverage.
 
 **What was measured** (2026-10-25, one seed, against `a66_mingru_s0`): AP **86.24% against 86.40%**, -0.16 pp inside
 the 1.32 pp bar. Raw recall rose to **86.38%** from 84.33% -- but only by moving the operating point, FP 1.065 against
-0.911. **At matched false positives recall is 95.45% against 95.84%**, i.e. slightly worse. The coverage question item
-35 posed is answered negatively.
+0.911. **At matched false positives recall is 95.45% against 95.84%**, i.e. slightly worse. The coverage question the
+audit posed is answered negatively.
 
 **Why rejected: it changes the operating point, not the coverage.** And it cost nothing to find out -- ~605 s per 10 s
 epoch against the control's ~700, because its Hungarian runs once per frame over a `[P, G]` of about 64x3.

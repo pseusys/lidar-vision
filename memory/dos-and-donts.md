@@ -51,6 +51,19 @@ Both are in [`commands.md`](commands.md), along with the linter for each languag
 
 After every change, scan imports, function parameters and comments for staleness, and grep for symbols you deleted.
 
+**DO make a fine-tuning path inherit the objective its weights were trained under, and leave it no default.**
+A second training stage that loads stage 2's weights and keeps training them must build its targets the way stage 2
+built them -- the same assignment for a beam inside two people, the same collect radius, the same hard-or-Gaussian
+label, the same dropout. `joint_frame_loss` called `make_targets` on its bare defaults for five weeks, so step 3b
+fine-tuned against the last-listed assignment and a hard label while the weights it loaded had been trained with the
+nearest assignment and a 0.3 m Gaussian. Nothing failed and nothing looked wrong: the loss was finite, the gradients
+flowed, and the "feedback contribution" the step exists to measure would simply have carried a target change inside
+it. **Read the convention out of the checkpoint, never from the second stage's own flags** -- they are the first
+stage's arguments, and the only correct value is what those weights saw. **Give the parameters no defaults**, so a
+caller cannot silently reinstate the divergence; the type error is the point. And when reconstructing a convention
+from a checkpoint written before a flag existed, fall back to *that era's behaviour* rather than to today's default:
+reading `--label-sigma-m`'s current 0.3 back would hand a Gaussian to weights trained on a hard label.
+
 **DO prove a repository-wide rewrite on one file before letting it touch the rest.**
 A regex pass over every tracked file is one command and can be wrong in a way no review of the regex catches.
 Two "tidy-ups" inside one such pass on 2026-11-03 each mangled the repository: collapsing runs of two or more

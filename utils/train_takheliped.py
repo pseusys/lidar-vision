@@ -719,10 +719,35 @@ def network_shape(args: Dict[str, str]) -> Dict[str, object]:
             else int(args["bottleneck_blocks"])}
 
 
+def stage2_training(args: Dict[str, str]) -> Dict[str, object]:
+    """What a stage-2 run's `args` say it was *trained against*, for anything that fine-tunes those weights further.
+
+    Separate from `network_shape` because none of this changes which parameters exist: the beam target's assignment
+    and radius and the soft Gaussian's width shape the **objective**, and `dropout` only acts in training mode. They
+    matter to one caller, `train_joint`, which continues training stage 2 and must do it against the objective stage 2
+    already minimised -- otherwise the feedback contribution it measures carries a target change inside it.
+
+    **The fallbacks are history, not today's defaults.** A flag written before it existed arrives missing or as the
+    text `"None"`, and the honest reconstruction is the behaviour of its own time: the last-listed assignment and a
+    0.6 m radius, which are `make_targets`' defaults, and **no soft target at all**. `--label-sigma-m` defaults to 0.3
+    for a *new* run, so reading that default back would hand a Gaussian to weights trained on a hard label.
+    """
+    unset = (None, "None", "")
+    return {"vote_collect_radius": LABEL_RADIUS_M if args.get("label_radius") in unset else float(args["label_radius"]),
+            "nearest": args.get("label_assign") == "nearest",
+            "sigma_m": 0.0 if args.get("label_sigma_m") in unset else float(args["label_sigma_m"]),
+            "dropout": 0.0 if args.get("dropout") in unset else float(args["dropout"])}
+
+
 def calibration_network(checkpoint: dict, angles: np.ndarray, **overrides) -> CalibrationNetwork:
     """The checkpoint's weights in a network shaped the way they were trained (`network_shape`); `overrides` (e.g.
     `prior_channels`) go straight to the constructor and win. Weights load through `load_calibration_weights`, which folds
     checkpoints of earlier architectures and refuses those whose temporal convolutions read past frames.
+
+    **`dropout` is deliberately not restored here**, even though stage 2 may have trained with it. It changes no
+    parameter and `eval()` disables it, so every caller that scores a checkpoint wants it off and would be made
+    stochastic by restoring it. The one caller that continues *training* these weights, `train_joint`, asks for it
+    explicitly through `overrides` from `stage2_training`.
     """
     net = CalibrationNetwork(torch.from_numpy(angles), **{**network_shape(checkpoint.get("args", {})), **overrides})
     load_calibration_weights(net, checkpoint["model"])
@@ -1572,16 +1597,33 @@ def recording_bounds(start: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def joint_frame_loss(joint: JointOutput, scans: np.ndarray, angles: np.ndarray, people_polar: Sequence[Optional[np.ndarray]],
-                     people_xy: Sequence[Optional[np.ndarray]], vote_frame: str = "beam") -> torch.Tensor:
+                     people_xy: Sequence[Optional[np.ndarray]], vote_frame: str = "beam", *,
+                     vote_collect_radius: float, nearest: bool, sigma_m: float) -> torch.Tensor:
     """One frame's loss for `B` streams: stage 2's DROW head loss on its per-beam logits and votes, plus stage 3's focal losses on the
-    rescored candidates and on coasting slots near people no candidate covers. A stream whose frame is not annotated (None) adds nothing."""
+    rescored candidates and on coasting slots near people no candidate covers. A stream whose frame is not annotated (None) adds nothing.
+
+    The three target arguments have **no defaults on purpose**. They decide which person a beam inside two radii belongs
+    to, how wide that radius is, and whether the per-beam label is hard or a metric Gaussian -- which is to say they
+    decide the objective, and the weights being fine-tuned already minimised one particular choice of it. They come from
+    `stage2_training(checkpoint["args"])`, never from a step-3b flag, because they are stage-2 arguments. A default here
+    would silently reinstate `make_targets`' bare behaviour, which is exactly the divergence this signature exists to
+    prevent.
+    """
     device = joint.logit.device
     loss = torch.zeros((), device=device)
     for i, (polar, xy) in enumerate(zip(people_polar, people_xy)):
         if polar is None:
             continue
-        labels, vote_targets = make_targets(scans[i], angles, {3: [tuple(p) for p in polar]}, frame=vote_frame)
-        stage2, _, _ = compute_loss(joint.logit[i].reshape(-1, 1), joint.votes[i], torch.from_numpy(labels).to(device), torch.from_numpy(vote_targets).to(device))
+        gt_per_class = {3: [tuple(p) for p in polar]}
+        labels, vote_targets = make_targets(scans[i], angles, gt_per_class, vote_collect_radius=vote_collect_radius,
+                                            nearest=nearest, frame=vote_frame)
+        # The same construction as `train_calibration`'s: same geometry, same radius, so only the positive beams'
+        # *values* differ between the hard label and the Gaussian, and the vote target is untouched either way.
+        soft = None if not sigma_m else torch.from_numpy(
+            beam_heatmap(scans[i], angles, gt_per_class, sigma_m=sigma_m, vote_collect_radius=vote_collect_radius)
+        ).to(device).reshape(-1)
+        stage2, _, _ = compute_loss(joint.logit[i].reshape(-1, 1), joint.votes[i], torch.from_numpy(labels).to(device),
+                                    torch.from_numpy(vote_targets).to(device), soft_labels=soft)
         target, covered = candidate_targets(joint.cand_xy[i].detach().cpu().numpy(), joint.cand_valid[i].cpu().numpy(), xy, MATCH_RADIUS_M)
         stage3 = focal_loss(joint.memory.candidate_logit[i], torch.from_numpy(target).to(device), joint.cand_valid[i])
         g = max(len(xy), 1)
@@ -1656,7 +1698,16 @@ def train_joint(args) -> None:
     device, _ = detect_device()
     splits = {name: first_recordings(load_frames(name), args.limit_recordings) for name in SPLITS}
     angles = frog_laser_angles(720)
-    net = calibration_network(torch.load(args.stage2, map_location="cpu"), angles, prior_channels=args.prior_channels).to(device)
+    stage2 = torch.load(args.stage2, map_location="cpu")
+    # What those weights were trained against. The targets below and the dropout here both come from the checkpoint,
+    # not from this step's flags, so fine-tuning minimises the objective stage 2 already minimised.
+    trained = stage2_training(stage2.get("args", {}))
+    targets = {k: v for k, v in trained.items() if k != "dropout"}
+    net = calibration_network(stage2, angles, prior_channels=args.prior_channels, dropout=trained["dropout"]).to(device)
+    beam_target = "hard label" if not targets["sigma_m"] else f"Gaussian {targets['sigma_m']} m"
+    assignment = "nearest" if targets["nearest"] else "last-listed"
+    print(f"stage 2's own objective, restored for fine-tuning: {beam_target}, {assignment} assignment, "
+          f"{targets['vote_collect_radius']} m collect radius, dropout {trained['dropout']}", flush=True)
     memory = object_memory(torch.load(args.memory, map_location=device, weights_only=False), net.head.in_channels, rescore=args.rescore).to(device)
     mode = "oracle" if args.oracle_prior else "slots"
     route = "on" if args.rescore else "off, so the prior is the memory's only route to the loss"
@@ -1711,7 +1762,7 @@ def train_joint(args) -> None:
                                       torch.tensor([dt], dtype=torch.float32, device=device), state, prior=prior)
             if i is not None:
                 loss = loss + joint_frame_loss(joint, anchor_ranges(train.scans[f][None], net.max_range_m), angles, [train.people_polar[i]],
-                                       [train.people_xy[i]], net.vote_frame)
+                                       [train.people_xy[i]], net.vote_frame, **targets)
                 annotated += 1
         if annotated:
             optimizer.zero_grad(set_to_none=True)
@@ -2079,7 +2130,8 @@ def build_parser() -> argparse.ArgumentParser:
                        "a positive and votes for them; DR-SPAAM uses 0.35 m, FROG's circles are 0.4 m")
     step2.add_argument("--label-sigma-m", type=float, default=0.3,
                        help="replace the hard per-beam label with a Gaussian of this width in METRES, keeping the vote "
-                            "head and nms-mean; 0, the default, keeps the hard label and every "
+                            "head and nms-mean; 0.3 is the default since it was adopted at three seeds, and 0 restores "
+                            "the hard label and every pre-2026-10-27 "
                             "stage-2 number on record. The decoder half of that pair is already measured on fixed "
                             "weights and the peak decoder loses 8.62 pp, 2.84 of which a voteless head cannot recover "
                             "-- what is untested is the OBJECTIVE, which is this flag. Support is identical to the "

@@ -50,8 +50,8 @@ rather than by omission.
 than noise; we did not try every variation, and the ones we rejected we rejected on one measurement each.* Not: *this is
 the best architecture.*
 
-**Where this bites hardest.** A long run of single-arm negatives, and items
-20 and S4 were closed **without any run at all**, on the grounds that the parameter's own sweep was flat. The three
+**Where this bites hardest.** A long run of single-arm negatives, and the learned association width
+and the gate sweep were closed **without any run at all**, on the grounds that the parameter's own sweep was flat. The three
 findings that do carry weight have more behind them: the memory's value over its candidates (three seeds), the removal
 of both attention mechanisms (E13, three seeds), and per-object addressability (a 3.44 pp gap against a 1.32 pp
 bar). Quote those as results and the rest as screening.
