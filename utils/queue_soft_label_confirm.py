@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 44(a): confirm the soft Gaussian beam target at three seeds, the last thing before the freeze.
+"""Confirm the soft Gaussian beam target at three seeds, the last thing before the freeze.
 
 **Why confirm rather than adopt.** The single-seed probe gave **+0.54 pp** at the adopted `nms-mean` decoder
 (82.24% -> 82.78%), up in 13 of 14 decoders, with false positives down 21% at the fixed 0.3 threshold. But those
@@ -29,10 +29,10 @@ Either way the 21% false-positive reduction at a fixed threshold is worth re-che
 the deployment-relevant column and `deploy/conf.env` runs a fixed threshold.
 
 **No stage-3 arm here.** Arm (a) keeps the vote head and `nms-mean`, so stage 2 alone is directly comparable -- which
-is the whole reason this half of item 44 is cheap to settle. A stage-3 arm follows only if the target is adopted, and
+is the whole reason this half is cheap to settle. A stage-3 arm follows only if the target is adopted, and
 then it is the freeze itself.
 
-    python queue_item44a_confirm.py --list
+    python queue_soft_label_confirm.py --list
 """
 
 from run_queue import CHECKPOINTS, REPO, Job, main
@@ -64,7 +64,7 @@ JOBS = [
     *(job for name, out, seed in HARD for job in stage2(name, out, seed)),
     *(job for name, out, seed in SOFT for job in stage2(name, out, seed, "--label-sigma-m", SIGMA_M)),
     # One pass over all six, so every checkpoint is scored by the same decoder in the same process. Scoring the trios
-    # in separate runs would reintroduce exactly the cross-session drift that invalidated item 16's CPU row.
+    # in separate runs would reintroduce exactly the cross-session drift that invalidated an earlier CPU row.
     Job(name="probe", outputs=(RESULTS / "stage2_probe_item44a_3seed.json",),
         needs=tuple(f"{name}_avg" for name, _, _ in HARD + SOFT),
         cli=("stage2_probe.py", "--out", str(RESULTS / "stage2_probe_item44a_3seed.json"), "--stage2",

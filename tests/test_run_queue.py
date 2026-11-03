@@ -1,6 +1,6 @@
-﻿"""The queue runner `utils/run_queue.py`, which replaces the hand-copied PowerShell launchers (`TODO.md` A57).
+﻿"""The queue runner `utils/run_queue.py`, which replaces the hand-copied PowerShell launchers.
 
-Every rule pinned here is one the duplicated scripts got wrong at least once, and the reasons are in `TODO.md` A57's table:
+Every rule pinned here is one the duplicated scripts got wrong at least once, and the reasons are recorded in the changelog:
 a step that trained ahead of a failed gate, a `Wait-Finished` that matched the wrong step's marker, a retry loop that re-ran a
 run whose training guard had already fired. The process spawn is a seam, so none of this needs a GPU, a checkpoint or torch.
 """

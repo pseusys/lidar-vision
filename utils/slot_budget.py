@@ -1,4 +1,4 @@
-"""How many slots does stage 3's object memory need, and what evicts what? (TODO.md A43)
+"""How many slots does stage 3's object memory need, and what evicts what?
 
 Two measurements for `docs/PROPOSAL.md` §6.
 

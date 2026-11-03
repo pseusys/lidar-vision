@@ -1,4 +1,4 @@
-"""Training harness of the three-horizon detector, step 1: stage 3 on saved candidates (`docs/PROPOSAL.md` §8, §10; `TODO.md` A43).
+"""Training harness of the three-horizon detector, step 1: stage 3 on saved candidates (`docs/PROPOSAL.md` §8, §10).
 
 Targets, the candidate cache, the stream sampler for truncated backpropagation, early stopping and the exchange rate.
 """
@@ -157,7 +157,7 @@ class TestNetworkCandidates:
         assert got == pytest.approx(want)
 
     def test_beams_at_the_range_limit_cast_no_vote(self):
-        """The default decoding rule (`TODO.md` A50, owner's call 2026-09-17): a beam with nothing within range has no surface for
+        """The default decoding rule (owner's call, 2026-09-17): a beam with nothing within range has no surface for
         a person to stand on, so it casts no vote. It raised test AP by +0.28 to +0.39 pp on all six seed-matched checkpoints."""
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
         prob, votes = np.full(48, 0.95, np.float32), np.zeros((48, 2), np.float32)
@@ -250,7 +250,7 @@ class TestEarlyStopping:
         assert stop.should_stop(epoch=3)
 
     def test_no_amount_of_elapsed_time_stops_a_run_that_is_still_improving(self):
-        """A51's first full-curriculum run was ended by a 6 h cap inside its first stage; budgets are epochs and patience now."""
+        """The first full-curriculum run was ended by a 6 h cap inside its first stage; budgets are epochs and patience now."""
         stop = EarlyStopping(patience_evals=10, min_epochs=0, max_epochs=100)
         for epoch, metric in enumerate([0.5, 0.6, 0.7], start=1):
             stop.update(metric)
@@ -300,7 +300,7 @@ class TestCalibrationNetworkFor:
 
 
 class TestAttributionArmShapes:
-    """The attribution arms F1 and W (`TODO.md` A59) change the network's input and widths. Whatever `step2` trained must be rebuilt
+    """The attribution arms F1 and W change the network's input and widths. Whatever `step2` trained must be rebuilt
     from the checkpoint's args (stored as strings) by every script that loads it -- the averaging, the probe, stage 3's caches."""
 
     ANGLES = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)
@@ -322,7 +322,7 @@ class TestAttributionArmShapes:
                                                        kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2)
 
     def test_the_gather_flag_describes_its_network(self):
-        """Item 15: the metric window is part of the shape, so a checkpoint trained with it rebuilds with it."""
+        """the metric window is part of the shape, so a checkpoint trained with it rebuilds with it."""
         shape = network_shape(self._stored(["--gather-width-m", "1.66", "--gather-samples", "11"]))
 
         assert (shape["gather_width_m"], shape["gather_samples"]) == (1.66, 11)
@@ -341,17 +341,17 @@ class TestAttributionArmShapes:
         assert (shape["kernel_size"], shape["expansion"], shape["blocks"], shape["bottleneck_blocks"]) == (7, 4, (2, 2, 2), 2)
 
     def test_the_aggregator_describes_its_network(self):
-        """Item 40: ablating it changes which weights exist, so it is part of the shape a checkpoint rebuilds from."""
+        """ablating it changes which weights exist, so it is part of the shape a checkpoint rebuilds from."""
         assert network_shape(self._stored(["--no-aggregator"]))["aggregator"] is False
-        assert network_shape(self._stored([]))["aggregator"] is False       # item 52: the CLI default is the adopted arch
+        assert network_shape(self._stored([]))["aggregator"] is False       # the CLI default is the adopted arch
         assert network_shape(self._stored(["--aggregator"]))["aggregator"] is True
         # **The line that matters most here.** A checkpoint written before the flag existed must still rebuild *with*
-        # the aggregator, from the CONSTRUCTOR default -- which is why item 52 moved the CLI default and left that one
+        # the aggregator, from the CONSTRUCTOR default -- which is why only the CLI default moved, leaving that one
         # alone. If this ever flips, every stage-2 checkpoint older than 2026-10-25 silently refuses its own weights.
         assert network_shape({"max_range_m": "10.0"})["aggregator"] is True
 
     def test_the_vote_frame_and_the_block_describe_their_network(self):
-        """Items 18 and 19: both change what the weights mean, so both are read back rather than defaulted."""
+        """both change what the weights mean, so both are read back rather than defaulted."""
         shape = network_shape(self._stored(["--vote-frame", "sensor", "--block", "residual"]))
 
         assert (shape["vote_frame"], shape["block"]) == ("sensor", "residual")
@@ -366,7 +366,7 @@ class TestAttributionArmShapes:
         """The decoders read `net.vote_frame`, so losing it would silently rotate every detection."""
         torch.manual_seed(0)
         net = CalibrationNetwork(torch.from_numpy(self.ANGLES), channels=(8, 16, 32), vote_frame="sensor", block="residual",
-                                 aggregator=False)      # item 52: what the stored args below now describe
+                                 aggregator=False)      # what the stored args below now describe
         stored = self._stored(["--vote-frame", "sensor", "--block", "residual", "--channels", "8", "16", "32"])
 
         rebuilt = calibration_network(dict(model=net.state_dict(), args=stored), self.ANGLES)
@@ -376,7 +376,7 @@ class TestAttributionArmShapes:
     def test_a_checkpoint_rebuilds_into_the_network_it_was_trained_as(self):
         torch.manual_seed(0)
         net = CalibrationNetwork(torch.from_numpy(self.ANGLES), channels=(8, 16, 32), input_features="lfe",
-                                 aggregator=False).eval()      # item 52: what the stored args below now describe
+                                 aggregator=False).eval()      # what the stored args below now describe
         stored = self._stored(["--input-features", "lfe", "--channels", "8", "16", "32"])
         rebuilt = calibration_network(dict(model=net.state_dict(), args=stored), self.ANGLES).eval()
         scans = torch.rand(2, 48) * 8
@@ -386,7 +386,7 @@ class TestAttributionArmShapes:
 
 
 class TestExponentialSchedule:
-    """DR-SPAAM's learning rate, for the attribution arm R (`TODO.md` A59): geometric decay from the initial rate to a floor over
+    """DR-SPAAM's learning rate, for the attribution arm R: geometric decay from the initial rate to a floor over
     the run, stepped every iteration, then held."""
 
     @staticmethod
@@ -424,7 +424,7 @@ class TestExponentialSchedule:
 
 
 class TestSelectTestWeights:
-    """`step2 --select last` is DR-SPAAM's protocol (`TODO.md` A59 R): the test scores the weights training ended on, not the
+    """`step2 --select last` is DR-SPAAM's protocol: the test scores the weights training ended on, not the
     best on val, and both are kept so the probe can score each."""
 
     @staticmethod
@@ -458,7 +458,7 @@ class TestSelectTestWeights:
 class TestCandidateCachePath:
     """Stage-3 candidate caches are keyed by the stage-2 checkpoint they come from. Every run writes the same file names
     (`step2_calibration.best.pth`, `.averaged.pth`), so the run's directory must be in the key: two runs whose checkpoints were
-    written in the same second would otherwise share one cache (`TODO.md` A60)."""
+    written in the same second would otherwise share one cache."""
 
     def test_two_runs_with_identically_named_checkpoints_get_different_caches(self, tmp_path):
         a, b = tmp_path / "run_a" / "step2_calibration.averaged.pth", tmp_path / "run_b" / "step2_calibration.averaged.pth"
@@ -472,7 +472,7 @@ class TestCandidateCachePath:
         assert candidate_cache_path("val", 0, None).name.startswith("lfe-peaks_official_val_")
 
     def test_another_frog_mode_gets_its_own_cache(self):
-        """`transferred`'s test split is the person-free complement of `official`'s, and shares its name (`TODO.md` A50)."""
+        """`transferred`'s test split is the person-free complement of `official`'s, and shares its name."""
         assert candidate_cache_path("test", 0, None) != candidate_cache_path("test", 0, None, mode="transferred")
 
     def test_lfe_candidates_need_no_checkpoint(self):
@@ -480,7 +480,7 @@ class TestCandidateCachePath:
 
 
 class TestStage2Recipe:
-    """Stage 2's recipe, decided by the owner 2026-10-06 (`TODO.md` A59): nearest-person labels, mirror augmentation and dropout 0.1 by default,
+    """Stage 2's recipe, decided by the owner 2026-10-06: nearest-person labels, mirror augmentation and dropout 0.1 by default,
     each still switchable off for an ablation, and candidates decoded by `nms-mean` -- a detection scored by its best beam and placed
     at the probability-weighted mean of the votes it suppresses."""
 
@@ -518,7 +518,7 @@ class TestStage2Recipe:
 
 
 class TestMirror:
-    """`step2 --mirror` (`TODO.md` A59 arm M): a scan reversed beam for beam, with its people's bearings mirrored to match, is a
+    """`step2 --mirror`: a scan reversed beam for beam, with its people's bearings mirrored to match, is a
     valid new training sample only if the targets built from it are exactly the mirror of the original targets."""
 
     ANGLES = np.linspace(-np.pi / 2, np.pi / 2, 720, endpoint=False)      # FROG's grid: not symmetric about 0, by one beam
@@ -543,7 +543,7 @@ class TestMirror:
         assert torch.equal(mirrored[0], ranges[0]) and torch.equal(mirrored[1], ranges[1].flip(-1))
 
 class TestObjectMemoryFor:
-    """A stage-3 checkpoint carries the rescoring arms it was trained with (`TODO.md` A51 T1, O1), so anything rebuilding it from
+    """A stage-3 checkpoint carries the rescoring arms it was trained with, so anything rebuilding it from
     disk must read them rather than assume the defaults -- a T1 checkpoint has no `rescore_gate` parameter at all."""
 
     def test_the_arms_and_slot_count_come_from_the_checkpoint_args(self):
@@ -634,7 +634,7 @@ class TestExchangeRate:
 
 class TestEvaluationSegments:
     """Validation windows. A window whose scored span holds no annotated frame costs its warm-up and returns nothing: 6 of 64
-    did on the val cache of 2026-10-09, which is why placement reads the annotations (`TODO.md` A50 phase 1 item 3)."""
+    did on the val cache of 2026-10-09, which is why placement reads the annotations."""
 
     def _split(self, lengths, annotated=None):
         lengths = np.asarray(lengths)
@@ -717,7 +717,7 @@ class TestDecodeVotes:
 class TestNearestLabelAssignment:
     """`make_targets(nearest=True)` gives each beam the label and vote of the nearest person within the radius, as the official
     DR-SPAAM code's `_closest_detection` does; the default lets the last-listed person within the radius win, which on FROG train
-    sends 3.3% of positive beams to someone other than their nearest (`TODO.md` A59)."""
+    sends 3.3% of positive beams to someone other than their nearest."""
 
     ANGLES = np.linspace(-np.pi / 2, np.pi / 2, 720, endpoint=False)
     PEOPLE_XY = ((0.25, 3.0), (-0.25, 3.0))          # shoulder to shoulder, 0.5 m apart
@@ -811,7 +811,7 @@ class TestJointStep:
 
 
 class TestOraclePrior:
-    """A51 E12b: the prior a perfect memory would draw, to put a ceiling on what any feedback could buy."""
+    """The prior a perfect memory would draw, to put a ceiling on what any feedback could buy."""
 
     def _angles(self):
         return torch.from_numpy(np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32))
@@ -824,7 +824,7 @@ class TestOraclePrior:
         assert torch.equal(prior[0, 0], prior[0, 1])       # a perfect memory is certain of both value and person
 
     def test_an_unannotated_frame_draws_nothing_rather_than_something_stale(self):
-        # the decision recorded in TODO A51: absent beats stale, so the oracle is never wrong, only silent
+        # the recorded decision: absent beats stale, so the oracle is never wrong, only silent
         prior = oracle_prior([np.zeros((0, 2), np.float32)], self._angles(), 6, torch.device("cpu"))
         assert prior.shape == (1, 2, 6) and prior.abs().sum() == 0
 
@@ -842,7 +842,7 @@ class TestOraclePrior:
 
 
 class TestJointStepPriorOverride:
-    """A51 E12b: an explicit prior replaces the one the slots would have drawn, which is how the oracle is fed in."""
+    """An explicit prior replaces the one the slots would have drawn, which is how the oracle is fed in."""
 
     def test_the_given_prior_is_the_one_that_reaches_stage_2(self):
         net, memory, scans, poses, dt = TestJointStep()._parts()
@@ -871,7 +871,7 @@ class TestJointStepPriorOverride:
 
 
 class TestPriorModes:
-    """A51 E12: which prior stage 2 is fed back is a three-way choice, and a typo must not silently pick the default."""
+    """Which prior stage 2 is fed back is a three-way choice, and a typo must not silently pick the default."""
 
     def test_an_unknown_mode_is_refused_before_any_work(self):
         with pytest.raises(ValueError, match="unknown prior_mode"):
@@ -882,7 +882,7 @@ class TestPriorModes:
 
 
 class TestCalibrationNetworkWithoutPrior:
-    """A51 E12a's control arm: the same run with no feedback channels at all."""
+    """The control arm: the same run with no feedback channels at all."""
 
     def test_a_network_built_without_prior_channels_runs_and_ignores_one(self):
         checkpoint = dict(model=_small_calibration().state_dict(), args={})
@@ -905,7 +905,7 @@ class TestRecordingBounds:
 
 
 class TestFramePeriods:
-    """Stage 3's time step never trusts one stamped interval (`TODO.md` A51 0b): FROG stamps 40 Hz scans in bunches of 38 ms, 38 ms and
+    """Stage 3's time step never trusts one stamped interval: FROG stamps 40 Hz scans in bunches of 38 ms, 38 ms and
     under 0.1 ms, and DROW rounds its 12.7 Hz stamps to 0.05 s. A running average of the intervals is one number per stream."""
 
     @staticmethod
@@ -1021,7 +1021,7 @@ class TestScoreDetections:
 
 
 class TestCoastingHits:
-    """A coasting report is only worth something on a person no kept candidate already covers (`TODO.md` A51 0c)."""
+    """A coasting report is only worth something on a person no kept candidate already covers."""
 
     def test_a_report_on_an_uncovered_person_is_a_hit_and_on_a_covered_one_is_not(self):
         gt = np.array([[0.0, 1.0], [3.0, 3.0]], np.float32)
@@ -1054,7 +1054,7 @@ class TestPlateauSchedule:
 
 
 class TestPeriodicReset:
-    """E1, the memory-horizon curve (`TODO.md` A51 phase 5): emptying the memory every `interval_s` at evaluation and scoring the
+    """E1, the memory-horizon curve: emptying the memory every `interval_s` at evaluation and scoring the
     result says how long a memory the model actually uses. The project measured the convolution's horizon and never the slots'."""
 
     def test_no_interval_never_resets(self):
@@ -1209,7 +1209,7 @@ class TestResume:
 
 class TestGradientVerdict:
     """What to do with one bad iteration. A gradient norm that overflows float32 is survivable -- `clip_grad_norm_` zeroes the
-    update and training continues -- and treating it as fatal cost a healthy 5 h run at its best epoch (`TODO.md` A51 E6,
+    update and training continues -- and treating it as fatal cost a healthy 5 h run at its best epoch (the exchange arm,
     2026-09-27). A non-finite loss is not survivable, and neither is an endless stream of overflowing steps."""
 
     def test_a_healthy_iteration_takes_its_step(self):
@@ -1229,7 +1229,7 @@ class TestGradientVerdict:
 
 class TestNonFiniteSummary:
     """When a stage-3 run goes NaN, the epoch-level guard fires up to 151 iterations later and its traceback points at the guard
-    itself. This names what was already non-finite at the iteration that broke (`TODO.md` A51, O1's two failures)."""
+    itself. This names what was already non-finite at the iteration that broke -- the rescoring arm failed twice that way."""
 
     def test_it_names_only_the_non_finite_entries_with_their_kind(self):
         named = {"good": torch.ones(3), "nan": torch.tensor([1.0, float("nan")]), "inf": torch.tensor([float("inf")])}
@@ -1266,7 +1266,7 @@ class TestTrainingFault:
 
 
 class TestMemorySchedule:
-    """Stage 3's learning rate (`TODO.md` A51 T2). Its cosine schedule spans `--max-epochs` per chunk length, so in the 9-37 epochs
+    """Stage 3's learning rate. Its cosine schedule spans `--max-epochs` per chunk length, so in the 9-37 epochs
     a stage actually runs it barely decays; the plateau schedule steps once per evaluation on val AP instead, as step 2 does."""
 
     def _optimizer(self):
@@ -1347,7 +1347,7 @@ class TestEvaluate:
             assert 0.0 <= result[part]["ap_0.3m"] <= 1.0
 
     def test_the_scored_frames_can_be_handed_back_with_their_global_index(self):
-        """`TODO.md` A56 scores the memory's detections again -- GOSPA, a block bootstrap, per-person strata -- so `evaluate` can
+        """The tracking-literature baselines score the memory's detections again -- GOSPA, a block bootstrap, per-person strata -- so `evaluate` can
         return the frames it scored, each with the packed frame it came from."""
         split, model = self._split(), self._model()
         frames = {}
@@ -1360,7 +1360,7 @@ class TestEvaluate:
             assert np.array_equal(gt, split.data.gt_xy[f][split.data.gt_valid[f]])
 
     def test_scoring_can_be_skipped_when_only_the_frames_are_wanted(self):
-        """Scoring every annotated test frame costs ~20 min per checkpoint in `score_detections`; A56 rescores the frames itself."""
+        """Scoring every annotated test frame costs ~20 min per checkpoint in `score_detections`; the baseline comparison rescores the frames itself."""
         split, model = self._split(), self._model()
         scored, unscored = {}, {}
         evaluate(model, split, torch.device("cpu"), 1, 2, evaluation_segments(split, 0, 0, 0), frames_out=scored)
@@ -1375,7 +1375,7 @@ class TestMemoryMsPerFrame:
 
     @pytest.mark.parametrize("device", ["cpu", torch.device("cpu")])
     def test_it_times_single_stream_steps_for_either_form_of_device(self, device):
-        # `detect_device` returns a string, not a `torch.device`, and timing it crashed the first A51 smoke run
+        # `detect_device` returns a string, not a `torch.device`, and timing it crashed the first slot-study smoke run
         ms = memory_ms_per_frame(TestEvaluate()._model(), TestEvaluate()._split(), device, frames=10)
         assert 0.0 < ms < 10_000.0
 
@@ -1396,7 +1396,7 @@ class TestReplaySort:
 
 
 class TestUnionDecode:
-    """Item 34: both candidate decoders at once, deduplicated, for stage 3 to weigh.
+    """both candidate decoders at once, deduplicated, for stage 3 to weigh.
 
     Measured 2026-10-15 before any of this was written: `nms-mean` and the vote grid each cover about **900 people of
     30,283 that the other misses**, so their union reaches 91.8-92.5% where the better alone reaches 88.9-89.7%. The
@@ -1501,7 +1501,7 @@ class TestUnionDecode:
 
 
 class TestTheCoastingHeadIsGone:
-    """The owner's call, 2026-10-16: item 24 measured the coasting head costing nothing, so the architecture drops it.
+    """The owner's call, 2026-10-16: the ablation measured the coasting head costing nothing, so the architecture drops it.
 
     Ablated it scored **AP 86.08%** against the matched seed's 86.35% and the three-seed control range 85.49-86.35, with
     every other metric inside the control's own spread. It is 137 parameters of 173,579, so the reason to remove it is
@@ -1509,7 +1509,7 @@ class TestTheCoastingHeadIsGone:
     a write-up should not describe a mechanism that never acts.
 
     **The flag survives the default.** Every published number to date was produced *with* the head, so reproducing those
-    runs has to stay possible -- the same reason the owner kept `SpaceTimeCNNDetector` in item 32 rather than deleting
+    runs has to stay possible -- the same reason the owner kept `SpaceTimeCNNDetector` rather than deleting
     the architecture its decisions were made on.
     """
 
@@ -1544,7 +1544,7 @@ class TestTheCoastingHeadIsGone:
 
 
 class TestTheMatchedPersonSPosition:
-    """Item 46's L1 target: where the person a candidate matched actually is.
+    """The L1 target: where the person a candidate matched actually is.
 
     `candidate_targets` already runs the gated Hungarian match but returns only booleans, and eleven call sites unpack
     its two values -- so rather than churn nine of them, both it and `matched_person_xy` now call one shared
@@ -1632,7 +1632,7 @@ class TestEveryStage3FlagReachesTheModel:
         assert not missing, f"parsed but never passed to ObjectMemory: {', '.join(missing)}"
 
     #: `SlotRules` fields that deliberately do not come from a same-named flag -- `capacity` comes from `--slots`, and
-    #: the rest are constants A51's S1 swept and found unbinding.
+    #: the rest are constants the slot sweep found unbinding.
     NOT_RULE_FLAGS = {"capacity", "floor", "margin", "fade_time_s", "gain", "gate_m", "velocity_smoothing"}
 
     def test_every_slot_rule_with_a_matching_flag_is_passed_too(self):
@@ -1655,7 +1655,7 @@ class TestEveryStage3FlagReachesTheModel:
 
 
 class TestTheSensorFrameTargets:
-    """Item 18's training side: `make_targets` in the frame the head regresses.
+    """The training side: `make_targets` in the frame the head regresses.
 
     The geometry itself -- that the two parameterisations name one point, and that the rotation is its own inverse --
     is pinned in `test_takheliped.py`. What belongs here is what the arm trains on, because `make_targets` is
@@ -1708,17 +1708,17 @@ class TestTheSensorFrameTargets:
 
 
 class TestStage3SShapeFlags:
-    """`TODO.md` item 49: `--dim` and `--heads`, the last shape knobs in the project never varied.
+    """`--dim` and `--heads`, the last shape knobs in the project never varied.
 
-    Item 45 swept stage 2's four and deferred these two in as many words -- "`dim`/`heads` are stage-3 and wait on the
+    The shape sweep swept stage 2's four and deferred these two in as many words -- "`dim`/`heads` are stage-3 and wait on the
     cheap half". The cheap half is done, so the adopted 128/4 is a choice nobody has priced, and `dim` is the one knob
-    that could cut CPU cost: it sets the width of every slot's state, the component item 36 proved load-bearing.
+    that could cut CPU cost: it sets the width of every slot's state, the component the global-state ablation proved load-bearing.
     """
 
     def test_the_flags_exist_and_default_to_the_adopted_shape(self):
         flags = {a.dest: a for a in build_parser()._subparsers._group_actions[0].choices["step3a"]._actions}
 
-        assert flags["dim"].default == 64      # item 49, adopted 2026-10-27
+        assert flags["dim"].default == 64      # adopted 2026-10-27
         assert flags["heads"].default == 4
 
     def test_a_checkpoint_round_trips_its_own_width(self):
@@ -1743,9 +1743,9 @@ class TestStage3SShapeFlags:
 
 
 class TestTheSoftBeamTargetReachesStage2STraining:
-    """`TODO.md` item 44(a): the Gaussian beam target is wired into `step2`, or the flag is decoration.
+    """The Gaussian beam target is wired into `step2`, or the flag is decoration.
 
-    This is the bug class that cost item 36 a whole run -- `--global-state` was parsed, stored and restored but never
+    This is the bug class that cost the global-state arm a whole run -- `--global-state` was parsed, stored and restored but never
     passed, so the arm trained the control and reported it as the arm. `--label-sigma-m` is the same shape of risk one
     stage earlier, and the loss is the only place it can act.
     """
@@ -1769,7 +1769,7 @@ class TestTheSoftBeamTargetReachesStage2STraining:
 
 
 class TestTheCliDefaultsAreTheAdoptedArchitecture:
-    """`TODO.md` item 52: running `step2`/`step3a` with no flags must train the architecture the project proposes.
+    """Running `step2`/`step3a` with no flags must train the architecture the project proposes.
 
     **CLI defaults only -- the `ObjectMemory`/`CalibrationNetwork` constructor defaults deliberately do NOT move.**
     `network_shape` and `object_memory` fall back to a *constructor* default for any flag a checkpoint predates, so
@@ -1784,18 +1784,18 @@ class TestTheCliDefaultsAreTheAdoptedArchitecture:
     def test_stage3_defaults_to_the_adopted_recipe(self):
         f = self._flags("step3a")
 
-        assert f["recurrence"].default == "mingru"      # item 38
-        assert f["exchange"].default is False           # A51 E6
-        assert f["learned_match"].default is False      # A51 E7
-        assert f["coast"].default is False              # item 24
-        assert f["dim"].default == 64                   # item 49
-        assert f["chunk_s"].default == [10.0]           # item 41, no curriculum
+        assert f["recurrence"].default == "mingru"      # the recurrences tied, so the published one won
+        assert f["exchange"].default is False           # the slot-exchange arm lost
+        assert f["learned_match"].default is False      # the learned-association arm lost
+        assert f["coast"].default is False              # the coasting head earned nothing
+        assert f["dim"].default == 64                   # never varied, flat where swept
+        assert f["chunk_s"].default == [10.0]           # the curriculum earned nothing
 
     def test_stage2_defaults_to_the_adopted_recipe(self):
         f = self._flags("step2")
 
-        assert f["aggregator"].default is False         # item 40
-        assert f["label_sigma_m"].default == 0.3        # item 44(a)
+        assert f["aggregator"].default is False         # the whole-scan aggregator earned nothing
+        assert f["label_sigma_m"].default == 0.3        # the soft Gaussian beam target
 
     def test_the_constructor_defaults_have_not_moved(self):
         """The guard on the above: old checkpoints load against these, not against the CLI."""
@@ -1812,7 +1812,7 @@ class TestTheCliDefaultsAreTheAdoptedArchitecture:
 
 
 class TestTheCarriedStateGradientClip:
-    """`TODO.md` item 53: one frame's gradient at the carried slot state, bounded so a long chunk cannot compound.
+    """One frame's gradient at the carried slot state, bounded so a long chunk cannot compound.
 
     **What these do not prove.** Reaching an actual float32 overflow needs ~300 frames of the real recurrence on real
     candidates, which is minutes, not a unit test; that case is covered by the scratchpad replay of the batch

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The tracking literature's baselines and metrics against TAKHeLiPeD's object memory (`TODO.md` A56).
+"""The tracking literature's baselines and metrics against TAKHeLiPeD's object memory.
 
 What each experiment decides, and what was predicted before it ran, is `memory/experiments/2026-09-tracking-claims.md`. Every run
 replays the same cached stage-2 candidates the memory was trained and scored on (the no-temporal stage 2, `step2_static`), tunes
@@ -10,8 +10,8 @@ on FROG `official` val and scores the test split once.
     arms      the memory checkpoints and the published LFE detectors, their frames saved for the report
     report    AP with block-bootstrap intervals, GOSPA (E16), the gain by stratum (E20) and first-detection latency (E21)
     latency   E22: the proposed detector streamed one scan at a time, stage by stage, on the GPU and the CPU
-    merge     A58: the LFE detectors' merge radius on every saved output, chosen on val, with the double reports dissected
-    summary   A61: the reports of several replays (`<out>/s*/report.json`, one per stage-2 seed) lined up by arm
+    merge     the LFE detectors' merge radius on every saved output, chosen on val, with the double reports dissected
+    summary   the reports of several replays (`<out>/s*/report.json`, one per stage-2 seed) lined up by arm
 
 Usage (from utils/)
 -----
@@ -21,7 +21,7 @@ Usage (from utils/)
     python tracking_baselines.py report
     python tracking_baselines.py latency --device cpu --threads 4
     python tracking_baselines.py merge --workers 6
-    python tracking_baselines.py arms --stage2 <stage 2> --out <dir> --arms E13:a60_e13_static_s0      # another memory than A56's
+    python tracking_baselines.py arms --stage2 <stage 2> --out <dir> --arms E13:a60_e13_static_s0      # a memory other than the default
     python tracking_baselines.py summary --out ../checkpoints_three_horizon/a61
 
 The module itself imports no torch: the replays, GOSPA and the precision-recall arithmetic are numpy, so `track` can fan its
@@ -110,7 +110,7 @@ def seed_stats(values: Sequence[float]) -> Dict[str, object]:
 
 
 def summarise(reports: Sequence[Dict]) -> Dict[str, object]:
-    """Several `report` outputs -- one replay per stage-2 seed (`TODO.md` A61) -- lined up by arm: AP, recall at the candidates'
+    """Several `report` outputs -- one replay per stage-2 seed -- lined up by arm: AP, recall at the candidates'
     false-positive rate, GOSPA, first-frame detection and strata recall as seed lists with mean and sd, and each bootstrap pair's
     differences with how many of its intervals sit above zero."""
     ap, recall, gospa, first = defaultdict(list), defaultdict(list), defaultdict(list), defaultdict(list)
@@ -389,12 +389,12 @@ def first_detection_delays(tracks: Sequence[Sequence[Tuple[int, bool]]]) -> List
     return delays
 
 
-# ---------------------------------------------------------------- A58: merging an output that has no merge step
+# ---------------------------------------------------------------- merging an output that has no merge step
 
 def merge_detections(scores: np.ndarray, xy: np.ndarray, radius: Optional[float]) -> np.ndarray:
     """Which detections `lfe_detector._merge_nearby` keeps, as a mask in input order: in descending score order, ties in input
     order, a detection is dropped when it lies within `radius` of one already kept. `None` keeps everything; a radius of 0 still
-    merges detections at the same point, as `_merge_nearby` does. Vectorised, since A58 runs it ~10^6 times."""
+    merges detections at the same point, as `_merge_nearby` does. Vectorised, since the radius sweep runs it ~10^6 times."""
     scores = np.asarray(scores)
     keep = np.ones(len(scores), bool)
     if radius is None or len(scores) < 2:
@@ -520,13 +520,13 @@ def _worker_ap(config: Dict) -> Tuple[str, float, float]:
     return config_key(config), PrecisionRecall(frames).ap(), time.time() - t0
 
 
-# ---------------------------------------------------------------- A58 workers (no torch)
+# ---------------------------------------------------------------- merge workers (no torch)
 
 MERGE_RADII = (None, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6)
 
 
 def merge_outputs(arms: Dict[str, List[str]]) -> Dict[str, str]:
-    """Every output A58 merges, by name, with the stem of its saved A56 frames."""
+    """Every output the merge sweep touches, by name, with the stem of its saved frames."""
     outputs = {"candidates": "candidates", "E14": "track_bytetrack_cbmot"}
     outputs.update({f"{arm}:{run}": f"arm_{arm}_{run}" for arm, runs in arms.items() for run in runs})
     return outputs
@@ -714,13 +714,13 @@ def report_focus(table, best_classical) -> List[str]:
     """The methods the per-person tables compare: the candidates, the strongest classical pipeline, and every arm.
 
     An arm is any key carrying its `label:run` separator, whatever the label. While this read `startswith("E13:")` it
-    dropped item 56's `FRZ` arm from the strata and the first-detection latency altogether.
+    dropped the frozen arm from the strata and the first-detection latency altogether.
     """
     return [m for m in ("candidates", best_classical) if m] + [m for m in table if ":" in m]
 
 
 def run_report(args) -> None:
-    """The A56 tables: AP with intervals, GOSPA, strata, latency."""
+    """The baseline tables: AP with intervals, GOSPA, strata, latency."""
     from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
     from motion_analysis import build_tracks, to_world
     from train_takheliped import candidate_targets, load_split
@@ -923,7 +923,7 @@ def run_latency(args) -> None:
 
 
 def run_merge(args) -> None:
-    """A58: `lfe_detector._merge_nearby`'s merge on every output's saved frames, the radius chosen per output on val and test
+    """`lfe_detector._merge_nearby`'s merge on every output's saved frames, the radius chosen per output on val and test
     scored once; block bootstraps against the unmerged output and between outputs, on the official labels and without the copies."""
     from train_takheliped import load_split
 
@@ -960,7 +960,7 @@ def run_merge(args) -> None:
 
 
 def run_summary(args) -> None:
-    """A61: every `<out>/s*/report.json` lined up by arm (`summarise`)."""
+    """Every `<out>/s*/report.json` lined up by arm (`summarise`)."""
     paths = sorted(args.out.glob("s*/report.json"))
     if not paths:
         raise FileNotFoundError(f"no {args.out}/s*/report.json to summarise")
@@ -984,7 +984,7 @@ def main() -> None:
         p.add_argument("--out", type=Path, default=OUT_DIR)
         if name in ("arms", "report", "merge"):
             p.add_argument("--arms", nargs="+", default=None, metavar="ARM:RUN",
-                           help="memory runs to replay or read, e.g. E13:a60_e13_static_s0 (TODO.md A61); unset is A56's own")
+                           help="memory runs to replay or read, e.g. E13:a60_e13_static_s0; unset is the default set")
         if name in ("rule", "arms"):
             p.add_argument("--streams", type=int, default=64)
         if name == "track":

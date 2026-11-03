@@ -1,6 +1,6 @@
-"""Item 46 (A51's O3): slots regress a correction to the candidate's position.
+"""Slots regress a correction to the candidate's position.
 
-**Why this arm has the best prior left on the list.** Item 35 measured the memory at its own operating point as *net
+**Why this arm has the best prior left on the list.** The coverage audit measured the memory at its own operating point as *net
 negative on coverage* -- it recovers 203 person-observations and loses 2,990 -- so its entire +3.9 pp of AP is bought
 with ranking rather than recall. Every other arm in the sweep changes how the memory *scores* what stage 2 proposed; a
 position correction is the only mechanism on the list that could change *where* a detection is, and therefore the only
@@ -14,7 +14,7 @@ Two invariants carry the design:
     the field is always there   `MemoryOutput.candidate_xy` exists whether or not the head does, equal to the input
                                 positions when it does not. The evaluation path then reads one field unconditionally
                                 rather than branching on a flag -- which is how `--global-state` came to be silently
-                                ignored for a whole run (item 36).
+                                ignored for a whole run.
 """
 import sys
 from pathlib import Path
@@ -65,7 +65,7 @@ class TestTheFieldIsAlwaysThere:
         assert torch.allclose(out.candidate_xy, xy, atol=0)
 
     def test_the_global_state_arm_reports_it_too(self):
-        """Item 36's path builds its own `MemoryOutput`, so it has to carry the field as well."""
+        """The path builds its own `MemoryOutput`, so it has to carry the field as well."""
         model = _memory(False, global_state=True)
         out, xy = _play(model)
 
@@ -137,7 +137,7 @@ class TestOnceTrainedItMoves:
         assert torch.allclose(out.candidate_xy - xy, torch.full_like(xy, 0.25), atol=1e-5)
 
     def test_it_is_refused_together_with_a_silent_rescoring_head(self):
-        """A51 E12a's arm drops `rescore`, which leaves `recalled` with nowhere to go but this head -- a different
-        experiment, and not one item 46 is asking for."""
+        """The no-rescore arm drops `rescore`, which leaves `recalled` with nowhere to go but this head -- a different
+        experiment, and not one this head is asking for."""
         with pytest.raises(ValueError, match="refine"):
             ObjectMemory(SlotRules(capacity=16), dim=DIM, heads=HEADS, refine=True, rescore=False)

@@ -309,7 +309,7 @@ def _build_model(args):
         return Li2FormerDetector(dropout=dr, num_scans=tf)
     if det == "li2former_official":
         # No hyperparameters: it is built from the authors' published configuration verbatim, and
-        # --dropout/--time-frame would silently make it a different model (TODO.md item 31).
+        # --dropout/--time-frame would silently make it a different model.
         return OfficialLi2FormerDetector()
     hd  = getattr(args, "head", "drow")
     if det == "spacetime_cnn":
@@ -328,8 +328,7 @@ def _freeze_backbone(net) -> None:
     tiny (17.6k-frame) training set overwrite the more general local-shape
     features FROG's much larger dataset taught it. Freezing everything but
     the head keeps those features fixed and only re-fits the final
-    classification/regression mapping on top of them. See
-    docs/IDEAS_BACKLOG.md item 5.
+    classification/regression mapping on top of them.
     """
     n_frozen = n_trainable = 0
     for name, p in net.named_parameters():
@@ -363,9 +362,9 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
     gt_per_class  : {class_id: [(r, phi), ...]}  1=wc, 2=wa, 3=wp
     vote_collect_radius : radius (m) around GT that marks a beam as positive
     nearest       : give each beam the nearest annotation within the radius, as the official DR-SPAAM code does; the default
-                    lets the last-listed one within it win, which in a crowd sends a beam's vote to a neighbour (TODO.md A59)
+                    lets the last-listed one within it win, which in a crowd sends a beam's vote to a neighbour
     frame         : "beam", DROW's own convention, gives each beam its offset in its own rotated frame; "sensor" gives every
-                    beam the same Cartesian frame, so one person is one target rather than one per bearing (TODO.md item 18).
+                    beam the same Cartesian frame, so one person is one target rather than one per bearing.
                     The two name the same point, and swap_vote_frame converts either way
 
     Returns
@@ -417,7 +416,7 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
 
 def beam_heatmap(scan: np.ndarray, angles: np.ndarray, gt_per_class: dict,
                  sigma_m: float = 0.3, vote_collect_radius: float = 0.6) -> np.ndarray:
-    """A soft Gaussian per-beam target, `exp(-d^2 / 2 sigma^2)` in **metres** (`TODO.md` item 44(a)).
+    """A soft Gaussian per-beam target, `exp(-d^2 / 2 sigma^2)` in **metres**.
 
     The classification half of an LFE-style heatmap objective, for use with the vote head and `nms-mean` **kept**. Item
     44 was split because `memory/static-detector-diagnosis.md` already measured the *decoder*: our own network read
@@ -527,7 +526,7 @@ def build_cutout(input_mode: str, scans_hist, odoms_hist, n_beams: int, angles,
     (1.66 m wide, 1.0 m deep, odometry-rotation corrected, linear interpolation) and **Li2Former's
     own** `scans2cutout` (1.0 m / 0.5 m, area-sampled when the window holds more beams than
     samples, no odometry at all). Feeding either network the other's window measures neither model,
-    which is why the port carries their preprocessing too -- `TODO.md` item 31.
+    which is why the port carries their preprocessing too.
 
     Their package is imported here rather than at module scope because `library/setup.py` downloads
     it into the gitignored `include/` tree instead of vendoring it (it is GPL-3.0, this is MIT).
@@ -553,7 +552,7 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
     positive; loss is binary cross-entropy with class-balanced pos_weight.
 
     `soft_labels` (N,) in [0, 1] replaces the hard 0/1 classification target with a soft one -- `beam_heatmap`'s
-    Gaussian, for `TODO.md` item 44(a). Three things deliberately do **not** change with it, so the arm varies one
+    Gaussian. Three things deliberately do **not** change with it, so the arm varies one
     thing: the **vote** term still masks on `labels > 0`, so localisation is untouched; `pos_weight` is still counted
     from the hard labels, because it is a count of positive beams and taking it from a soft target would move the class
     balance as well as the target; and with `soft_labels=None` this function is bit-identical to what produced every
@@ -563,7 +562,7 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
     n_neg = int((labels == 0).sum())
     if soft_labels is not None and logits.shape[-1] != 1:
         raise ValueError("soft_labels is a binary target, so it needs C=1 logits, not "
-                         f"{logits.shape[-1]} classes (TODO.md item 44)")
+                         f"{logits.shape[-1]} classes")
 
     if logits.shape[-1] == 1:
         # Binary classification: background (0) vs. any person (1), or a soft target over the same beams
@@ -611,7 +610,7 @@ def _apply_history_mode(scans_hist, odoms_hist, mode: str, seed: int = None):
                  what this costs is damage, not information removal. Measured on
                  the real test recording: 67.1% -> 42.0%, and 42.0% is 23pp
                  *below* LFE-Peaks' genuinely single-frame 64.9%, which is how
-                 you can tell (TODO.md A21). Kept for the train-time ablation,
+                 you can tell. Kept for the train-time ablation,
                  where zeros are in-distribution because training saw them.
     ``frozen``   every historical slot replaced by the current scan, odometry
                  included: a static world, static robot. In-distribution.
@@ -657,8 +656,7 @@ def _local_normalize(r: np.ndarray, window: int = 21) -> np.ndarray:
     whole scan) while staying a single cheap elementwise/local-window pass
     before the one full-scan conv forward pass -- not DR-SPAAM's expensive
     independent per-beam network calls. Edge beams use a replicate-padded
-    window so the local mean stays well-defined at the FoV boundary. See
-    docs/IDEAS_BACKLOG.md item 5.
+    window so the local mean stays well-defined at the FoV boundary.
     """
     ref_frame = r[-1, :, 0]                          # (N,) current frame
     n = ref_frame.shape[0]
@@ -681,7 +679,7 @@ def _global_normalize(r: np.ndarray) -> np.ndarray:
     far away is this room on average" as a memorizable per-scene shortcut,
     without touching per-beam relative shape or frame-to-frame differences
     (the same constant is subtracted everywhere, so those are unaffected).
-    Diagnostic per docs/IDEAS_BACKLOG.md item 5: weaker than per-beam
+    A diagnostic, weaker than per-beam
     centering by design (position is still untouched) -- run alongside it to
     see how much of any gain is explained by scale/room-depth alone.
     """
@@ -698,8 +696,7 @@ def _diff_encode(r: np.ndarray) -> np.ndarray:
     network gets one absolute reference plus T-1 motion channels instead of
     T repeated near-absolute snapshots. A static background nets to ~0 in
     every diff channel; a moving person doesn't. Shape-preserving (still
-    (T, N, 1)), so no architecture change is needed to use it. See
-    docs/IDEAS_BACKLOG.md item 5.
+    (T, N, 1)), so no architecture change is needed to use it.
     """
     if r.shape[0] < 2:
         return r
@@ -793,8 +790,7 @@ def _jitter_range(x: torch.Tensor, scale_eps: float, offset_delta: float) -> tor
     this beam) that's still approximately valid under jitter this small
     (scale_eps, offset_delta both meant to be small relative to
     vote_collect_radius), the same way image-classification brightness/
-    contrast jitter perturbs pixels without relabeling the image. See
-    docs/IDEAS_BACKLOG.md item 5.
+    contrast jitter perturbs pixels without relabeling the image.
     """
     if scale_eps <= 0 and offset_delta <= 0:
         return x
@@ -827,7 +823,7 @@ class LidarFrameDataset(Dataset):
     so the same underlying frame lands at a different absolute beam index
     each epoch -- intended to break the "this absolute beam index = this
     room's doorway" shortcut a small, fixed-room-count training set makes
-    possible (see docs/IDEAS_BACKLOG.md item 5). Cheap: applied to the small
+    possible. Cheap: applied to the small
     (N, ...) output tensors, after the cache lookup, so it doesn't defeat
     caching the way augmenting the raw inputs before make_targets()/
     aligned_raw_scan() would (those would need recomputing every epoch).
@@ -1143,7 +1139,7 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
     `dtime` must match the value the weights were trained at -- a mismatch is
     silent and costs real accuracy (76.3% vs 78.8% wp-AUC when a dtime=10 model
     was scored at dtime=1). Callers get it from the checkpoint; see
-    save_checkpoint() and TODO.md A15.
+    save_checkpoint().
 
     `max_frames` (0 = all) evenly strides the annotated frames down to at most
     that many, for the per-epoch early-stopping gate where a full pass over a
@@ -1153,12 +1149,12 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
     `return_detections` additionally returns the flat per-frame detections the
     AUC was computed from -- score, frame index, and how many frames were
     evaluated. It exists so the false-positive rate on a person-free split
-    (TODO.md A31) counts exactly the detections this function would have
+ counts exactly the detections this function would have
     scored, rather than a second decoder written for that metric alone.
 
     `return_raw` additionally returns the per-beam confidences, votes and scans this function decoded, with
     the ground truth and frame pairs beside them, so a *different* decoder or metric can be run over exactly
-    the outputs this one scored. That is what makes `TODO.md` item 64's 2x2 readable: its baseline cell has to
+    the outputs this one scored. That is what makes the four-cell comparison readable: its baseline cell has to
     be this function's own answer, not a re-implementation that might differ by a rounding step. It is `None`
     for a heatmap head, which has no votes to hand over.
 
@@ -1167,7 +1163,7 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
     boundaries, and scores the annotated frames among them. It is the form the
     DR-SPAAM authors published, where a frame's answer depends on the whole
     sequence before it; the default re-encodes a `T`-scan window per annotated
-    frame, which is a different detector (TODO.md A47). Only detectors that
+    frame, which is a different detector. Only detectors that
     define `stream()` support it, and the two share this function's decoder and
     metric so that the difference between them is the detector and nothing else.
 
@@ -1338,7 +1334,7 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
     else:
         if return_raw:
             # Captured before the del below, which exists to keep peak memory down. Holding these costs
-            # ~30 MB on DROW test and is only paid when a caller asks (TODO.md item 64).
+            # ~30 MB on DROW test and is only paid when a caller asks.
             raw_bundle = {
                 "scans":  [np.asarray(s, dtype=np.float32) for s in all_scans_for_pr],
                 "votes":  [np.asarray(v, dtype=np.float32) for v in all_votes_raw],
@@ -1389,7 +1385,7 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
                 prev_theta, prev_wx, prev_wy = theta, wx, wy
             # Real per-frame heading/translation delta. This used to say
             # FROG's was "confirmed all-zero" — that was the faked-odometry
-            # bug talking (TODO.md A14), not the robot: FROG moves 1.88 cm and
+            # bug talking, not the robot: FROG moves 1.88 cm and
             # up to 0.4 deg per frame, which over a track's lifetime is a
             # third of a metre at 8 m range.
             ego_dtheta = theta - prev_theta
@@ -1469,10 +1465,10 @@ def save_checkpoint(path: Path, net, optimizer, epoch: int,
     so a model trained on 0.38 s windows was scored on 0.038 s ones -- 76.3%
     against 78.8% wp-AUC on the same weights and the same data. With it in the
     checkpoint, `evaluate.py --eval-dtime` can default to the value the weights
-    were actually trained at instead of to 1 (TODO.md A15).
+    were actually trained at instead of to 1.
 
     `frog_mode` is stored for the same reason `dtime` is, one level up: with
-    three FROG partitions to choose from (TODO.md A30), a checkpoint evaluated
+    three FROG partitions to choose from, a checkpoint evaluated
     under the wrong one is not a worse number, it is a different experiment --
     and `balanced`'s val even contains recordings `official` trains on. Stored
     here, `evaluate.py --frog-mode` can default to the partition the weights
@@ -1752,7 +1748,7 @@ def train_model(args) -> dict:
     # val_loss 0.1987 at epoch 3 -- a value the first did not reach until
     # epoch 19 -- which set an unbeatable bar and let patience kill it at
     # epoch 8 while train_loss was still falling. Cost: 78.8% vs 79.7% wp-AUC
-    # (TODO.md A17).
+    #.
     patience = getattr(args, "patience", 0)
     if patience > 0 and val_ds is None:
         print("  [WARN] patience>0 requires a val split; early stopping disabled.\n")
@@ -1899,7 +1895,7 @@ def train_model(args) -> dict:
     # written to disk held the best epoch's -- verified on the dtime=10 run,
     # which printed 76.7% from epoch-8 weights and saved epoch-3 weights
     # stamped "epoch 8". The reported number and the saved model were never the
-    # same network (TODO.md A16).
+    # same network.
     print()
     saved_epoch = final_epoch
     if best_path is not None and best_path.exists():
@@ -1909,7 +1905,7 @@ def train_model(args) -> dict:
         # Stamp the epoch these weights actually come from. The old code wrote
         # `epoch=final_epoch` regardless, so the dtime=10 run's checkpoint held
         # epoch-3 weights labelled "epoch 8" -- and every later reader believed
-        # the label (TODO.md A16).
+        # the label.
         saved_epoch = best_epoch
 
     # Final AUC on the *whole* val split, for the weights just restored.
@@ -2165,7 +2161,7 @@ def main():
                              "of observations survives. Shuffle is the sharp one: it "
                              "separates motion from multi-look aggregation. "
                              "Architecture, shape and parameter count are identical "
-                             "in every mode. See TODO.md A21.")
+                             "in every mode.")
     # Detection head (full-scan models only)
     parser.add_argument("--head", choices=["drow", "heatmap"], default="drow",
                         help="Detection head for full-scan models (default: 'drow'). "

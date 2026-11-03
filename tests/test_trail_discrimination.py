@@ -1,9 +1,9 @@
-"""The role-C bound, asked as a discrimination question (TODO.md A45).
+"""The role-C bound, asked as a discrimination question.
 
 The precision oracle measured trail lengths on **person-free** frames: what
 fraction of phantom detections sit on trails shorter than L. It never had to
 tell a phantom from a person, because the split contains none -- so it bounds
-*removal*, not *discrimination*, and A41 measured what that costs when a real
+*removal*, not *discrimination*, and the persistence map measured what that costs when a real
 mechanism must do both (recall 79.3% -> 23.2%).
 
 This is the honest version. Build trails over **every** detection on populated

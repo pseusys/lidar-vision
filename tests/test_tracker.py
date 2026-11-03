@@ -294,7 +294,7 @@ class TestSortTrackerIsFaithfulToSort:
 
 class TestCbmotScoreUpdates:
     """CBMOT's four score-update functions (Benbarka, Schroeder & Zell, IROS 2021, eq. 4-7), which turn a track's confidence and a
-    matched detection's score into the track's new confidence (`TODO.md` A56)."""
+    matched detection's score into the track's new confidence."""
 
     def test_the_published_functions(self):
         from takheliped.utils.tracking import cbmot_update
@@ -329,7 +329,7 @@ def _byte(**kwargs):
 
 
 class TestByteTracker:
-    """ByteTrack (Zhang et al., ECCV 2022) for point detections, with CBMOT's track confidence (`TODO.md` A56 E14). The
+    """ByteTrack (Zhang et al., ECCV 2022) for point detections, with CBMOT's track confidence. The
     association is the paper's: high-score detections against every confirmed track, then low-score ones against the tracks that
     were tracked last frame, then unconfirmed tracks against what is left of the high ones; only high-score detections start
     tracks; an unconfirmed track that misses its second frame is dropped."""

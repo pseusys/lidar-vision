@@ -1,4 +1,4 @@
-"""How much of stage 2's bottleneck does the memory's feedback prior actually carry? (`TODO.md` A51 E12)
+"""How much of stage 2's bottleneck does the memory's feedback prior actually carry?
 
 Three E12 arms returned a null while their trained prior weights looked large -- up to 44% of the rest of the layer by rms. That
 comparison is misleading, and this says why with a measurement rather than an argument. `aggregate` is a 1x1 convolution over

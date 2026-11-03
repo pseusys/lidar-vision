@@ -1,8 +1,8 @@
 ﻿"""Three-horizon streaming person detector (TAKHeLiPeD): per-beam input features, the single-frame calibration network, and the
 object memory.
 
-Design and reasoning in `docs/PROPOSAL.md` (Â§5.3 input, Â§5.4 calibration network); build status in `TODO.md` A43. Stage 2 read one
-frame and its predecessors through a coarse temporal convolution until 2026-10-08, when A60 measured it end to end and dropped it;
+Design and reasoning in `docs/PROPOSAL.md` (Â§5.3 input, Â§5.4 calibration network). Stage 2 read one
+frame and its predecessors through a coarse temporal convolution until 2026-10-08, when it was measured end to end and dropped;
 that code is at commit e76aa94.
 Conventions: beam angle 0 is forward, counterclockwise positive, increasing with beam index;
 poses are world odometry `(x, y, theta)` with x forward at theta = 0, y left, theta counterclockwise.
@@ -19,7 +19,7 @@ from torch import (
 )
 from torch import log as tlog
 from torch.nn.functional import interpolate, pad, softmax, softplus
-# Item 43's association only. The default path is pure torch, so this import costs nothing it does not use, and scipy
+# The Hungarian arm's association only. The default path is pure torch, so this import costs nothing it does not use, and scipy
 # is already a dependency of `takheliped.utils.drow_utils`.
 from scipy.optimize import linear_sum_assignment
 
@@ -30,12 +30,12 @@ N_BEAM_FEATURES = 2 + 2 * len(NEIGHBOUR_OFFSETS)
 LFE_NEAR_M = 0.2                     # LFE clips readings below this (`lfe_detector._SCAN_NEAR`)
 INPUT_CHANNELS = {"beam": N_BEAM_FEATURES, "lfe": 1}
 LEGACY_VALIDITY_CHANNEL = 2          # index of the validity input that checkpoints before 2026-09-17 carried
-LAST_TEMPORAL_COMMIT = "e76aa94"     # the last commit with stage 2's coarse temporal convolution (TODO.md A60)
+LAST_TEMPORAL_COMMIT = "e76aa94"     # the last commit with stage 2's coarse temporal convolution
 SLOT_STATISTICS = 8
 CANDIDATE_FEATURES = 5
 PROBABILITY_EPS = 1e-6
 SILENT_COAST_LOGIT = -10.0
-# Item 16's arms. `selective` is the adopted one: a diagonal state whose decay rate is a function of the input, applied in
+# The recurrence comparison's arms. `selective` is the adopted one: a diagonal state whose decay rate is a function of the input, applied in
 # **real seconds** because a robot's frames are not uniformly spaced. `gru` and `mingru` take a *step* and have no notion of
 # elapsed time, which is not an oversight in the arm -- it is what the comparison measures.
 RECURRENCES = ("selective", "gru", "mingru")
@@ -82,7 +82,7 @@ def beam_features(ranges: Tensor, angles: Tensor, max_range_m: float = MAX_RANGE
 def lfe_features(ranges: Tensor, max_range_m: float = MAX_RANGE_M) -> Tensor:
     """LFE's whole input (`lfe_detector._normalize_scan`), `[..., N] -> [..., 1, N]`: `1 - r / max_range_m`, readings clipped below
     at `LFE_NEAR_M`, so a near obstacle reads 1 and empty space 0. Missing returns go through `sanitize_ranges` and read as empty
-    space, whatever their encoding. Only the attribution arm F1 uses it (`TODO.md` A59)."""
+    space, whatever their encoding. Only the attribution arm F1 uses it."""
     return (1 - sanitize_ranges(ranges, max_range_m).clamp(min=LFE_NEAR_M) / max_range_m).unsqueeze(-2)
 
 
@@ -104,10 +104,10 @@ def world_to_sensor(xy: Tensor, pose: Tensor) -> Tensor:
 class SlotRules:
     """Fixed rules for creating, matching, replacing and retiring object slots (`docs/PROPOSAL.md` Â§5.5 and Â§6.3).
 
-    `latest_value` is the ablation of the design's value rule (`TODO.md` A51 D2): a matched slot takes the candidate's score
+    `latest_value` is the ablation of the design's value rule: a matched slot takes the candidate's score
     instead of accumulating towards certainty, so a person hidden for a moment no longer keeps their slot.
 
-    `association` chooses how slots are paired to candidates (`TODO.md` item 43). **mutual**, the adopted rule: a slot's
+    `association` chooses how slots are paired to candidates. **mutual**, the adopted rule: a slot's
     nearest candidate and that candidate's nearest slot must agree. **hungarian**: the globally optimal one-to-one
     assignment under the same gate, which is the standard primitive and differs from `mutual` only under contention.
     """
@@ -120,10 +120,10 @@ class SlotRules:
     velocity_smoothing: float = 0.1
     latest_value: bool = False
     association: str = "mutual"
-    #: `TODO.md` item 22, the owner's design. Above zero, a slot's position **snaps to the centre of a room cell of this
+    #: The owner's design. Above zero, a slot's position **snaps to the centre of a room cell of this
     #: many metres and never moves again**: it addresses a patch of the room rather than an object. Everything else is
     #: unchanged -- same capacity, same room frame, same recurrence, recall, head and eviction -- so the arm varies the
-    #: one thing in question, whether *spatial* binding substitutes for *object* binding. Item 36 established that
+    #: one thing in question, whether *spatial* binding substitutes for *object* binding. The global-state ablation established that
     #: addressability matters; it never tested which kind. Sparse by construction: only occupied cells take a slot, which
     #: is what makes a 150 m venue affordable where a dense person-scale grid would need ~46,000 cells.
     cell_m: float = 0.0
@@ -171,7 +171,7 @@ def _where_slots(mask: Tensor, a: Slots, b: Slots) -> Slots:
 
 
 def _assign(dist: Tensor, gate_m: float) -> Tuple[Tensor, Tensor]:
-    """The globally optimal one-to-one slot-candidate assignment under `gate_m` (`TODO.md` item 43).
+    """The globally optimal one-to-one slot-candidate assignment under `gate_m`.
 
     Solved **over the gated sub-problem only**, one stream at a time. Two reasons, and both matter: `dist` is `inf`
     outside `alive & usable` and `linear_sum_assignment` cannot take that; and the gated block is far smaller than the
@@ -219,7 +219,7 @@ def manage_slots(slots: Slots, cand_xy: Tensor, cand_score: Tensor, cand_valid: 
     step = dt[:, None]
     alive = slots.alive
     if rules.cell_m:
-        # Item 22. Quantise every candidate to its cell centre before anything reads a position, so a slot's position
+        # Quantise every candidate to its cell centre before anything reads a position, so a slot's position
         # *is* a cell: spawning puts it at a centre, matching compares centres, and nothing below can move it. A cell
         # does not drift either, so there is no constant-velocity prediction to make.
         cand_xy = (floor(cand_xy / rules.cell_m) + 0.5) * rules.cell_m
@@ -326,7 +326,7 @@ class _BiasedAttention(nn.Module):
 
 
 class _SlotAttention(nn.Module):
-    """Slot Attention's attention and its post-update MLP, for one iteration (Locatello et al., NeurIPS 2020) -- item 42.
+    """Slot Attention's attention and its post-update MLP, for one iteration (Locatello et al., NeurIPS 2020).
 
     The defining detail is the softmax **axis**: over slots, so slots compete to explain each candidate and the weights
     are a fixed budget per candidate. A transformer's cross-attention normalises over candidates instead, which lets
@@ -364,7 +364,7 @@ class _SlotAttention(nn.Module):
         attendable = cat([alive, ones_like(alive[:, :1])], dim=1)
         attention = softmax(logits.masked_fill(~attendable[:, None, :], float("-inf")), dim=-1)
         weights = attention[..., :-1] * valid[..., None]
-        # **This normalisation is not the cause of item 42's NaN** -- `TODO.md` item 53 measured the cause instead, and it
+        # **This normalisation is not the cause of that arm's NaN** -- the gradient clip measured the cause instead, and it
         # is the persistent recurrence, not any one line. Walking backward over a 399-frame chunk, the gradient arriving
         # at the carried state grows about 2.1x per frame (5.3e-1 at frame 290, 1.1e16 at frame 240), overflows to inf
         # roughly 60 frames back and turns to NaN 40 frames after that; the forward loss stays finite throughout.
@@ -397,10 +397,10 @@ class MemoryOutput:
     what the bookkeeping did -- which slot matched or spawned from which candidate.
 
     `events` carries no gradient and changes nothing about the step; it is here so a diagnostic can read **which slot backs a
-    rescored candidate**, which is what a creation or confirmation rule would act on (`TODO.md` Â§A item 14)."""
+    rescored candidate**, which is what a creation or confirmation rule would act on."""
     candidate_logit: Tensor
     #: Where each candidate is reported, `[B, P, 2]`. Equal to the input `cand_xy` unless the memory has a position
-    #: refinement head (`TODO.md` item 46), so everything downstream reads one field rather than branching on a flag.
+    #: refinement head, so everything downstream reads one field rather than branching on a flag.
     candidate_xy: Tensor
     slot_logit: Tensor
     slot_xy: Tensor
@@ -423,22 +423,22 @@ class ObjectMemory(nn.Module):
     """Stage 3, the short and long horizons (`docs/PROPOSAL.md` Â§5.5): object slots in world coordinates, learned matching of
     candidates to slots, exchange between slots, selective recurrence in real time, rule-based slot bookkeeping, candidate
     rescoring that starts silent. **Coasting -- a slot reporting a person no candidate covers -- was removed from the
-    architecture on 2026-10-16** after item 24 measured it costing nothing and firing essentially never; `coast=True`
+    architecture on 2026-10-16** after its ablation measured it costing nothing and firing essentially never; `coast=True`
     restores the head, which every number published before that date was produced with.
 
-    The ablations of A51 phases 3b and 5, each off by default: `room_frame` false keeps slots in the sensor frame, where a static
+    Two ablations from the slot study, each off by default: `room_frame` false keeps slots in the sensor frame, where a static
     object drifts with the robot; `SlotRules.latest_value` replaces accumulated value with the latest score; `fixed_decay_s` gives
     every slot one time constant instead of a learned one; `learn_value` turns the value rule's two constants into parameters;
     `exchange` false removes the slot-to-slot self-attention, the only O(K^2) term; `learned_match` false removes the
     cross-attention, leaving each slot the candidate its hand-coded association matched. Both false together is the per-slot
     recurrent memory a reviewer would ask for as a baseline; `recurrent` false removes the slot state itself, leaving the head a
     candidate and the statistics of the slot matched to it -- the test of whether this is a learned memory or a tracker with a
-    learned scorer (A51 E10).
+    learned scorer.
 
     `rescore` false removes the correction entirely, so a candidate keeps its own score and the memory can reach the loss only
-    through the prior it draws into stage 2 -- the test of whether that feedback path works at all (A51 E12a).
+    through the prior it draws into stage 2 -- the test of whether that feedback path works at all.
 
-    Rescoring starts silent either way (`TODO.md` A51): through a scalar gate initialised at zero, or -- with `rescore_gate` false --
+    Rescoring starts silent either way: through a scalar gate initialised at zero, or -- with `rescore_gate` false --
     through a zero-initialised last layer, which leaves the head's own gradient unscaled. `rescore_limit`, when set, bounds the
     correction to +-`rescore_limit` logits through a tanh, against the signed correction that shifted the whole score distribution
     down.
@@ -451,40 +451,40 @@ class ObjectMemory(nn.Module):
                  recurrence: str = "selective", global_state: bool = False, refine: bool = False,
                  iterations: int = 0, calibration: Tuple[float, float] = (1.0, 0.0)):
         super().__init__()
-        # `TODO.md` item 48: a post-hoc `(temperature, bias)` on the output logit. The default is the identity, so a
+        # A post-hoc `(temperature, bias)` on the output logit. The default is the identity, so a
         # checkpoint written before the key scores bit-identically -- see the loader's constructor-default rule.
         if calibration[0] <= 0.0:
             raise ValueError(f"calibration temperature must be positive, got {calibration[0]}: a non-positive one "
-                             "either divides by zero or inverts the ranking, which is the property item 48 rests on")
+                             "either divides by zero or inverts the ranking, which is the property the calibration rests on")
         self.calibration = (float(calibration[0]), float(calibration[1]))
-        # `TODO.md` item 42: Slot Attention's own update in place of the association's role in the state update. Each
+        # Slot Attention's own update in place of the association's role in the state update. Each
         # refusal is a feature the published mechanism either duplicates or cannot be given.
         if iterations:
             if learned_match:
                 raise ValueError("iterations already associates candidates to slots, so learned_match must be False "
-                                 "(TODO.md item 42)")
+                                 "")
             if exchange:
                 raise ValueError("iterations: published Slot Attention has no slot-to-slot exchange, so exchange must "
-                                 "be False (TODO.md item 42)")
+                                 "be False")
             if not recurrent:
-                raise ValueError("iterations updates a slot state, so recurrent must be True (TODO.md item 42)")
+                raise ValueError("iterations updates a slot state, so recurrent must be True")
             if global_state:
                 raise ValueError("iterations needs addressable slots to compete, so global_state must be False "
-                                 "(TODO.md item 42)")
-        # `TODO.md` item 46 (A51's O3). Item 35 found the memory net negative on *coverage* -- 203 recovered against
+                                 "")
+        # The position-refinement head. The coverage audit found the memory net negative there -- 203 recovered against
         # 2,990 lost at its own threshold -- so all of its gain is ranking. This is the only head that could move a
         # detection rather than rescore it. It needs `rescore`, because without it `recalled` has nowhere else to go
-        # and the arm would silently become A51 E12a's experiment instead of this one.
+        # and the arm would silently become the no-rescore experiment instead of this one.
         if refine and not rescore:
             raise ValueError("refine needs rescore: without it the recalled state reaches nothing else, which is "
-                             "A51 E12a's arm rather than item 46's")
-        # `TODO.md` item 36: one scene-level state in place of `rules.capacity` addressable per-object slots. The three
+                             "the no-rescore arm rather than the refinement one")
+        # One scene-level state in place of `rules.capacity` addressable per-object slots. The three
         # refusals are not conservatism -- each of those features reads a slot's *position*, which this arm does not have.
         if global_state:
             if coast:
-                raise ValueError("global_state carries no slot positions, so coast must be False (TODO.md item 36)")
+                raise ValueError("global_state carries no slot positions, so coast must be False")
             if visibility:
-                raise ValueError("global_state carries no slot positions, so visibility must be False (TODO.md item 36)")
+                raise ValueError("global_state carries no slot positions, so visibility must be False")
             if not recurrent:
                 raise ValueError("global_state with recurrent=False would leave no memory at all, which is not an arm")
             rules = replace(rules, capacity=1)      # a capacity counts addressable slots, and this arm has none
@@ -515,7 +515,7 @@ class ObjectMemory(nn.Module):
         # Found by a pre-freeze audit, 2026-10-28. `fixed_decay_s` is read in exactly one place -- `_recur`'s
         # `selective` branch, as `1 / fixed_decay_s`. `gru` and `mingru` have no decay term at all, so under them the
         # flag is stored, restored from a checkpoint, passed in here, and then **ignored**: an arm would be
-        # bit-identical to the control and would report the control's number as A51's D3. `--recurrence` now defaults
+        # bit-identical to the control and would report the control's number as the arm's. `--recurrence` now defaults
         # to `mingru`, so the trap is live rather than hypothetical, and `TODO.md` queues D3 for re-running on the
         # adopted recipe. Refusing the pair is the same guard `iterations` and `global_state` use, and the reason it is
         # needed here is that the flag *does* reach the constructor, so the plumbing test cannot see it.
@@ -540,7 +540,7 @@ class ObjectMemory(nn.Module):
             self.value_fade = nn.Parameter(tlog(expm1(full((), rules.fade_time_s))))
         self.iterations = iterations
         self.attend = _SlotAttention(dim) if iterations else None
-        # Item 42 reads the recall off its own attention matrix, so the separate one is not built at all.
+        # The Slot-Attention arm reads the recall off its own attention matrix, so the separate one is not built at all.
         self.recall = _BiasedAttention(dim, heads) if recurrent and addressable and not iterations else None
         self.rescore = nn.Sequential(nn.Linear(2 * dim, dim), nn.GELU(), nn.Linear(dim, 1)) if rescore else None
         # Zero-initialised last layer, so an untrained arm reports exactly the candidate's own position and its first
@@ -554,7 +554,7 @@ class ObjectMemory(nn.Module):
             self.register_parameter("rescore_gate", None)       # the head starts silent through its own last layer instead
             if rescore:
                 nn.init.zeros_(self.rescore[-1].weight), nn.init.zeros_(self.rescore[-1].bias)
-        # **Off by default since 2026-10-16** (`TODO.md` item 24, the owner's call): ablating the head cost nothing
+        # **Off by default since 2026-10-16** (the owner's call): ablating the head cost nothing
         # measurable -- AP 86.08% against the matched seed's 86.35% and a three-seed control range of 85.49-86.35 --
         # and it fired 0.0012-0.0020 times per populated frame and 2/0/0 times across 72,533 person-free frames. The
         # argument is not its 137 parameters but that a write-up should not describe a mechanism that never acts.
@@ -565,7 +565,7 @@ class ObjectMemory(nn.Module):
             nn.init.constant_(self.coast.bias, SILENT_COAST_LOGIT)
 
     def _recur(self, state: Tensor, u: Tensor, dt: Tensor) -> Tensor:
-        """One slot-state update, in whichever recurrence this memory was built with (`TODO.md` item 16).
+        """One slot-state update, in whichever recurrence this memory was built with.
 
         **`selective`**, the adopted one: a diagonal state whose decay rate is read off the input, applied over the real
         elapsed time -- `keep = exp(-dt * rate)` in seconds. A robot's frames are not uniformly spaced, and D3 measured the
@@ -590,11 +590,11 @@ class ObjectMemory(nn.Module):
 
     def _slot_attention(self, state: Tensor, encoded: Tensor, world: Tensor, cand_valid: Tensor, slots: Slots,
                         stats: Tensor, dt: Tensor) -> Tuple[Tensor, Tensor]:
-        """`TODO.md` item 42: iterated competitive attention in place of the association's role in the state update.
+        """Iterated competitive attention in place of the association's role in the state update.
 
         Per iteration: slots compete for the frame's candidates, each slot's update is the attention-weighted mean of
         what it won, the recurrence folds that into its state, and the MLP refines it. The slot statistics ride along in
-        the recurrence's input, exactly as they do in the hand-coded path, so `_recur` keeps its width and item 16's
+        the recurrence's input, exactly as they do in the hand-coded path, so `_recur` keeps its width and the recurrence comparison's
         recurrence family stays orthogonal to this ablation.
 
         **`dt` is spent on the first iteration only.** Elapsed time passes once per frame, not once per refinement step,
@@ -615,18 +615,18 @@ class ObjectMemory(nn.Module):
         """Which slots may report a person no candidate covers, and how loudly -- or neither, when the head is ablated.
 
         Without the head there is no logit to learn and nothing to report, so the logit is pinned silent and `coasting` is
-        empty: a slot can then only reach the output through a candidate it matched (`TODO.md` item 24).
+        empty: a slot can then only reach the output through a candidate it matched.
         """
         if self.coast is None:
             return full_like(slots.value, SILENT_COAST_LOGIT), zeros_like(slots.alive)
         return self.coast(cat([state, stats], dim=-1))[..., 0], slots.alive & ~events.matched & ~refill
 
     def _scene_statistics(self, cand_xy: Tensor, cand_score: Tensor, cand_valid: Tensor, dt: Tensor, slots: Slots) -> Tensor:
-        """The scene-level analogues of the eight per-slot statistics, `[B, 1, SLOT_STATISTICS]` (`TODO.md` item 36).
+        """The scene-level analogues of the eight per-slot statistics, `[B, 1, SLOT_STATISTICS]`.
 
         Deliberately the same width as the slot statistics they replace, so `_recur` and every gate keep the input width
         they have in the addressable model and the recurrence family stays orthogonal to this ablation. With no
-        bookkeeping, **this is `dt`'s only route into the model**, which matters because item 37 showed that route
+        bookkeeping, **this is `dt`'s only route into the model**, which matters because the dropped-frame sweep showed that route
         carries real signal.
         """
         v = cand_valid.float()
@@ -642,7 +642,7 @@ class ObjectMemory(nn.Module):
 
     def _global_step(self, cand_xy: Tensor, cand_score: Tensor, cand_valid: Tensor, pose: Tensor, dt: Tensor,
                      slots: Slots, cand_features: Optional[Tensor] = None) -> MemoryOutput:
-        """One frame with a single scene-level state and no addressable slots at all (`TODO.md` item 36).
+        """One frame with a single scene-level state and no addressable slots at all.
 
         `manage_slots` **is** the slot mechanism, so this path never calls it: no association, no spawn, no eviction, no
         per-slot decay, no proximity bias anywhere. The frame's candidates are pooled into one vector, that vector plus
@@ -650,7 +650,7 @@ class ObjectMemory(nn.Module):
         the same state** -- which is exactly the question, since the adopted model rescores each candidate against the
         state of the slot its association gave it.
 
-        It is a fair like-for-like because the frozen memory only rescores: the coasting head went in item 24, so
+        It is a fair like-for-like because the frozen memory only rescores: the coasting head was ablated away, so
         neither arm places a detection and the only difference is whether the memory is addressable.
         """
         features = stack([cand_score, _logit(cand_score) / FEATURE_SCALE, cand_xy[..., 0] / FEATURE_SCALE,
@@ -674,7 +674,7 @@ class ObjectMemory(nn.Module):
     def _refined(self, encoded: Tensor, recalled: Tensor, cand_xy: Tensor) -> Tensor:
         """Where each candidate is reported: its own position, plus the memory's correction when it has one.
 
-        The head predicts an **offset**, not an absolute position (`TODO.md` item 46): a displaced detection has to stay
+        The head predicts an **offset**, not an absolute position: a displaced detection has to stay
         near its candidate, and a head predicting absolute coordinates would start at the origin and have to learn the
         whole room's geometry before it beat the control.
         """
@@ -683,12 +683,12 @@ class ObjectMemory(nn.Module):
         return cand_xy + self.refine(cat([encoded, recalled], dim=-1))
 
     def _rescored(self, encoded: Tensor, recalled: Tensor, cand_score: Tensor) -> Tensor:
-        """A candidate's logit after the memory's correction, or its own logit untouched when `rescore` is false (A51 E12a),
+        """A candidate's logit after the memory's correction, or its own logit untouched when `rescore` is false,
         which leaves the prior drawn into stage 2 as the memory's only remaining route to the loss.
 
-        The post-hoc calibration (`TODO.md` item 48) is applied here and **only** here. Not to the coasting head's
+        The post-hoc calibration is applied here and **only** here. Not to the coasting head's
         logit: without that head `_coasting` pins it at `SILENT_COAST_LOGIT`, and a bias term applied there would
-        un-silence a head item 24 removed, inventing slot reports from nothing.
+        un-silence the coasting head that was removed, inventing slot reports from nothing.
         """
         if self.rescore is None:
             return self._calibrated(_logit(cand_score))
@@ -714,7 +714,7 @@ class ObjectMemory(nn.Module):
         return replace(self.rules, gain=self.value_gain.detach().sigmoid().item(), fade_time_s=softplus(self.value_fade.detach()).item())
 
     def _value_with_gradient(self, previous: Slots, slots: Slots, events: SlotEvents, cand_score: Tensor, dt: Tensor) -> Tensor:
-        """The same value the rule just computed, recomputed so the loss reaches `value_gain` and `value_fade` (`TODO.md` A51 D4).
+        """The same value the rule just computed, recomputed so the loss reaches `value_gain` and `value_fade`.
         The bookkeeping keeps its own detached value; this one is what the network reads."""
         gain, fade_time = self.value_gain.sigmoid(), softplus(self.value_fade)
         observed = cand_score.gather(1, events.match_index.clamp(min=0))
@@ -777,7 +777,7 @@ class ObjectMemory(nn.Module):
         if self.attend is None:
             queried = state + self.statistics(stats)
             if self.match is None:                           # the slot reads only what the hand-coded association gave it
-                # `TODO.md` item 54. **Which candidate a slot reads depends on how it got one.** A *matched* slot has
+                # **Which candidate a slot reads depends on how it got one.** A *matched* slot has
                 # it in `match_index`; a slot that **spawned** this frame did not match, so `manage_slots` leaves
                 # `match_index` at -1 and the candidate is in `source`. Gathering by `match_index` alone made the
                 # `clamp(min=0)` read index 0 -- and `decode_candidates` sorts by descending score, so that is the
@@ -821,11 +821,11 @@ class ConvNeXtBlock(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-    """Two full convolutions with normalisation and a GELU between them, residual (He et al., CVPR 2016) -- `TODO.md` item 19.
+    """Two full convolutions with normalisation and a GELU between them, residual (He et al., CVPR 2016).
 
     The ablation's point is what it does *not* do: no depthwise separation, so the large kernel is spent across every
     channel rather than per channel, and no inverted bottleneck, so `expansion` has nothing to widen and is accepted only
-    to keep `_stage`'s signature. A59's W arm priced shrinking the widths at 1.4 pp without buying speed, so capacity is
+    to keep `_stage`'s signature. The width arm priced shrinking the widths at 1.4 pp without buying speed, so capacity is
     not where the score is; whether the *block* is remains untested, and this is the arm that tests it.
     """
 
@@ -849,7 +849,7 @@ def metric_offsets(ranges: Tensor, step_rad: float, width_m: float, samples: int
 
     A person 0.8 m wide subtends 42 beams at 2 m and 9 at 9 m, so a fixed-width kernel is correct at exactly one range and
     wrong everywhere else. Half the width subtends `atan(width/2 / r)` radians at range `r`, which is that many beams at this
-    laser's increment, so the offsets run from `-span` to `+span` and shrink as the range grows (`TODO.md` item 15).
+    laser's increment, so the offsets run from `-span` to `+span` and shrink as the range grows.
     """
     span = arctan(0.5 * width_m / ranges.clamp(min=1e-3)) / step_rad
     steps = linspace(-1.0, 1.0, samples, device=ranges.device, dtype=ranges.dtype) if samples > 1 \
@@ -877,14 +877,14 @@ def gather_beams(x: Tensor, offsets: Tensor) -> Tensor:
 
 
 class MetricGather(nn.Module):
-    """A depthwise read over a window of fixed metric width, in place of one of fixed beam count (`TODO.md` item 15).
+    """A depthwise read over a window of fixed metric width, in place of one of fixed beam count.
 
     Tier 0's 1-NN probe priced the range-adaptive angular window at **+2.5 pp**, and the advantage was **purely
     long-range** -- +4.9 pp at 8-10 m, zero at 4 m, where the fixed window happens to be calibrated. DROW gets this free
     because its cutout is resampled per beam; a full-scan network has to be given it. `width_m` is DROW's own 1.66 m of
     arc by default.
 
-    A59's F1 arm moved the prior against input-*feature* changes -- swapping the ten per-beam channels for LFE's measured
+    The feature arm moved the prior against input-*feature* changes -- swapping the ten per-beam channels for LFE's measured
     nothing -- but this changes *which beams the layer reads*, not what each one says.
     """
 
@@ -911,13 +911,13 @@ class CalibrationNetwork(nn.Module):
     (`context`); a DROW-style head giving every beam a person logit and a vote to the person's centre. The memory's prior, when the
     network has prior channels, enters at the bottleneck. `dropout` regularises the head's input only, so the decoder features
     stage 3 pools from stay deterministic; it holds no parameters. Neither the per-beam fine nor the bottleneck coarse temporal
-    convolution survived its ablation (`TODO.md` A50, A60; `memory/rejected-ideas.md`). `input_features` "lfe" replaces the ten
-    beam features with LFE's one input channel (`lfe_features`), for the attribution arm F1 (`TODO.md` A59).
+    convolution survived its ablation (`memory/rejected-ideas.md`). `input_features` "lfe" replaces the ten
+    beam features with LFE's one input channel (`lfe_features`), for the attribution arm F1.
     `gather_width_m` above zero inserts a `MetricGather` after the stem, so the first spatial layer reads a window of that many
-    metres of arc instead of a fixed count of beams (`TODO.md` item 15); zero, the default, leaves the network exactly as it was.
+    metres of arc instead of a fixed count of beams; zero, the default, leaves the network exactly as it was.
     `vote_frame` records which frame the head's two outputs are an offset in -- DROW's beam-relative `(across, along)` by
-    default, or the sensor's shared Cartesian frame (`TODO.md` item 18) -- and `block` which block carries the depth,
-    ConvNeXt by default or a plain residual one (item 19).
+    default, or the sensor's shared Cartesian frame -- and `block` which block carries the depth,
+    ConvNeXt by default or a plain residual one.
     """
 
     def __init__(self, angles: Tensor, channels: Tuple[int, int, int] = (32, 64, 128), blocks: Tuple[int, int, int] = (2, 2, 2),
@@ -943,16 +943,16 @@ class CalibrationNetwork(nn.Module):
         self.register_buffer("angles", angles.clone(), persistent=False)
         self.stem = nn.Conv1d(INPUT_CHANNELS[input_features], c0, 1)
         # Off unless asked for, and bit-identical when off, so every trained checkpoint keeps reading the same
-        # (`TODO.md` item 15). The step comes from the laser's own angles rather than a constant: a different
+        #. The step comes from the laser's own angles rather than a constant: a different
         # sensor has a different increment, and the window is specified in metres.
         self.gather = MetricGather(c0, gather_width_m, gather_samples, float(angles[1] - angles[0])) \
             if gather_width_m > 0 else None
         self.encoder = nn.ModuleList([_stage(c, n, kernel_size, expansion, block) for c, n in zip(channels, blocks)])
         self.down = nn.ModuleList([nn.Conv1d(c0, c1, 2, stride=2), nn.Conv1d(c1, c2, 2, stride=2), nn.Conv1d(c2, c2, 2, stride=2)])
-        # The whole-scan max, and `TODO.md` item 40's ablation of it. It is the one path by which a return at one end of
+        # The whole-scan max, and the ablation of it. It is the one path by which a return at one end of
         # the field of view can reach the other end's logits: the U-Net's receptive field is wide but finite. Named as a
-        # defining feature of this architecture in `docs/RESEARCH.md` Â§5.2 and never tested until item 40, which matters
-        # because item 19 has since shown the widths flat and the block interchangeable, leaving this as the leading
+        # defining feature of this architecture in `docs/RESEARCH.md` Â§5.2 and never tested until that ablation, which matters
+        # because the shape sweeps have since shown the widths flat and the block interchangeable, leaving this as the leading
         # unexplained part of stage 2's lead over LFE-Peaks.
         self.aggregator = aggregator
         pooled = 2 if aggregator else 1
@@ -1011,7 +1011,7 @@ def fold_legacy_calibration(state: dict) -> dict:
         fine_w, fine_b = state["fine.conv.weight"][:, :, 0], state["fine.conv.bias"]
         if fine_w.shape[1] != stem_w.shape[0]:
             raise ValueError(f"this checkpoint's fine convolution reads {fine_w.shape[1] // stem_w.shape[0]} frames; the fine convolution was removed "
-                             f"2026-09-17 (TODO.md A50) and only one-tap checkpoints (--fine-lags 0) fold into the current network")
+                             f"2026-09-17 and only one-tap checkpoints (--fine-lags 0) fold into the current network")
         weight, bias = fine_w @ stem_w, fine_w @ stem_b + fine_b
         if weight.shape[1] == N_BEAM_FEATURES + 1:
             bias = bias + weight[:, LEGACY_VALIDITY_CHANNEL]
@@ -1022,7 +1022,7 @@ def fold_legacy_calibration(state: dict) -> dict:
         weight = folded["coarse.conv.weight"]
         if weight.shape[1] != weight.shape[0]:
             raise ValueError(f"this checkpoint's coarse convolution reads past frames ({weight.shape[1]} inputs for {weight.shape[0]} outputs); "
-                             f"it was removed 2026-10-08 (TODO.md A60) and runs at commit {LAST_TEMPORAL_COMMIT}")
+                             f"it was removed 2026-10-08 and runs at commit {LAST_TEMPORAL_COMMIT}")
         folded = {("context." + k[len("coarse.conv."):] if k.startswith("coarse.conv.") else k): v for k, v in folded.items()}
     return folded
 
@@ -1055,7 +1055,7 @@ def visibility_feature(slot_xy: Tensor, free_range: Tensor, angles: Tensor, sect
 
     Negative means something is in front of the slot, so a person there could still be hidden; positive means the beam passed
     through the slot's own position and found nothing, which is direct evidence against it. Slots outside the field of view read
-    0 -- nothing known rather than either. This is the evidence the coasting head was missing (`TODO.md` A51 S2): it must tell a
+    0 -- nothing known rather than either. This is the evidence the coasting head was missing: it must tell a
     genuinely occluded person from a slot that is simply wrong, and until now it saw nothing of the current scan at all.
     """
     width = (angles[1] - angles[0]) * len(angles) / sectors

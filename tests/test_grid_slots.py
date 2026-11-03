@@ -1,6 +1,6 @@
-"""Item 22: grid slots -- a slot whose position snaps to a room cell and never tracks the object (the owner's design).
+"""grid slots -- a slot whose position snaps to a room cell and never tracks the object (the owner's design).
 
-**The question, and why this is the sharp form of it.** Item 36 showed that *addressability* is load-bearing: one
+**The question, and why this is the sharp form of it.** The global-state ablation showed that *addressability* is load-bearing: one
 global state reaches 82.44% against the slots' 85.88-86.08%. It did **not** show that *object-centric* addressability
 beats *spatial* addressability, because nothing spatial was ever run -- and "why slots rather than an occupancy grid?"
 is the obvious question about this design. A learned room grid is the classical robotics answer.

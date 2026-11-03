@@ -1,4 +1,4 @@
-"""The tracking-literature baselines and metrics of `TODO.md` A56 (`memory/experiments/2026-09-tracking-claims.md`).
+"""The tracking-literature baselines and metrics (`memory/experiments/2026-09-tracking-claims.md`).
 
 GOSPA, an exact fast AP and its block bootstrap, the rule scorer that puts CBMOT's score update on the memory's own bookkeeping, the
 tracker replay, and the per-person strata (occlusion, first-detection latency).
@@ -219,7 +219,7 @@ class TestStrata:
 
 
 class TestMergeDetections:
-    """A58: the LFE detectors' greedy merge, applied to an output that has none."""
+    """The LFE detectors' greedy merge, applied to an output that has none."""
 
     def test_keeps_what_lfe_merge_nearby_keeps(self):
         rng = np.random.default_rng(0)
@@ -282,7 +282,7 @@ class TestDoubleReportAnatomy:
 
 
 class TestArmsOption:
-    """`--arms` replays memory checkpoints other than A56's own, e.g. one seed per stage-2 seed on the adopted recipe (`TODO.md` A61)."""
+    """`--arms` replays memory checkpoints other than the default set, e.g. one seed per stage-2 seed on the adopted recipe."""
 
     def test_runs_are_grouped_by_arm_in_order(self):
         assert parse_arms(["E13:a", "B0:b", "E13:c"]) == {"E13": ["a", "c"], "B0": ["b"]}
@@ -293,7 +293,7 @@ class TestArmsOption:
 
 
 class TestSummary:
-    """A61 replays each stage-2 seed on its own, so one arm's seeds sit in three reports under three run names; the summary lines
+    """The replay runs each stage-2 seed on its own, so one arm's seeds sit in three reports under three run names; the summary lines
     them up by arm."""
 
     @staticmethod
@@ -332,7 +332,7 @@ class TestReportFocus:
         assert report_focus({"candidates": {}, "sort_m1": {}}, "sort_m1") == ["candidates", "sort_m1"]
 
     def test_every_arm_is_included_whatever_its_label(self):
-        """A hardcoded `E13:` dropped item 56's `FRZ:` arm from the strata and latency tables altogether."""
+        """A hardcoded `E13:` dropped the frozen arm from the strata and latency tables altogether."""
         table = {"candidates": {}, "bytetrack_cbmot": {}, "FRZ:a71_freeze_s0": {}, "E13:static": {}}
         assert report_focus(table, "bytetrack_cbmot") == ["candidates", "bytetrack_cbmot", "FRZ:a71_freeze_s0", "E13:static"]
 

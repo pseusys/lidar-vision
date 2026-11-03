@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""`TODO.md` A60: does stage 2's coarse convolution earn anything end to end? Scores the six A60 detectors -- E13's object memory on
-the no-temporal and on the default (coarse) stage 2, three seeds each, both on A59's adopted recipe -- by the rule A60 wrote down
+"""Does stage 2's coarse convolution earn anything end to end? Scores the six detectors -- E13's object memory on
+the no-temporal and on the default (coarse) stage 2, three seeds each, both on the adopted recipe -- by the rule written down
 before the runs:
 
     drop the convolution if the default's three-seed mean test AP is not above the no-temporal mean by more than 1.5 pp,
     and its first-second recall is not above by more than 2 pp; keep it otherwise
 
 **First-second recall** needs no identities and no model. Annotations are linked into trajectories in world coordinates
-(`motion_analysis.build_tracks`, 0.6 m, as A56's age strata are), and a person-observation is in its first second when its trajectory
+(`motion_analysis.build_tracks`, 0.6 m, as the age strata are), and a person-observation is in its first second when its trajectory
 began under a second earlier: the people a slot cannot have seen yet, where beam-level motion is the one cue a memory lacks. FROG's
 copied labels are left out of it, since a copy would start a trajectory of its own and only a double report could match it. Recall,
 there and overall, is read at one false-positive budget shared by all six: the no-temporal arm's mean false positives per frame at
@@ -78,7 +78,7 @@ def first_second_recall(covered: Mapping[int, np.ndarray], ages: Mapping[Person,
 
 
 def verdict(ap_gain_pp: float, first_second_gain_pp: float) -> str:
-    """A60's decision rule, written before the runs."""
+    """The decision rule, written before the runs."""
     return "keep" if ap_gain_pp > AP_BAR_PP or first_second_gain_pp > FIRST_SECOND_BAR_PP else "drop"
 
 
@@ -144,7 +144,7 @@ def main() -> None:
             saved[(arm, seed)] = load(path)
             found.append(name)
     if not saved:
-        raise SystemExit("no A60 run has finished training yet")
+        raise SystemExit("no coarse-convolution run has finished training yet")
     if ages is None:                                 # every run's frames were saved before the ages were cached
         _, split = run_split(CHECKPOINTS / found[0], "cpu")
         ages = dict(ages=all_ages(split), scored=stride_frames(split))

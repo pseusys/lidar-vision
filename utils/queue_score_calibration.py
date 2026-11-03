@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 48: fit the post-hoc `(temperature, bias)` on val for the three frozen seeds.
+"""Fit the post-hoc `(temperature, bias)` on val for the three frozen seeds.
 
 One job per seed, each a full val replay of `a71_freeze_s{seed}`'s memory on its own stage-2 seed, which has to be a
 replay rather than a stored score column because no stored column exists for val at the frozen architecture.
@@ -32,7 +32,7 @@ explicit step, because writing is the irreversible half and it edits the three a
 
 Launch per `memory/long-running-tasks.md` -- Task Scheduler, `/it`, a **past** `/st`, never `Start-Process`:
 
-    python queue_item48.py --list
+    python queue_score_calibration.py --list
     schtasks /create /tn "lidar_item48" /tr "`"$python`" `"$queue`"" /sc once /st $past /it /f
     schtasks /run   /tn "lidar_item48"
 """

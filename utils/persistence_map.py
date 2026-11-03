@@ -1,6 +1,6 @@
 """Role C, classically: a world-frame persistence map over a static detector.
 
-TODO.md A41. The oracle says a 30 s horizon makes **89.7%** of LFE-Peaks' and
+The oracle says a 30 s horizon makes **89.7%** of LFE-Peaks' and
 **93.9%** of LFE-PPN's phantom detections rejectable, while only **3.6%** of
 real person trajectories last that long. That asymmetry is the whole argument
 for a long horizon -- but the oracle is acausal and association-gated, so it
@@ -12,7 +12,7 @@ exponentially-forgetting count of how often a detection has been reported
 there, and suppress detections standing on cells with too much history. Two
 knobs, no training, O(1) per detection per frame.
 
-**Why classical before learned.** A40 measured a post-processing constant
+**Why classical before learned.** An earlier sweep measured a post-processing constant
 removing false positives 5.8x more cheaply than SORT. The standing lesson is to
 price the non-learned lever before proposing a learned one -- and if this
 reaches most of the oracle bound, the paper's claim is proven without any
@@ -97,9 +97,9 @@ class PersistenceMap:
 
 
 class BackgroundMap:
-    """Static-surface model from raw scan returns, per world cell (A44).
+    """Static-surface model from raw scan returns, per world cell.
 
-    `PersistenceMap` above counts **detections** and fails (A41): people revisit
+    `PersistenceMap` above counts **detections** and fails: people revisit
     locations, so detection frequency conflates a queue with a chair. This
     counts **returns**, which a chair produces whether or not anything detects
     it, and keys the decision on **hit rate** rather than hit count:
@@ -110,9 +110,9 @@ class BackgroundMap:
 
     Background is `rate >= min_rate AND span >= min_span`. Each of the three is
     excluded by a different condition, and a count alone excludes neither of the
-    last two -- which is precisely how A41 failed.
+    last two -- which is precisely how the learned attempt failed.
 
-    **Why this escapes A45's ceiling.** A45 put ~4.2 FP per FN on filtering
+    **Why this escapes the filtering ceiling.** That bound put ~4.2 FP per FN on filtering
     detection *trails*, and showed the limit is association quality. This uses
     no trails and no association, so that bound does not apply to it.
 
@@ -228,7 +228,7 @@ def evaluate(seqs, cell, decay, tau, assoc=0.5):
 
 
 SPANS_S = (1.0, 10.0, 30.0, 100.0)  # in frames below, at the dataset's own rate: 26 / 262 / 786 / 2620 until 2026-10-10, when
-                                    # the rate stopped being read as the stamped median's 26.2 Hz (TODO.md A49)
+                                    # the rate stopped being read as the stamped median's 26.2 Hz
 
 
 def spans_frames(hz):
@@ -237,7 +237,7 @@ def spans_frames(hz):
 
 
 def background_pass(name, mode, thresh, cell, radius, seqs):
-    """One causal pass, reusing A41's cached detections (A44).
+    """One causal pass, reusing the cached detections.
 
     Per detection, record the strongest nearby background `rate` at each of
     several minimum spans, so `min_rate` sweeps analytically afterwards. The
@@ -331,10 +331,10 @@ def main():
                          "reaches ~130, which is what the grid must bracket"),
     ap.add_argument("--hz", type=float, default=0.0, help="frames per second for the decay conversion; 0 measures it from the dataset")
     ap.add_argument("--background", action="store_true",
-                    help="A44: build the map from raw scan RETURNS instead "
+                    help="build the map from raw scan RETURNS instead "
                          "of from detections, and key it on hit rate rather "
                          "than hit count. Uses no trails and no association, "
-                         "so A45's ceiling does not bind it")
+                         "so the filtering ceiling does not bind it")
     ap.add_argument("--radius", type=float, default=0.4,
                     help="how far around a detection to look for background")
     ap.add_argument("--min-rate", type=float, nargs="+",

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One queue runner for the project's long jobs, in place of a launcher script hand-copied per session (`TODO.md` A57).
+"""One queue runner for the project's long jobs, in place of a launcher script hand-copied per session.
 
 A queue is a Python module that builds a list of `Job`s and calls `main`; it is committed, so the exact queue behind a result
 stays readable after the session that ran it (two launchers were already lost that way). The runner owns the machine for the

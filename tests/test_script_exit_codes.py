@@ -1,4 +1,4 @@
-"""`--help` must exit 0, in every script that carries the ROCm teardown workaround (`TODO.md` §A item 11).
+"""`--help` must exit 0, in every script that carries the ROCm teardown workaround.
 
 Those scripts end with `os._exit(code)` rather than falling off the end of `main()`, because a finished ROCm process can hang
 past a normal exit (`memory/gotchas.md`) and only `os._exit` is certain to end it. The wrapper around it catches

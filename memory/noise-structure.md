@@ -14,7 +14,7 @@ Which denoising mechanism a dataset gets depends on what is found here (owner's 
 
 A-B-B steps are real motion and must never be filtered.
 **Goal (owner, 2026-09-17): the model should be feedable with any dataset's raw data, without a dataset-specific preprocessor.** Whatever this file's measurements call for should be learned by the network or should work identically everywhere.
-The measurements come from `utils/scan_anomalies.py` (TODO A49), run 2026-09-17 over every file of both datasets; full output in `results/scan_anomalies_{frog,drow}.json`. Robot motion is not compensated, so jitter and spike figures are upper bounds.
+The measurements come from `utils/scan_anomalies.py`, run 2026-09-17 over every file of both datasets; full output in `results/scan_anomalies_{frog,drow}.json`. Robot motion is not compensated, so jitter and spike figures are upper bounds.
 
 **Verdict, both datasets: the sensors are clean, and the only thing that needs handling is how "no return" is written.**
 
@@ -35,7 +35,7 @@ What the numbers decide:
 
 - **Invalid readings are open space, not dropouts.** They last long, cover wide stretches of beams, and are *rarer* on people than elsewhere. Healing from past frames would mostly copy stale surfaces into open space; at most the ~6-10 % flickers could benefit. A constant meaning "nothing within range" is the faithful encoding.
 - **No spike filter.** On FROG spikes are rare and grow with range (mixed pixels at far edges). On DROW they are 6.8x more common near people: at 12.7 Hz a swinging leg crosses a beam within one frame, so A-B-A there is motion. Filtering it would erase legs, the same failure as the median denoiser.
-- **No temporal averaging.** Jitter is at the sensor's rated accuracy, far below the 0.5 m match radius. This matches the fine-convolution result: no-fine and 5 taps tie at three seeds (TODO A50).
+- **No temporal averaging.** Jitter is at the sensor's rated accuracy, far below the 0.5 m match radius. This matches the fine-convolution result: no-fine and 5 taps tie at three seeds.
 
 ## Sensors
 
@@ -57,7 +57,7 @@ Sources: Hokuyo's [UTM-30LX product page](https://www.hokuyo-aut.jp/search/singl
 
 ## FROG
 
-**How missing returns are handled now (implemented 2026-09-17, owner's call; TODO A49):**
+**How missing returns are handled now (implemented 2026-09-17, owner's call):**
 
 - The three-horizon detector reads **raw** scans (`FROG_Dataset(missing_return_m=None)`). The network applies one dataset-agnostic rule, `sanitize_ranges`: a reading that is non-finite, non-positive, or at or beyond `max_range_m` (`--max-range-m`, default 10 m) reads as `max_range_m`. The validity input channel is gone.
 - **Why no validity channel and no healing:** invalid readings are open space in both datasets (verdict above). "No return" and "a return beyond the limit" mean the same thing to a detector with a range limit, so one value carries both.
@@ -69,7 +69,7 @@ The recording itself is not cut at 10 m: about 226k finite readings lie between 
 
 **Two encodings in one dataset.** `frog_11-36_12-43_train_val.h5` contains no inf at all; it writes no return as exactly 61.0 m (7.46M readings, 3.0 % of FROG's readings). The test file and the three extras use `+inf` (17.6M), plus 155 NaN and 689 `-inf`. Today both reach the network as a valid 10 m: the loader clamps inf, and `beam_features` clips 61.0. **Removing the loader clamp alone would give train and test different inputs.**
 
-**Timestamps are bunched** (sensor table): 27.5 % of linked intervals are under a quarter of the 25 ms period. Stage 3 divides by them (TODO A50 phase 1b).
+**Timestamps are bunched** (sensor table): 27.5 % of linked intervals are under a quarter of the 25 ms period. Stage 3 divides by them.
 
 **Consecutive-scan disagreement of 1.30 cm (median, 2026-09-16) is biased low**: a beam missing in both frames scores |10 - 10| = 0. It is not evidence that FROG is clean.
 

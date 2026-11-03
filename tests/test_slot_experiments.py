@@ -1,4 +1,4 @@
-"""Where `utils/slot_experiments.py` writes its results (`TODO.md` A51).
+"""Where `utils/slot_experiments.py` writes its results.
 
 The path used to be derived from the experiment alone, so re-running a sweep on a second checkpoint silently overwrote the first
 run's numbers: on 2026-10-02 the `odometry` and `cost` modes destroyed E2's and E4's JSON, which survived only in the logs. The
@@ -36,7 +36,7 @@ class TestOutputPath:
 
 
 class TestTheSlotCapacityReplay:
-    """`TODO.md` item 50: 256 slots is the last number in the design nobody has priced.
+    """256 slots is the last number in the design nobody has priced.
 
     It is a **replay**, like `sigma` and `cost`: `object_memory(..., capacity=k)` rebuilds a trained memory at another
     slot count with its weights untouched, so the sweep costs minutes instead of an arm apiece. Read a flat curve

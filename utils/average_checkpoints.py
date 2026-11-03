@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Weight averaging for stage 2, part of its recipe since the owner's call of 2026-10-06 (`TODO.md` A59): average a run's periodic
+"""Weight averaging for stage 2, part of its recipe since the owner's call of 2026-10-06: average a run's periodic
 checkpoints (`step2 --checkpoint-every 0.25`) over the window that scores best on val, and save the average as
 `<run>/step2_calibration.averaged.pth`, which loads wherever `step2_calibration.best.pth` does.
 
-Averaging along one training trajectory (stochastic weight averaging, Izmailov et al., UAI 2018) gained in 15 of 18 A59 runs, +0.66 pp
+Averaging along one training trajectory (stochastic weight averaging, Izmailov et al., UAI 2018) gained in 15 of 18 stage-2 runs, +0.66 pp
 test AP on average, and on every seed of the adopted recipe (+0.11 to +0.36; best stage 2 82.20%). The window is chosen on val's
 2,000-frame sample from `WINDOWS`, exactly as those numbers were; each run's val score per window goes to `<run>/averaging.json`.
 

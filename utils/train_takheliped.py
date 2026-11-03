@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the three-horizon detector (`docs/PROPOSAL.md` §8, §10) with the training budgets of `TODO.md` A43.
+"""Train the three-horizon detector (`docs/PROPOSAL.md` §8, §10) with the training budgets the three-memory design settled on.
 
 `step1` -- stage 3 alone on saved LFE-Peaks candidates: detections down to a 0.01 score, the best 64 per frame, on every frame
 of FROG `official` train, val and test, cached once. Recordings play as parallel streams, trained in chunks with truncated
@@ -7,7 +7,7 @@ backpropagation over a chunk-length curriculum, selected on val AP over warmed-u
 recording against the candidates alone: AP, false positives and negatives per frame at 0.3, and the exchange rate.
 
 `step2` -- stages 1-2, training phase A: single annotated frames, DROW head loss, selected on val AP, and scored on every
-annotated test frame. Stage 2 reads one frame; its coarse temporal convolution was dropped by `TODO.md` A60 (code at e76aa94).
+annotated test frame. Stage 2 reads one frame; its coarse temporal convolution was dropped when it was tested end to end and earned nothing (code at e76aa94).
 
 Usage (from utils/)
 -----
@@ -72,16 +72,16 @@ FP_BUDGET_TOLERANCE = 1e-9
 TIMED_FRAMES = 2000
 EXTRA_TEST_RADII_M = (0.3,)
 FOCAL_GAMMA = 2.0
-DT_AVERAGE_FRAMES = 32         # intervals in stage 3's running time step; FROG's stamps come in bunches of 3 (`TODO.md` A51 0b)
+DT_AVERAGE_FRAMES = 32         # intervals in stage 3's running time step; FROG's stamps come in bunches of 3
 LFE_MISSING_RETURN_M = 10.0     # the FROG loader's legacy clamp, kept for LFE-Peaks' candidates only
 MIN_DT_S = 1e-3
 MAX_DT_S = 1.0
-DT_MODES = ("exact", "averaged")   # what a decimated stream tells the model about its gaps (`TODO.md` item 37)
+DT_MODES = ("exact", "averaged")   # what a decimated stream tells the model about its gaps
 GRAD_CLIP = 1.0
 EPOCH_TOLERANCE = 0.01
 TEST_STRIDES = (1, 5)
 CACHE_DIR = _HERE / ".takheliped_cache"
-DEFAULT_MODE = "official"       # FROG's published partition; `transferred` is its person-free complement (TODO.md A50)
+DEFAULT_MODE = "official"       # FROG's published partition; `transferred` is its person-free complement
 SPLITS = ("train", "val", "test")
 PRIOR_CHANNELS = 2
 ES_CONTINUOUS = 0x80000000
@@ -92,7 +92,7 @@ def _gated_assignment(cand_xy: np.ndarray, cand_valid: np.ndarray, gt_xy: np.nda
     """The one-to-one gated Hungarian pairs `(candidate index, person index)` within `radius`.
 
     Shared by `candidate_targets` and `matched_person_xy` so the two cannot drift: a divergence between *which*
-    candidates count as people and *which* person each one regresses towards would train item 46's head against a
+    candidates count as people and *which* person each one regresses towards would train the position-refinement head against a
     target the classification loss disagrees with.
     """
     idx = np.nonzero(cand_valid)[0]
@@ -114,7 +114,7 @@ def candidate_targets(cand_xy: np.ndarray, cand_valid: np.ndarray, gt_xy: np.nda
 
 
 def matched_person_xy(cand_xy: np.ndarray, cand_valid: np.ndarray, gt_xy: np.ndarray, radius: float) -> np.ndarray:
-    """Where the person each candidate matched actually is `[P, 2]`, NaN where it matched nobody (`TODO.md` item 46).
+    """Where the person each candidate matched actually is `[P, 2]`, NaN where it matched nobody.
 
     **NaN rather than zeros**, because a zero is a real position a metre in front of the sensor and an L1 loss would
     chase it. The matching uses the candidate's **own** position, not its refined one, so the head regresses towards a
@@ -130,7 +130,7 @@ def matched_person_xy(cand_xy: np.ndarray, cand_valid: np.ndarray, gt_xy: np.nda
 class SequenceCandidates:
     """One recording, per frame: candidates `[T, P]` (detection-frame xy, score, validity, person target), robot pose `[T, 3]`,
     timestamp, whether the frame is annotated, annotated people `[T, G]` (xy, validity, covered by a candidate), and the nearest
-    return per angular sector `[T, S]`, which is what tells a coasting slot apart from free space (A51 S2)."""
+    return per angular sector `[T, S]`, which is what tells a coasting slot apart from free space."""
     xy: np.ndarray
     score: np.ndarray
     valid: np.ndarray
@@ -151,7 +151,7 @@ _ANGLES: Dict[str, torch.Tensor] = {}
 
 
 def laser_angles(device) -> torch.Tensor:
-    """FROG's beam grid on `device`, cached per device: `ObjectMemory` needs it to map a slot's bearing to a sector (A51 S2)."""
+    """FROG's beam grid on `device`, cached per device: `ObjectMemory` needs it to map a slot's bearing to a sector."""
     key = str(device)
     if key not in _ANGLES:
         _ANGLES[key] = torch.from_numpy(frog_laser_angles(720)).to(device)
@@ -206,7 +206,7 @@ def frame_periods(time: np.ndarray, offsets: np.ndarray, lengths: np.ndarray, fr
     """Stage 3's time step for every frame `[F]` of recordings packed end to end: a causal running average of the stamped intervals, the
     plain mean until `frames` intervals have passed and an exponential average with rate `1 / frames` after, clipped to
     `[MIN_DT_S, MAX_DT_S]`. One stamped interval is never trusted: FROG stamps 40 Hz scans in bunches of 38 ms, 38 ms and under 0.1 ms,
-    and a division by one of those sent slot velocities to several m/s (`TODO.md` A51 0a). A recording's first frame has no elapsed time."""
+    and a division by one of those sent slot velocities to several m/s. A recording's first frame has no elapsed time."""
     out = np.full(len(time), MIN_DT_S)
     for offset, n in zip(offsets, lengths):
         average = 0.0
@@ -240,11 +240,11 @@ def pack(seqs: Sequence[SequenceCandidates]) -> Split:
 
 
 def decimate(split: Split, keep: np.ndarray, dt_mode: str = "exact") -> Split:
-    """`split` with only the frames `keep` marks, as if the sensor had stalled (`TODO.md` item 37).
+    """`split` with only the frames `keep` marks, as if the sensor had stalled.
 
-    Item 16 found the three recurrences tie, and this is the experiment that asks whether the adopted rule's one
+    The recurrence comparison found the three recurrences tie, and this is the experiment that asks whether the adopted rule's one
     distinguishing property -- decaying over **real elapsed time** -- is worth anything. It cannot be asked on FROG as
-    recorded: `frame_periods` averages the stamped intervals over `DT_AVERAGE_FRAMES`, rightly (A51 item 0a), so at a
+    recorded: `frame_periods` averages the stamped intervals over `DT_AVERAGE_FRAMES`, rightly, so at a
     near-constant 40.01 Hz the model has only ever seen a constant step and `exp(-dt * rate)` has been a fixed per-slot
     decay factor by construction. Dropping frames creates the gaps; `dt_mode` decides what the model is told about them.
 
@@ -321,8 +321,8 @@ class StreamSampler:
 class EarlyStopping:
     """Stop once `patience_evals` evaluations pass without a new best, never before `min_epochs`, always at `max_epochs`.
 
-    There is no time budget: epochs and patience bound a run, and a wall-clock cap only ever truncated a healthy one (A50 phase 1
-    item 6; A51's first full-curriculum run died inside its first chunk-length stage at 6 h)."""
+    There is no time budget: epochs and patience bound a run, and a wall-clock cap only ever truncated a healthy one (the DR-SPAAM
+    reproduction, and the slot study's first full-curriculum run, which died inside its first chunk-length stage at 6 h)."""
 
     def __init__(self, patience_evals: int, min_epochs: float, max_epochs: float):
         self.patience_evals, self.min_epochs, self.max_epochs = patience_evals, min_epochs, max_epochs
@@ -369,7 +369,7 @@ class BestCheckpoint:
 
 class PeriodicCheckpoint:
     """Checkpoints kept every `epochs` of training whatever they score, alongside `BestCheckpoint`'s single best, so test AP can be
-    measured against training duration instead of only at the run's best (`TODO.md` A50 phase 1 item 4). `epochs` of 0 keeps none.
+    measured against training duration instead of only at the run's best. `epochs` of 0 keeps none.
     An evaluation landing a little early still counts, within `EPOCH_TOLERANCE` of the interval, because iterations rarely divide an
     epoch exactly -- step 2's land at 0.2499, 0.4998 and so on."""
 
@@ -402,7 +402,7 @@ def plateau_schedule(optimizer: torch.optim.Optimizer, factor: float, patience_e
 
 def exponential_schedule(optimizer: torch.optim.Optimizer, min_lr: float, iterations: int) -> torch.optim.lr_scheduler.LambdaLR:
     """DR-SPAAM's learning rate (its `_ExpDecayScheduler`), stepped every iteration: geometric from the optimizer's rate down to
-    `min_lr` over `iterations` steps, then held there (`TODO.md` A59, arm R)."""
+    `min_lr` over `iterations` steps, then held there: DR-SPAAM's own schedule, adopted for stage 2."""
     ratio = min_lr / optimizer.param_groups[0]["lr"]
     return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: ratio ** min(1.0, step / iterations))
 
@@ -411,7 +411,7 @@ def gradient_verdict(loss: float, grad_norm: float, skipped: int, limit: int = G
     """What to do with this iteration: `take` it, `skip` it, or `stop` the run.
 
     A gradient norm that overflows float32 is survivable: `clip_grad_norm_` divides by it, so the update is zeroed and the next
-    iteration continues from the same weights. Treating that as fatal once ended a healthy run at its best epoch (`TODO.md` A51 E6).
+    iteration continues from the same weights. Treating that as fatal once ended a healthy run at its best epoch.
     A non-finite loss means the model itself is gone, and a stream of overflowing steps means it is going.
     """
     if not math.isfinite(loss):
@@ -422,9 +422,9 @@ def gradient_verdict(loss: float, grad_norm: float, skipped: int, limit: int = G
 
 
 def clip_state_grad(grad: torch.Tensor, bound: float, counter: Optional[List[int]] = None) -> torch.Tensor:
-    """Bound one frame's gradient at the carried slot state, so a long chunk cannot compound -- `TODO.md` item 53.
+    """Bound one frame's gradient at the carried slot state, so a long chunk cannot compound.
 
-    `GRAD_CLIP` acts on the parameters once `backward` has already finished, which is far too late: item 42's arm
+    `GRAD_CLIP` acts on the parameters once `backward` has already finished, which is far too late: the Slot-Attention arm
     overflowed *inside* the backward pass, where the gradient reaching the carried state grew 2.1x per frame and was
     infinite some 60 frames before the chunk's end. Bounding each frame's gradient as it is produced removes the
     compounding and **touches nothing in the forward pass**, so the function being trained is unchanged and only the
@@ -520,7 +520,7 @@ def load_resume(path: Path, resume: bool) -> Optional[Dict[str, object]]:
 
 
 def periodic_reset(since_s: np.ndarray, dt: np.ndarray, interval_s: Optional[float]):
-    """Which streams `[B]` empty their memory this frame, and the updated time since each last did (`TODO.md` A51 E1). With no
+    """Which streams `[B]` empty their memory this frame, and the updated time since each last did. With no
     interval nothing resets, which is how a run is scored normally."""
     elapsed = since_s + dt
     if not interval_s:
@@ -530,7 +530,7 @@ def periodic_reset(since_s: np.ndarray, dt: np.ndarray, interval_s: Optional[flo
 
 
 def sample_drift(rng: np.random.Generator, streams: int, max_drift_m_per_s: float, max_heading_deg_per_s: float):
-    """One odometry drift rate per stream, uniform over `[0, max]` (A51 S3). Redrawn each chunk, so a stream is not tied to one
+    """One odometry drift rate per stream, uniform over `[0, max]`. Redrawn each chunk, so a stream is not tied to one
     rate for a whole run and the model sees the band E2 measured -- wheel odometry at FROG's speeds drifts 0.005-0.025 m/s, and
     the room frame's advantage inverts somewhere inside it."""
     return rng.uniform(0.0, max_drift_m_per_s, streams), rng.uniform(0.0, max_heading_deg_per_s, streams)
@@ -548,11 +548,11 @@ def chunk_elapsed(dt: np.ndarray, reset: np.ndarray, carry: np.ndarray):
 
 
 def perturb_poses(pose: np.ndarray, elapsed_s: np.ndarray, drift_m_per_s, heading_deg_per_s) -> np.ndarray:
-    """Odometry as a drifting estimate rather than ground truth (`TODO.md` A51 E2): a translation error growing at
+    """Odometry as a drifting estimate rather than ground truth: a translation error growing at
     `drift_m_per_s` and a heading error at `heading_deg_per_s`, both a deterministic function of how long each stream has been
     running, so the error accumulates the way real odometry drifts instead of jittering frame to frame.
 
-    Either rate may be a scalar, as evaluation uses it, or one rate per stream `[B]`, as training does (A51 S3): domain
+    Either rate may be a scalar, as evaluation uses it, or one rate per stream `[B]`, as training does: domain
     randomisation needs every stream on its own rate, so the model sees the whole band rather than one point in it.
     """
     if not np.any(drift_m_per_s) and not np.any(heading_deg_per_s):
@@ -567,7 +567,7 @@ def perturb_poses(pose: np.ndarray, elapsed_s: np.ndarray, drift_m_per_s, headin
 
 def memory_schedule(optimizer: torch.optim.Optimizer, schedule: str, max_epochs: float, iterations: int, factor: float, patience: int,
                     min_lr: float) -> Tuple[object, bool]:
-    """Stage 3's learning-rate schedule and whether it steps every iteration (`TODO.md` A51 T2). The cosine schedule spans
+    """Stage 3's learning-rate schedule and whether it steps every iteration. The cosine schedule spans
     `max_epochs` per chunk length, so it hardly decays in the 9-37 epochs a stage runs; the plateau schedule steps once per
     evaluation on val AP, as step 2 does."""
     if schedule == "plateau":
@@ -602,7 +602,7 @@ def candidate_pooling_weights(det_xy: np.ndarray, vote_xy: np.ndarray, prob: np.
 
 def voting_beams(scan: np.ndarray, prob: np.ndarray, max_range_m: float) -> Tuple[np.ndarray, np.ndarray]:
     """A frame's ranges as the network read them, and its per-beam probabilities with every beam at the range limit silenced: with
-    nothing within range there is no surface for a person to stand on (`TODO.md` A50; +0.28 to +0.39 pp test AP on all six
+    nothing within range there is no surface for a person to stand on (+0.28 to +0.39 pp test AP on all six
     seed-matched checkpoints, 2026-09-17)."""
     anchored = anchor_ranges(scan, max_range_m)
     return anchored, np.where(anchored < max_range_m, prob, 0.0)
@@ -618,7 +618,7 @@ def beam_frame_votes(votes: np.ndarray, angles: np.ndarray, frame: str) -> np.nd
     """Stage 2's head output `[..., N, 2]` as the beam-frame `(across, along)` offsets every decoder here reads.
 
     A network trained with `--vote-frame sensor` regresses the offset in the sensor's own Cartesian frame instead
-    (`TODO.md` item 18). The two name the same point, so one rotation puts either on the decoders' convention and
+. The two name the same point, so one rotation puts either on the decoders' convention and
     nothing downstream -- `nms_decode`, the vote grid, the probe's eight decoders -- has to know which arm produced it.
     The loss is the one place that must *not* convert: it is taken in the frame the head regresses.
     """
@@ -633,7 +633,7 @@ def nms_decode(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np
     voters = voters[np.argsort(-prob[voters], kind="stable")]
     p, xy = prob[voters], beam_votes(scan[voters], angles[voters], votes[voters])
     # The loop walks only the beams still alive -- a frame offers ~314 voters and keeps ~22, so iterating all of them spent
-    # 93% of the decode deciding to do nothing (`TODO.md` item 30). `alive` stays sorted and ascending, which is what makes
+    # 93% of the decode deciding to do nothing. `alive` stays sorted and ascending, which is what makes
     # this identical rather than merely equivalent: `members` is drawn in the same order, so the weighted means agree bit for
     # bit with the decoder every number on disk was produced under (`tests/test_stage2_probe.py::_reference_nms`).
     alive = np.arange(len(voters))
@@ -649,7 +649,7 @@ def nms_decode(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np
 
 
 def decode_frame(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np.ndarray) -> np.ndarray:
-    """Stage 2's decoder (`TODO.md` A59, owner's call 2026-10-06): `nms-mean`, detections `(score, x, y)` `[K, 3]`. It beat DROW's vote
+    """Stage 2's decoder (owner's call 2026-10-06): `nms-mean`, detections `(score, x, y)` `[K, 3]`. It beat DROW's vote
     grid on all six checkpoints, +2.6 to +3.2 pp test AP, chosen on val; the vote grid merged people standing side by side."""
     return nms_decode(scan, angles, prob, votes, NMS_DIST_M, average=True)
 
@@ -659,7 +659,7 @@ CANDIDATE_MERGE_M = 0.30        # below the 0.5 m match radius, so collapsing a 
 
 def union_decode(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, votes: np.ndarray,
                  merge_m: float = CANDIDATE_MERGE_M) -> np.ndarray:
-    """Both candidate decoders at once -- `nms-mean` and DROW's vote grid -- deduplicated, strongest first (`TODO.md` item 34).
+    """Both candidate decoders at once -- `nms-mean` and DROW's vote grid -- deduplicated, strongest first.
 
     **Why both.** Measured 2026-10-15 at matched false positives over three seeds: each decoder covers about **900 people of
     30,283 that the other misses**, so their union reaches 91.8-92.5% where the better alone reaches 88.9-89.7%. Neither is
@@ -698,9 +698,9 @@ def network_shape(args: Dict[str, str]) -> Dict[str, object]:
     """The `CalibrationNetwork` arguments a stage-2 run's `args` (stored as strings) fix, because they change what the input means
     or which weights exist: the range limit, the input (`--input-features`), the widths (`--channels`), the metric gather
     (`--gather-width-m`, `--gather-samples`), the head's target frame (`--vote-frame`), the block (`--block`), the
-    whole-scan aggregator (`--aggregator`) and the four shape knobs of item 45 (`--kernel-size`, `--expansion`,
-    `--blocks`, `--bottleneck-blocks`) -- the widths and input for the attribution arms F1 and W (`TODO.md` A59), then
-    items 15, 18, 19, 40 and 45. A flag left unset, or written before it
+    whole-scan aggregator (`--aggregator`) and the four flat shape knobs (`--kernel-size`, `--expansion`,
+    `--blocks`, `--bottleneck-blocks`) -- the widths and input for the attribution arms F1 and W, then
+    the sweeps that found them flat. A flag left unset, or written before it
     existed, falls back to the constructor's own default rather than to a second copy of it here."""
     parameters = signature(CalibrationNetwork).parameters
     unset = (None, "None")
@@ -722,7 +722,7 @@ def network_shape(args: Dict[str, str]) -> Dict[str, object]:
 def calibration_network(checkpoint: dict, angles: np.ndarray, **overrides) -> CalibrationNetwork:
     """The checkpoint's weights in a network shaped the way they were trained (`network_shape`); `overrides` (e.g.
     `prior_channels`) go straight to the constructor and win. Weights load through `load_calibration_weights`, which folds
-    checkpoints of earlier architectures and refuses those whose temporal convolutions read past frames (`TODO.md` A50, A60).
+    checkpoints of earlier architectures and refuses those whose temporal convolutions read past frames.
     """
     net = CalibrationNetwork(torch.from_numpy(angles), **{**network_shape(checkpoint.get("args", {})), **overrides})
     load_calibration_weights(net, checkpoint["model"])
@@ -732,7 +732,7 @@ def calibration_network(checkpoint: dict, angles: np.ndarray, **overrides) -> Ca
 def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = None, **overrides) -> ObjectMemory:
     """A stage-3 checkpoint's memory, shaped the way it was trained.
 
-    The slot capacity and the rescoring arms (`TODO.md` A51: the scalar gate, and the correction's limit) change what parameters
+    The slot capacity and the rescoring arms (the scalar gate, and the correction's limit) change what parameters
     exist, so they are read from the checkpoint's `args` (stored as strings); a checkpoint written before a flag existed falls back
     to the constructor's own default. `capacity` replays the memory at another slot count while keeping every other rule the
     checkpoint was trained with; `overrides` go straight to the constructor and win over what the checkpoint recorded.
@@ -750,7 +750,7 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
              "global_state": parameters["global_state"].default if args.get("global_state") is None else literal_eval(args["global_state"]),
              "refine": parameters["refine"].default if args.get("refine") is None else literal_eval(args["refine"]),
              "iterations": parameters["iterations"].default if args.get("iterations") is None else int(args["iterations"]),
-             # Item 49. A shape key, not an option: a resumed `--dim 64` arm that rebuilt at 128 would refuse its
+             # A shape key, not an option: a resumed `--dim 64` arm that rebuilt at 128 would refuse its
              # own weights, and a checkpoint predating the flags has to keep loading at the adopted 128/4.
              "dim": parameters["dim"].default if args.get("dim") is None else int(args["dim"]),
              "heads": parameters["heads"].default if args.get("heads") is None else int(args["heads"]),
@@ -766,7 +766,7 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
                       latest_value=SlotRules().latest_value if args.get("latest_value") is None else literal_eval(args["latest_value"]),
                       association=SlotRules().association if args.get("association") is None else args["association"],
                       cell_m=SlotRules().cell_m if args.get("cell_m") is None else float(args["cell_m"]))
-    # `TODO.md` item 48. A top-level key, not an entry in `args`: the pair is fitted on val *after* training by
+    # The post-hoc score calibration. A top-level key, not an entry in `args`: the pair is fitted on val *after* training by
     # `calibrate_rescore.py`, so recording it as a training argument would claim something that never happened. Absent,
     # the constructor's identity default applies and the checkpoint scores exactly as it did before the key existed.
     fitted = checkpoint.get("calibration")
@@ -774,7 +774,7 @@ def object_memory(checkpoint: dict, feature_dim: int, capacity: Optional[int] = 
         shape["calibration"] = (float(fitted["temperature"]), float(fitted["bias"]))
     memory = ObjectMemory(rules, feature_dim=feature_dim, **{**shape, **overrides})
     state = checkpoint["model"]
-    if memory.rescore is None:                           # A51 E12a drops the head, so its trained weights have nowhere to go
+    if memory.rescore is None:                           # the no-rescore arm drops the head, so its trained weights have nowhere to go
         state = {k: v for k, v in state.items() if not k.startswith("rescore")}
     memory.load_state_dict(state)
     return memory
@@ -961,7 +961,7 @@ def evaluation_segments(split, windows: int, window_frames: int, warmup_frames: 
     proportion to how much of each is placeable.
 
     A window is placeable where its scored span holds an annotated frame; evenly spaced over the whole recording, 6 of 64 held
-    none on the 2026-10-09 val cache and cost their warm-up for no signal (`TODO.md` A50 phase 1 item 3). Where nothing is
+    none on the 2026-10-09 val cache and cost their warm-up for no signal. Where nothing is
     annotated at all the whole range is used, so a smoke run still gets its windows."""
     span = warmup_frames + window_frames
     room = {s: int(n) - span for s, n in enumerate(split.lengths) if n >= span}
@@ -991,12 +991,11 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
 
     The memory's scores also carry its own operating point at the candidates' false positives per frame, coasting reports at 0.3 per
     frame with the share landing on people no kept candidate covers, and the median rescoring shift in logits on candidates that are a
-    person and on the rest (`TODO.md` A51 0c); `extra_radii` adds AP at further match radii to both, as `ap_<radius>m`.
+    person and on the rest; `extra_radii` adds AP at further match radii to both, as `ap_<radius>m`.
 
-    `reset_every_s` empties every stream's memory on that period, which measures how long a memory the model actually uses (A51
-    E1); `drift_m_per_s` and `heading_deg_per_s` corrupt the odometry the slots are keyed on, which prices the room-frame design
-    against a robot whose odometry drifts (A51 E2). `frames_out`, when given, receives the scored frames as `candidates` and
-    `memory` lists of (scores, xy, annotated people), with each frame's packed index in `index` (A56); `compute_metrics=False` then skips
+    `reset_every_s` empties every stream's memory on that period, which measures how long a memory the model actually uses; `drift_m_per_s` and `heading_deg_per_s` corrupt the odometry the slots are keyed on, which prices the room-frame design
+    against a robot whose odometry drifts. `frames_out`, when given, receives the scored frames as `candidates` and
+    `memory` lists of (scores, xy, annotated people), with each frame's packed index in `index`; `compute_metrics=False` then skips
     the metrics, which on every annotated test frame cost far more than the replay."""
     model.eval()
     raw, memory, index, rescored, slot_age = [], [], [], [], []
@@ -1034,7 +1033,7 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                 cand_p = torch.sigmoid(out.candidate_logit)[rows].cpu().numpy()
                 slot_p = torch.sigmoid(out.slot_logit)[rows].cpu().numpy()
                 valid, xy, coasting = batch["valid"][rows, i].cpu().numpy(), batch["xy"][rows, i].cpu().numpy(), out.coasting[rows].cpu().numpy()
-                # Where the memory reports each candidate (`TODO.md` item 46). Identical to `xy` unless the memory has
+                # Where the memory reports each candidate. Identical to `xy` unless the memory has
                 # a refinement head, and the `raw` row below keeps `xy` either way -- the candidates baseline has to
                 # keep its own positions or the comparison measures the arm against itself.
                 refined = out.candidate_xy[rows].cpu().numpy()
@@ -1049,10 +1048,10 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                     index.append(int(split.offsets[recording[rows[j], 0]] + frame[rows[j], t]))
                     raw.append((score[j][valid[j]], xy[j][valid[j]], gt[j]))
                     # Where the rescored candidates end and the coasting reports begin in the frame built below: the one
-                    # number that separates "the memory scored this wrong" from "the memory invented it" (`TODO.md` item 27).
+                    # number that separates "the memory scored this wrong" from "the memory invented it".
                     rescored.append(int(valid[j].sum()))
                     # Each reported candidate's backing slot age, scattered from the slot that matched it: the quantity a
-                    # creation or confirmation rule acts on (`TODO.md` item 14). NaN where no slot matched the candidate.
+                    # creation or confirmation rule acts on. NaN where no slot matched the candidate.
                     backing = np.full(len(valid[j]), np.nan)
                     taken = matched_slot[j]
                     backing[match_index[j][taken]] = age_s[j][taken]
@@ -1149,16 +1148,16 @@ def train_memory(args) -> None:
           f"{('fixed at %g s' % args.fixed_decay_s) if args.fixed_decay_s else ('learned per slot' if args.recurrence == 'selective' else 'no decay term')}"
           # Which recurrence ran, because selective and minGRU have *identical* parameter counts -- selective's
           # bias-free `decay` plus its own `decay_bias` is exactly minGRU's `gate` with bias -- so the count cannot
-          # tell two arms apart and a sweep's logs have to say it outright (`TODO.md` item 38).
+          # tell two arms apart and a sweep's logs have to say it outright.
           f", {args.recurrence} recurrence"
           # Every arm of the sweep has to be identifiable from its own log line. This print has now hidden three of
           # them -- the recurrence, the global state and this head -- and a reader should not have to subtract
-          # parameter counts to tell an arm from its control (`TODO.md` items 38, 36, 46).
+          # parameter counts to tell an arm from its control.
           f"{f', position refinement at weight {args.refine_weight:g}' if args.refine else ''}"
-          f"{f', SLOT ATTENTION at {args.iterations} iterations (item 42) in place of the hand-coded update and the recall' if args.iterations else ''}"
+          f"{f', SLOT ATTENTION at {args.iterations} iterations in place of the hand-coded update and the recall' if args.iterations else ''}"
           f"{'' if args.exchange else ', no slot exchange'}{'' if args.learned_match else ', no learned matching'}"
           f"{'' if args.recurrent else ', no slot state at all'}"
-          f"{', ONE GLOBAL SCENE STATE and no addressable slots (item 36)' if args.global_state else ''}", flush=True)
+          f"{', ONE GLOBAL SCENE STATE and no addressable slots' if args.global_state else ''}", flush=True)
     start = time.time()
     history, done_hours, first_stage, first_epoch = [], 0.0, 0, 0
     if resumed:
@@ -1217,7 +1216,7 @@ def train_memory(args) -> None:
                     annotated = batch["annotated"][:, t, None]
                     missed = batch["gt_valid"][:, t] & ~batch["gt_covered"][:, t]
                     loss = loss + focal_loss(out.candidate_logit, batch["target"][:, t], batch["valid"][:, t] & annotated)
-                    if model.refine is not None:          # `TODO.md` item 46; no cost at all when the head is absent
+                    if model.refine is not None:          # the refinement head; no cost at all when it is absent
                         loss = loss + args.refine_weight * refinement_loss(
                             out.candidate_xy, batch["xy"][:, t], batch["valid"][:, t], batch["gt_xy"][:, t],
                             batch["gt_valid"][:, t], annotated, MATCH_RADIUS_M)
@@ -1364,7 +1363,7 @@ PRIOR_MODES = ("slots", "oracle", "zero")       # what stage 2 is fed back: the 
 
 def oracle_prior(people: Sequence[np.ndarray], angles: torch.Tensor, sectors: int, device) -> torch.Tensor:
     """The prior a perfect memory would draw, `[B, 2, S]`: every annotated person marked in its sector at full value and full
-    person probability (A51 E12b), which bounds what any feedback design could buy.
+    person probability, which bounds what any feedback design could buy.
 
     A frame with no annotation draws nothing rather than carrying the last one forward: stale positions would stop this being an
     upper bound, and it costs nothing here, because the oracle holds no state and every frame that is scored is annotated.
@@ -1386,7 +1385,7 @@ def joint_step(net: CalibrationNetwork, memory: ObjectMemory, ranges: torch.Tens
     the slots' predicted positions drawn into stage 2's bottleneck, stage 2, candidates decoded by `decode_frame` and their
     features pooled from stage 2's decoder -- the path by which stage 3's loss reaches stage 2 -- and stage 3.
 
-    `prior` `[B, 2, N/8]` replaces what the slots would have drawn and skips drawing it, which is how A51 E12b feeds the oracle."""
+    `prior` `[B, 2, N/8]` replaces what the slots would have drawn and skips drawing it, which is how the oracle prior is fed in."""
     b, n = ranges.shape
     device = ranges.device
     sectors = n // 8
@@ -1436,7 +1435,7 @@ def evaluate_calibration(net: CalibrationNetwork, split: FrameSplit, positions: 
 
 def select_test_weights(net: CalibrationNetwork, best: BestCheckpoint, select: str, last: Dict[str, object], device) -> None:
     """Put into `net` the weights the test scores: the run's best on val, or with `select` "last" (DR-SPAAM's protocol, `TODO.md`
-    A59 arm R) the weights training ended on, saved first as `step2_calibration.last.pth` beside the best so the probe can score
+    DR-SPAAM's schedule) the weights training ended on, saved first as `step2_calibration.last.pth` beside the best so the probe can score
     both. `last` is the rest of that checkpoint: its epoch and args."""
     if select == "last":
         torch.save(dict(model=net.state_dict(), **last), best.path.with_name("step2_calibration.last.pth"))
@@ -1507,7 +1506,7 @@ def train_calibration(args) -> None:
                                     frame=net.vote_frame) for s, g in zip(scans, people, strict=True)]
             labels = torch.from_numpy(np.stack([t[0] for t in targets])).to(device)
             vote_targets = torch.from_numpy(np.stack([t[1] for t in targets])).to(device)
-            # `TODO.md` item 44(a). The same geometry and the same radius as `make_targets`, so the positive beams are
+            # The soft Gaussian beam target. The same geometry and the same radius as `make_targets`, so the positive beams are
             # identical and only their *values* change -- hard 1 to a metric Gaussian. The vote target is untouched.
             soft = None if not args.label_sigma_m else torch.from_numpy(np.stack([
                 beam_heatmap(anchor_ranges(s, net.max_range_m), angles, {3: [tuple(p) for p in g]},
@@ -1605,7 +1604,7 @@ def evaluate_joint(net: CalibrationNetwork, memory: ObjectMemory, split: FrameSp
     and score every `stride`-th annotated frame after its warm-up: stage 2's candidates alone (the memory's feedback already in them),
     and the candidates rescored plus coasting slots.
 
-    `prior_mode` picks what stage 2 is fed back: `slots` is the memory's own, `oracle` a ground-truth one (A51 E12b's ceiling), and
+    `prior_mode` picks what stage 2 is fed back: `slots` is the memory's own, `oracle` a ground-truth one (the ceiling on feedback), and
     `zero` nothing at all. Scoring one trained network at `zero` against the mode it was trained with is what measures the feedback
     path's contribution, without a second training run that could compensate for the missing channels."""
     if prior_mode not in PRIOR_MODES:
@@ -1750,7 +1749,7 @@ def train_joint(args) -> None:
     test = splits["test"]
     segments = evaluation_segments(SimpleNamespace(lengths=recording_bounds(test.start)[1]), 0, 0, 0)
     result = evaluate_joint(net, memory, test, segments, 1, device, args.val_windows, mode)
-    # the same trained network with the feedback channels fed nothing: the difference is what the prior actually contributes (A51 E12)
+    # the same trained network with the feedback channels fed nothing: the difference is what the prior actually contributes
     silent = evaluate_joint(net, memory, test, segments, 1, device, args.val_windows, "zero") if args.prior_channels else result
     contribution = 100 * (result["candidates"]["ap"] - silent["candidates"]["ap"])
     print(f"\nfeedback contribution: stage 2 AP {result['candidates']['ap']:.2%} with the {mode} prior against "
@@ -1851,7 +1850,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--resume", action="store_true", help="continue from this run's saved state in --out-dir, written after every "
                                                              "evaluation; a crash then costs the time since it, not the whole run")
     for step1 in (sub.choices["step1"], sub.choices["step3a"]):
-        step1.add_argument("--chunk-s", type=float, nargs="+", default=[10.0], help="chunk-length curriculum, seconds. Default is the adopted single 10 s stage (item 41): the 1 s warm-up tied and cost 24% of training time, and it carried two of the sweep's five out-of-memory failures through its 26-stream configuration. `--chunk-s 1 10` restores the curriculum")
+        step1.add_argument("--chunk-s", type=float, nargs="+", default=[10.0], help="chunk-length curriculum, seconds. Default is the adopted single 10 s stage: the 1 s warm-up tied and cost 24% of training time, and it carried two of the sweep's five out-of-memory failures through its 26-stream configuration. `--chunk-s 1 10` restores the curriculum")
         step1.add_argument("--max-epochs", type=float, default=100, help="per chunk length; patience usually ends a stage first")
         step1.add_argument("--patience", type=int, default=8, help="evaluations without a new best val AP")
         step1.add_argument("--min-epochs", type=float, default=5, help="per chunk length")
@@ -1866,7 +1865,7 @@ def build_parser() -> argparse.ArgumentParser:
         step1.add_argument("--limit-recordings", type=int, default=0, help="use only the first N recordings of each split (smoke runs)")
         step1.add_argument("--schedule", choices=("cosine", "plateau"), default="cosine",
                            help="cosine spans --max-epochs per chunk length, so it hardly decays in the epochs a stage runs; plateau cuts "
-                                "the rate when val AP stalls, as step 2 does (TODO A51 T2)")
+                                "the rate when val AP stalls, as step 2 does")
         step1.add_argument("--lr-factor", type=float, default=0.3, help="plateau only: how much to cut the rate by")
         step1.add_argument("--lr-patience", type=int, default=2, help="plateau only: evaluations without improvement before a cut")
         step1.add_argument("--min-lr", type=float, default=1e-5, help="plateau only: rate floor")
@@ -1875,45 +1874,45 @@ def build_parser() -> argparse.ArgumentParser:
                                 "second full pass")
         step1.add_argument("--coast-weight", type=float, default=1.0,
                            help="weight of the coasting loss against the candidate loss; the coasting head holds a live slot on 95.5%% of the "
-                                "people stage 3 fails to report, yet ranks them too low to report (TODO A51 O2)")
+                                "people stage 3 fails to report, yet ranks them too low to report")
         step1.add_argument("--state-grad-clip", type=float, default=0.0,
                            help="bound each frame's gradient at the carried slot state; 0 disables, and it stays off by default "
                                 "because turning it on would change the gradient estimator of every arm already measured. Needed "
                                 "only when --iterations > 1, whose residual update compounds 2.1x per frame and overflows float32 "
-                                "about 60 frames into a chunk (TODO item 53)")
+                                "about 60 frames into a chunk")
         step1.add_argument("--train-drift-m-per-s", type=float, default=0.0,
                            help="train with odometry that drifts, at a rate drawn per stream from [0, this] and redrawn each chunk; "
-                                "E2 showed the room frame's advantage inverts around 0.02 m/s and real wheel odometry reaches it (TODO A51 S3/E11)")
+                                "the room frame's advantage inverts around 0.02 m/s, and real wheel odometry reaches it")
         step1.add_argument("--train-heading-deg-per-s", type=float, default=0.0,
                            help="the heading half of that drift, degrees per second")
         step1.add_argument("--visibility", action="store_true",
                            help="give the slot statistics the free space the laser saw past each slot, so the coasting head can tell an "
-                                "occluded person from a phantom (TODO A51 S2)")
+                                "occluded person from a phantom")
         step1.add_argument("--recurrent", action=argparse.BooleanOptionalAction, default=True,
                            help="carry a learned state per slot; --no-recurrent leaves the rescoring head a candidate and the statistics of "
-                                "the slot matched to it, which tests whether this is a learned memory or a tracker with a scorer (TODO A51 E10)")
+                                "the slot matched to it, which tests whether this is a learned memory or a tracker with a scorer")
         step1.add_argument("--exchange", action=argparse.BooleanOptionalAction, default=False,
-                           help="self-attention between slots; --no-exchange removes it, which is the design's only O(K^2) term (TODO A51 E6)")
+                           help="self-attention between slots; --no-exchange removes it, which is the design's only O(K^2) term")
         step1.add_argument("--learned-match", action=argparse.BooleanOptionalAction, default=False,
                            help="cross-attention from slots to candidates; --no-learned-match leaves each slot the candidate its hand-coded "
-                                "association matched (TODO A51 E7). Both flags off together is a per-slot recurrent memory, the baseline "
+                                "association matched. Both flags off together is a per-slot recurrent memory, the baseline "
                                 "a reviewer would ask for")
         step1.add_argument("--room-frame", action=argparse.BooleanOptionalAction, default=True,
                            help="keep slots in room coordinates, so a static object keeps zero velocity; --no-room-frame keeps them in "
-                                "the sensor frame, the ablation of the design's central claim (TODO A51 D1)")
+                                "the sensor frame, the ablation of the design's central claim")
         step1.add_argument("--latest-value", action="store_true",
-                           help="hold a slot by the latest candidate score instead of its accumulated value (TODO A51 D2)")
+                           help="hold a slot by the latest candidate score instead of its accumulated value")
         step1.add_argument("--fixed-decay-s", type=float, default=0.0,
                            help="give every slot one decay time instead of a learned, input-dependent one; 0 keeps the learned decay "
-                                "(TODO A51 D3)")
+                                "")
         step1.add_argument("--learn-value", action="store_true",
                            help="make the value rule's gain and fade time parameters the loss can reach, the bookkeeping's only "
-                                "trainable part (TODO A51 D4)")
+                                "trainable part")
         step1.add_argument("--rescore-gate", action=argparse.BooleanOptionalAction, default=True,
                            help="scale the rescoring by a scalar that starts at zero; --no-rescore-gate zero-initialises the head's last "
-                                "layer instead, which starts equally silent but leaves the head's own gradient unscaled (TODO A51 T1)")
+                                "layer instead, which starts equally silent but leaves the head's own gradient unscaled")
         step1.add_argument("--recurrence", choices=RECURRENCES, default="mingru",
-                           help="which rule updates a slot's state (TODO.md item 16). selective: a diagonal state whose "
+                           help="which rule updates a slot's state. selective: a diagonal state whose "
                                 "decay rate is read off the input and applied over the real elapsed time, exp(-dt * rate) "
                                 "in seconds -- the adopted one, and D3 measured the learned rate as load-bearing. gru: the "
                                 "textbook gated recurrent unit. mingru: Feng et al.'s minimal variant, no reset gate. "
@@ -1921,47 +1920,47 @@ def build_parser() -> argparse.ArgumentParser:
                                 "take a step, and a robot's frames are not uniformly spaced")
         step1.add_argument("--refine", action=argparse.BooleanOptionalAction, default=False,
                            help="let each slot regress a correction to its candidate's reported position, trained with "
-                                "an L1 loss against the person it matched (TODO.md item 46, A51's O3). The only head on "
-                                "the list that moves a detection rather than rescoring it, which is why item 35 gives it "
+                                "an L1 loss against the person it matched. The only head on "
+                                "the list that moves a detection rather than rescoring it, which is why the coverage audit gives it "
                                 "a reason: at its own threshold the memory recovers 203 person-observations and loses "
                                 "2,990, so all of its gain is ranking. Starts silent -- the last layer is zero "
                                 "initialised -- so an untrained arm reports exactly the candidate's own position")
         step1.add_argument("--refine-weight", type=float, default=1.0,
-                           help="weight on item 46's L1 refinement loss, relative to the candidate focal loss")
+                           help="weight on the refinement head's L1 loss, relative to the candidate focal loss")
         step1.add_argument("--cell-m", type=float, default=0.0,
-                           help="grid slots (TODO.md item 22): snap each slot's position to the centre of a room cell "
+                           help="grid slots: snap each slot's position to the centre of a room cell "
                                 "of this many metres and never move it, so the slot addresses a patch of the room "
                                 "rather than an object; 0, the default, keeps the adopted tracking slots. Everything "
                                 "else is unchanged -- same capacity, room frame, recurrence, recall, head and eviction "
-                                "-- so the arm varies only whether binding is spatial or object-centric. Item 36 showed "
+                                "-- so the arm varies only whether binding is spatial or object-centric. The global-state ablation showed "
                                 "addressability is load-bearing but never tested which kind. Sparse by construction: "
                                 "only occupied cells take a slot, which is what makes FROG's 120-250 m venue "
                                 "affordable where a dense person-scale grid would need ~46,000 cells")
         step1.add_argument("--dim", type=int, default=64,
-                           help="width of a slot's state vector (TODO.md item 49). Never varied: item 45 swept stage "
+                           help="width of a slot's state vector. Never varied: the shape sweep covered stage "
                                 "2's four shape knobs and deferred this one and --heads to the stage-3 half, which "
                                 "then never ran, so the adopted 128 is a choice nobody has priced. It is also the one "
                                 "knob that could cut CPU cost, and CPU is the axis that decides deployment -- so a tie "
                                 "at 64 is itself a win")
         step1.add_argument("--heads", type=int, default=4,
                            help="attention heads in the recall (and in the match and exchange where those are on) -- "
-                                "TODO.md item 49, deferred by item 45 and never varied. Same parameter count at any "
+                                "and never varied. Same parameter count at any "
                                 "head split, so expect nothing; it is here because 'never varied' is not evidence")
         step1.add_argument("--iterations", type=int, default=0,
                            help="run Slot Attention's own update (Locatello et al., NeurIPS 2020) for this many "
                                 "iterations per frame, in place of the hand-coded state update and the separate recall "
-                                "attention (TODO.md item 42); 0, the default, keeps the adopted path. Slots compete for "
+                                "attention; 0, the default, keeps the adopted path. Slots compete for "
                                 "the frame's candidates through a softmax over SLOTS, each slot's update is the "
                                 "attention-weighted mean of what it won, and --recurrence folds that into its state. "
-                                "The conclusion of item 38's logic: item 36 proved the slot abstraction load-bearing "
-                                "and item 38 preferred a citable cell to a re-implemented one, so if the published "
+                                "The conclusion of the recurrence decision: one global state captured 5% of what the slots deliver, so the abstraction is load-bearing, "
+                                "and a citable cell was preferred to a re-implemented one, so if the published "
                                 "update also works the architecture becomes 'Slot Attention over LiDAR candidates'. "
                                 "manage_slots still runs -- it is what gives a slot its room-frame position -- and the "
-                                "proximity bias stays, because item 39 priced it as load-bearing and dropping it would "
+                                "proximity bias stays, because it was priced as load-bearing and dropping it would "
                                 "change two things at once. Refuses --learned-match, --exchange, --no-recurrent and "
                                 "--global-state")
         step1.add_argument("--association", choices=ASSOCIATIONS, default="mutual",
-                           help="how slots are paired to candidates (TODO.md item 43). mutual, the adopted rule: a "
+                           help="how slots are paired to candidates. mutual, the adopted rule: a "
                                 "slot's nearest candidate and that candidate's nearest slot must agree. hungarian: the "
                                 "globally optimal one-to-one assignment under the same gate -- the standard primitive, "
                                 "which differs from mutual only under contention, and which S4 suggests has about 0.8% "
@@ -1969,7 +1968,7 @@ def build_parser() -> argparse.ArgumentParser:
                                 "scipy call per frame inside the phase that dominates the CPU budget")
         step1.add_argument("--global-state", action=argparse.BooleanOptionalAction, default=False,
                            help="replace the addressable per-object slots with ONE scene-level recurrent state (TODO.md "
-                                "item 36): no association, no spawn, no eviction, no per-slot decay. The frame's "
+                                "the global-state ablation): no association, no spawn, no eviction, no per-slot decay. The frame's "
                                 "candidates are attention-pooled into one vector, that updates the single state through "
                                 "the same --recurrence, and every candidate is rescored against it. The strongest attack "
                                 "on this project's own contribution: if one global state matches 256 addressable slots, "
@@ -1977,12 +1976,12 @@ def build_parser() -> argparse.ArgumentParser:
                                 "both read a slot's position")
         step1.add_argument("--coast", action=argparse.BooleanOptionalAction, default=False,
                            help="restore the coasting head, which lets a slot report a person no candidate covers. **Removed "
-                                "from the architecture 2026-10-16** (TODO item 24): ablating it cost nothing measurable, and it "
+                                "from the architecture 2026-10-16**: ablating it cost nothing measurable, and it "
                                 "fired 0.0012-0.0020 times per populated frame and 2/0/0 times across 72,533 person-free "
                                 "frames. --coast reproduces every run published before that date, which had it")
         step1.add_argument("--rescore-limit", type=float, default=0.0,
                            help="bound the rescoring correction to +-this many logits through a tanh; 0 leaves it unbounded, as it was "
-                                "when it shifted the whole score distribution down (TODO A51 O1)")
+                                "when it shifted the whole score distribution down")
     sub.choices["step1"].set_defaults(stage2=None)
     sub.choices["step3a"].add_argument("--stage2", type=Path, required=True, help="trained stage 1-2 checkpoint whose candidates stage 3 learns from")
     step3b = sub.choices["step3b"]
@@ -2009,64 +2008,64 @@ def build_parser() -> argparse.ArgumentParser:
     step4.add_argument("--limit-recordings", type=int, default=0, help="only the first N test recordings (smoke runs)")
     step4.add_argument("--out-dir", type=Path, default=_HERE.parent / "checkpoints_three_horizon")
     step3b.add_argument("--oracle-prior", action="store_true",
-                        help="draw stage 2's prior from ground truth instead of from the slots: the ceiling on what any feedback could buy (A51 E12b)")
+                        help="draw stage 2's prior from ground truth instead of from the slots: the ceiling on what any feedback could buy")
     step3b.add_argument("--no-rescore", dest="rescore", action="store_false",
-                        help="drop the rescoring correction, leaving the prior as the memory's only route to the loss (A51 E12a)")
+                        help="drop the rescoring correction, leaving the prior as the memory's only route to the loss")
     step3b.add_argument("--prior-channels", type=int, default=PRIOR_CHANNELS,
                         help="feedback channels into stage 2's bottleneck; 0 removes the path entirely, which is E12a's control arm")
     step3b.add_argument("--limit-recordings", type=int, default=0, help="only the first N recordings of each split (smoke runs)")
     step2 = sub.choices["step2"]
     step2.add_argument("--init", type=Path, default=None, help="start from this checkpoint's weights (a fresh optimizer)")
     step2.add_argument("--schedule", choices=("plateau", "cosine", "exponential"), default="plateau", help="plateau: cut the rate when "
-                       "val AP stalls; exponential: DR-SPAAM's decay from --lr to --min-lr over --max-epochs, every iteration (TODO.md A59 R)")
+                       "val AP stalls; exponential: DR-SPAAM's decay from --lr to --min-lr over --max-epochs, every iteration -- DR-SPAAM's own")
     step2.add_argument("--lr-factor", type=float, default=0.3)
     step2.add_argument("--lr-patience", type=int, default=4, help="evaluations without improvement before a cut (4 = one epoch)")
     step2.add_argument("--min-lr", type=float, default=1e-5, help="plateau's floor, or where exponential ends")
     step2.add_argument("--select", choices=("best", "last"), default="best", help="the weights the test scores: the best on val, or the "
-                       "last, DR-SPAAM's protocol (TODO.md A59 R), which are also saved as step2_calibration.last.pth")
+                       "last, DR-SPAAM's protocol, which are also saved as step2_calibration.last.pth")
     step2.add_argument("--gather-width-m", type=float, default=0.0,
                        help="read the first spatial layer over a window of this many metres of arc instead of a fixed "
                                 "count of beams, resampled per beam from its own range; 0 keeps the fixed window. DROW's "
                                 "cutout spans 1.66 m, and Tier 0's 1-NN probe priced the adaptive window at +2.5 pp, all of "
-                                "it long-range (TODO.md item 15)")
+                                "it long-range")
     step2.add_argument("--gather-samples", type=int, default=9,
                        help="how many points the metric window is resampled to, when --gather-width-m is set")
     step2.add_argument("--input-features", choices=("beam", "lfe"), default="beam", help="beam: the ten per-beam features; lfe: LFE's "
-                       "1 - r/10 alone, the attribution arm F1 (TODO.md A59)")
+                       "1 - r/10 alone, the attribution arm F1")
     step2.add_argument("--channels", type=int, nargs=3, default=None, metavar="C", help="U-Net widths at N, N/2 and N/4 beams; unset is "
-                       "the constructor's (32 64 128); LFE's 8 16 32 are the attribution arm W (TODO.md A59), and 64 128 256 are "
-                       "item 19's widening arm")
+                       "the constructor's (32 64 128); LFE's 8 16 32 are the attribution arm W, and 64 128 256 are "
+                       "the widening arm")
     step2.add_argument("--vote-frame", choices=VOTE_FRAMES, default="beam",
-                       help="which frame the head regresses the offset to a person's centre in (TODO.md item 18). beam: DROW's "
+                       help="which frame the head regresses the offset to a person's centre in. beam: DROW's "
                             "own convention, (across, along) in the beam's own rotated frame, so one person is a different "
                             "target for every beam that sees it. sensor: the one Cartesian frame every beam shares. The two "
                             "name the same point, so only the decoders' input is rotated and the comparison is purely what is "
                             "easier to learn")
-    # Item 45's cheap half. All four are already `CalibrationNetwork` arguments chosen once and never varied, so each
+    # The shape sweep's cheap half. All four are already `CalibrationNetwork` arguments chosen once and never varied, so each
     # costs a flag, a shape key and one ~20 minute run. `--neighbours` and `--top-p` from the same item are *not* here:
     # the first changes `N_BEAM_FEATURES` and the stem's input width, and the second is a candidate-cache key.
     step2.add_argument("--kernel-size", type=int, default=None, metavar="K",
                        help="the depthwise kernel every block spends its receptive field on; unset is the "
-                            "constructor's 7 (TODO.md item 45)")
+                            "constructor's 7")
     step2.add_argument("--expansion", type=int, default=None, metavar="E",
                        help="ConvNeXt's inverted-bottleneck ratio; unset is the constructor's 4. Ignored by "
-                            "--block residual, which has nothing to widen (TODO.md item 45)")
+                            "--block residual, which has nothing to widen")
     step2.add_argument("--blocks", type=int, nargs=3, default=None, metavar="B",
                        help="how many blocks at N, N/2 and N/4 beams; unset is the constructor's (2 2 2). Depth, "
-                            "where --channels is width and item 19 found width flat (TODO.md item 45)")
+                            "where --channels is width, and the sweep found width flat")
     step2.add_argument("--bottleneck-blocks", type=int, default=None, metavar="B",
-                       help="how many blocks at the N/8 bottleneck; unset is the constructor's 2 (TODO.md item 45)")
+                       help="how many blocks at the N/8 bottleneck; unset is the constructor's 2")
     step2.add_argument("--aggregator", action=argparse.BooleanOptionalAction, default=False,
                        help="give the bottleneck the whole-scan max beside its own features, which is the one path by "
-                            "which one end of the field of view reaches the other end's logits (TODO.md item 40). "
+                            "which one end of the field of view reaches the other end's logits. "
                             "--no-aggregator ablates it and halves `aggregate`'s input width. Named as a defining "
                             "feature of this architecture in docs/RESEARCH.md 5.2 and never tested, which matters now "
-                            "that item 19 has shown the widths flat and the block interchangeable")
+                            "that the sweep has shown the widths flat and the block interchangeable")
     step2.add_argument("--block", choices=sorted(BLOCKS), default="convnext",
-                       help="which block carries the U-Net's depth (TODO.md item 19). convnext: depthwise large kernel, "
+                       help="which block carries the U-Net's depth. convnext: depthwise large kernel, "
                             "inverted bottleneck. residual: two full convolutions with a GELU between, no depthwise "
                             "separation and no widening")
-    step2.add_argument("--dropout", type=float, default=0.1, help="dropout on the head's input, 0.1 since 2026-10-06 (TODO.md A59); 0 reproduces every result before, "
+    step2.add_argument("--dropout", type=float, default=0.1, help="dropout on the head's input, 0.1 since 2026-10-06; 0 reproduces every result before, "
                                                                  "`docs/RESEARCH.md` §5.4 intends 0.1 for this project's own architectures")
     step2.add_argument("--checkpoint-every", type=float, default=0.0, help="epochs between checkpoints kept whatever they score, "
                                                                           "so test AP can be measured against training duration; 0 keeps only the best")
@@ -2075,13 +2074,13 @@ def build_parser() -> argparse.ArgumentParser:
                                                                              "DROW has 7.3%% of its labels beyond 10 m)")
     step2.add_argument("--label-assign", choices=("last", "nearest"), default="nearest", help="which person a beam inside two people's radius "
                        "trains for: its nearest, as the official DR-SPAAM code does (the default since 2026-10-06), or the last listed, as every "
-                       "run before it did (TODO.md A59)")
+                       "run before it did")
     step2.add_argument("--label-radius", type=float, default=LABEL_RADIUS_M, help="distance from a person's centre within which a beam is "
                        "a positive and votes for them; DR-SPAAM uses 0.35 m, FROG's circles are 0.4 m")
     step2.add_argument("--label-sigma-m", type=float, default=0.3,
                        help="replace the hard per-beam label with a Gaussian of this width in METRES, keeping the vote "
-                            "head and nms-mean (TODO.md item 44(a)); 0, the default, keeps the hard label and every "
-                            "stage-2 number on record. The decoder half of item 44 is already measured on fixed "
+                            "head and nms-mean; 0, the default, keeps the hard label and every "
+                            "stage-2 number on record. The decoder half of that pair is already measured on fixed "
                             "weights and the peak decoder loses 8.62 pp, 2.84 of which a voteless head cannot recover "
                             "-- what is untested is the OBJECTIVE, which is this flag. Support is identical to the "
                             "hard label's, since it reuses --label-radius, so the arm varies one thing. Metric rather "
@@ -2089,7 +2088,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "fights the ~50:1 pos_weight: weighted BCE bottoms out at w*t/(w*t+1-t), not at t"
                        )
     step2.add_argument("--mirror", action=argparse.BooleanOptionalAction, default=True, help="reverse half the training clips beam for beam, "
-                       "with their people and poses mirrored to match: exact on any uniform beam grid; on by default since 2026-10-06 (TODO.md A59)")
+                       "with their people and poses mirrored to match: exact on any uniform beam grid; on by default since 2026-10-06")
     step2.add_argument("--batch", type=int, default=32)
     step2.add_argument("--eval-batch", type=int, default=64)
     step2.add_argument("--max-epochs", type=float, default=20)

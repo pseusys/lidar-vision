@@ -70,7 +70,7 @@ The rest:
 - [`TODO.md`](TODO.md) — what's open
 
 **On older documents.** Three earlier full-scan architectures preceded TAKHeLiPeD.
-**Two of them, `FullScanTCNDetector` and `TemporalUNetDetector`, were retired on 2026-10-31** (`TODO.md` item 32); their code last existed at commit `98b0716`.
+**Two of them, `FullScanTCNDetector` and `TemporalUNetDetector`, were retired on 2026-10-31**; their code last existed at commit `98b0716`.
 **`SpaceTimeCNNDetector` stays in the registry**, because the history ablation that reorganised this project's queue was measured on it, and keeping the class is what keeps that decision reproducible.
 Every accuracy number all three carried is **retracted pending re-measurement** — they are documented in [§5](docs/RESEARCH.md#5-proposed-architectures) and [§6](docs/RESEARCH.md#6-design-history-architectures-tried-and-dropped) for provenance, not quoted as results.
 

@@ -3,14 +3,14 @@
 **T**(emporal) **A**(daptive) **K**(nee-)**He**(ight) **Li**(dar) **Pe**(rson) **D**(etector) — person detection from a
 single knee-height 2-D LiDAR.
 
-> **STATUS: FROZEN 2026-10-30** (`TODO.md` item 47). Every cell in
+> **STATUS: FROZEN 2026-10-30**. Every cell in
 > [Proposed FROG parameters](ARCHITECTURE.md#5-proposed-frog-parameters) is measured and cited; nothing is pending.
 > Three seeds, FROG `official` test: **86.29%** wp-AUC (sd 0.17 pp), **19.32 ms** median on the CPU against a 25 ms
 > frame period, **0.596** phantoms per person-free frame. The citable artifact is
 > `weights_archive/frozen-frog-2026-10-30/`.
 >
 > **The CPU figure is measured twice, in two independent sessions, and agrees to 0.4%** — 19.32 ms on a host idle for
-> 63 minutes and 19.39 ms on one two minutes past a 7-hour GPU job (item 57 and item 47). The cold run is the one
+> 63 minutes and 19.39 ms on one two minutes past a 7-hour GPU job. The cold run is the one
 > quoted, because its noise floor is four times tighter.
 >
 > **This freezes the architecture on FROG, not on every dataset.** Section 6 is still unwritten, and the parameters
@@ -55,8 +55,8 @@ stride 5. **Two were load-bearing.** The full ledger with numbers is in
 
 | question | verdict |
 | --- | --- |
-| **per-object addressability** (item 36) | **load-bearing** — one global state keeps only **6%** of the memory's gain |
-| **object vs spatial binding** (item 22) | **load-bearing** — room-cell slots at the same capacity keep **44%** |
+| **per-object addressability** | **load-bearing** — one global state keeps only **6%** of the memory's gain |
+| **object vs spatial binding** | **load-bearing** — room-cell slots at the same capacity keep **44%** |
 | recurrence: selective / GRU / minGRU (16) | tie → minGRU, because a citable cell beats a re-implemented one |
 | association: mutual / Hungarian (43) | tie on accuracy **and** CPU → mutual |
 | position refinement (46) | tie; coverage unchanged → dropped |
@@ -68,12 +68,12 @@ stride 5. **Two were load-bearing.** The full ledger with numbers is in
 | the published voteless head (44b) | −7.4 pp even on its own objective → dropped |
 | block, widths, depth, kernel, expansion (19, 45) | all tie → defaults kept |
 | sensor-frame vote targets (18) | **worse** → beam frame |
-| Slot Attention's own update (42) | **not trainable at this horizon, and 31.45 ms on the CPU** — item 53 |
+| Slot Attention's own update | **not trainable at this horizon, and 31.45 ms on the CPU** |
 
 **Nine ties are the finding about everything except the two load-bearing rows.** Each was resolved toward the cheaper
 or simpler option, which is why the adopted model is *smaller* than the one the project started with.
 
-> **Why item 42 has no score, stated as what was measured** (item 53, 2026-10-28). The arm did not hit an
+> **Why that arm has no score, stated as what was measured** (2026-10-28). The arm did not hit an
 > implementation bug; it hit an instability that is a property of the idea as applied here. Published Slot Attention
 > re-initialises its slots from a learned Gaussian on every input, so it backpropagates through `iterations`
 > applications of `state = state + mlp(state)` and no more. This architecture's slots **persist**, so over a 10 s chunk
@@ -95,7 +95,7 @@ or simpler option, which is why the adopted model is *smaller* than the one the 
 > the adopted `dim 64` it is about 26.2 ms, still over, while two iterations would fit near 22.0 ms. Three iterations is
 > the published setting, so the row can be filled but not adopted.
 
-**What the two load-bearing results mean together.** Item 36 says the memory must be **addressable**; item 22 says the
+**What the two load-bearing results mean together.** The global-state ablation says the memory must be **addressable**; the binding arm says the
 addressing must be **to objects, not to places**. Neither alone is the contribution — together they are.
 
 ---
@@ -182,7 +182,7 @@ sectors, and skip connections on the way up. The head is **DROW's**: a person lo
 centre per beam — deliberately unchanged, so the comparison against DROW3 and DR-SPAAM is an *architecture*
 comparison and not a head comparison.
 
-**Trained against a soft Gaussian beam target** (item 44a): each beam's classification target is
+**Trained against a soft Gaussian beam target**: each beam's classification target is
 `exp(−d² / 2σ²)` in **metres**, clipped to 1 where people overlap, over exactly the beams the hard label marked
 positive. The vote loss and the class balance are untouched.
 
@@ -202,7 +202,7 @@ retire; **minGRU** updates each surviving slot's state; a **biased recall attent
 slots near it, with an additive distance bias `−d² / 2σ²`; and a **rescoring head** adjusts each candidate's score
 from its own encoding plus what it recalled.
 
-> **Item 54, a defect in ② — fixed and priced, 2026-10-28.** A slot spawned this frame has `events.match_index == -1`,
+> **a defect in ② — fixed and priced, 2026-10-28.** A slot spawned this frame has `events.match_index == -1`,
 > which `clamp(min=0)` turned into candidate 0, the frame's strongest, while the mask `matched | refill` still let it
 > in; the fix is the selection its two sibling lines already used, `where(refill, events.source, events.match_index)`.
 > **It was worth 0.39 pp** — inside the 1.32 pp bar and under the seed spread — so the sweep's absolute levels stand.
@@ -212,8 +212,8 @@ from its own encoding plus what it recalled.
 decisions with no gradient to give. Only the slot state, the recurrence and the rescoring head are trained.
 
 **What stage 3 does not have**, each removed by its own measurement: no cross-attention association (E7), no
-slot-to-slot self-attention (E6, the only O(K²) term), no coasting head (item 24), no bound on the rescoring
-correction (O1), no curriculum (item 41).
+slot-to-slot self-attention (E6, the only O(K²) term), no coasting head, no bound on the rescoring
+correction (O1), no curriculum.
 
 ---
 
@@ -251,55 +251,55 @@ Fitted to FROG `official`. **Other datasets get their own section; do not carry 
 | beams `N` / field of view | 720 / 270° | dataset |
 | `max_range_m` | 10.0 | dataset |
 | stage-2 channels | (32, 64, 128) | tie, item 19b |
-| kernel / expansion / blocks | 7 / 4 / (2,2,2) | tie, item 45 |
-| whole-scan aggregator | **off** | tie, item 40 |
+| kernel / expansion / blocks | 7 / 4 / (2,2,2) | tie |
+| whole-scan aggregator | **off** | tie, and 16,384 parameters saved |
 | beam-target `--label-sigma-m` | **0.3 m** | **+0.69 pp at 3 seeds**, item 44a |
 | label radius | 0.6 m | DR-SPAAM convention |
-| decoder / NMS radius | `nms-mean` / 0.5 m | flat optimum, items 13/17/34 |
-| slot capacity `K` | **256** | trained 128 loses 0.74 pp (item 50); a replay had said it tied |
-| slot-state `dim` | **64** | tie, **−28% CPU**, item 49 |
-| heads | 4 | tie, item 49 |
-| recurrence | **minGRU** | tie; citable, item 38 |
-| `sigma_m` | 0.6 m | dose-response, item 39 |
+| decoder / NMS radius | `nms-mean` / 0.5 m | flat optimum |
+| slot capacity `K` | **256** | trained 128 loses 0.74 pp; a replay had said it tied |
+| slot-state `dim` | **64** | tie, **−28% CPU** |
+| heads | 4 | tie |
+| recurrence | **minGRU** | tie; citable |
+| `sigma_m` | 0.6 m | dose-response |
 | `gate_m` | 0.6 m | S4, unbinding |
 | `fade_time_s` | 10 s | 95% of gain inside 10 s, E1 |
-| frame | room | +1.31 pp over sensor frame (A51 E2) |
-| chunk length | 10 s, no curriculum | tie, 24% cheaper, item 41 |
-| exchange / learned match / coasting | all off | E6, E7, item 24 |
+| frame | room | +1.31 pp over sensor frame |
+| chunk length | 10 s, no curriculum | tie, 24% cheaper |
+| exchange / learned match / coasting | all off | each lost to its control |
 
 ### 5.2 Results
 
-> **Measured 2026-10-30 (item 47), three seeds.** The adopted combination — soft labels **and** `dim 64` — had never
+> **Measured 2026-10-30, three seeds.** The adopted combination — soft labels **and** `dim 64` — had never
 > been run end to end before this, because `dim 64` was priced on the hard-label stage 2 and the target adopted
 > afterwards. Seed 0 was run as a **gate**; it passed, and so did seeds 1 and 2. Per-seed numbers and the two claims
 > the three-seed sample retracted are in `CHANGELOG.md`.
 
 | metric | value | status |
 | --- | --- | --- |
-| wp-AUC, FROG `official` test, stride 5, 3 seeds | **86.29%** (86.11 / 86.33 / 86.43, sd 0.17 pp) | measured, item 47 |
-| — at the 0.3 m radius | 85.19% (85.04 / 85.20 / 85.34) | measured, item 47 |
-| recall at each seed's own threshold | 95.2% (95.0 / 95.3 / 95.2) | measured, item 47 |
+| wp-AUC, FROG `official` test, stride 5, 3 seeds | **86.29%** (86.11 / 86.33 / 86.43, sd 0.17 pp) | measured at the freeze |
+| — at the 0.3 m radius | 85.19% (85.04 / 85.20 / 85.34) | measured at the freeze |
+| recall at each seed's own threshold | 95.2% (95.0 / 95.3 / 95.2) | measured at the freeze |
 | stage-2 candidates AP | 82.80% (3-seed mean; `stage2_probe.py` independently says 82.79%) | measured |
-| memory gain over candidates | **+3.49 pp** (3-seed mean; +3.35 / +3.60 / +3.51) | measured, item 47 |
-| CPU ms/frame, 4 threads, batch 1 | **19.32** median / 21.67 p99 (9 runs, 3 seeds, cold host) | measured, item 57 |
-| — of which stage 2 / decode / memory | 10.45 / 1.70 / 7.23 | measured, item 57 |
-| — the same on a warm host | 19.39 median / 21.78 p99 | measured, item 47 |
-| phantoms per person-free frame | **0.596** at threshold 0.3 (0.573 / 0.567 / 0.648, sd 0.045), from candidates' 2.134 | measured, item 58 — calibrated; **0.675** uncalibrated (item 47) |
-| — at threshold 0.9 | **0.0122** (820 / 767 / 1,061 detections in 72,533 frames) | measured, item 58 — calibrated; **0.0015** uncalibrated (106 detections), see §5.5 |
+| memory gain over candidates | **+3.49 pp** (3-seed mean; +3.35 / +3.60 / +3.51) | measured at the freeze |
+| CPU ms/frame, 4 threads, batch 1 | **19.32** median / 21.67 p99 (9 runs, 3 seeds, cold host) | measured on a cold host |
+| — of which stage 2 / decode / memory | 10.45 / 1.70 / 7.23 | measured on a cold host |
+| — the same on a warm host | 19.39 median / 21.78 p99 | measured at the freeze |
+| phantoms per person-free frame | **0.596** at threshold 0.3 (0.573 / 0.567 / 0.648, sd 0.045), from candidates' 2.134 | measured — calibrated; **0.675** uncalibrated |
+| — at threshold 0.9 | **0.0122** (820 / 767 / 1,061 detections in 72,533 frames) | measured — calibrated; **0.0015** uncalibrated (106 detections), see §5.5 |
 | stage-2 parameters | 960,323 | measured |
 | stage-3 parameters | **45,762** (independent of `K` — slots are state, not parameters) | measured |
 
-> **Which of these rows item 48 moved, and which it cannot.** The shipped checkpoints carry a score calibration
+> **Which of these rows the calibration moved, and which it cannot.** The shipped checkpoints carry a score calibration
 > (§5.4). It is monotone, so every **rank-based** row above stands unchanged and is still what the shipped weights
 > produce: both AP rows, the memory gain, and the recall at each seed's own threshold, that threshold being chosen by
 > sweeping to a false-positive budget. The two **fixed-threshold** rows — the phantom column at 0.3 and at 0.9 — could
-> not stand on a measurement taken before the key existed, and **item 58 re-measured them on 2026-10-31**; both now
+> not stand on a measurement taken before the key existed, and **they were re-measured on 2026-10-31**; both now
 > quote the calibrated model, with the uncalibrated value beside it. They moved in **opposite directions** and §5.5 is
 > where that is explained. The uncalibrated values stay reproducible from `weights_archive/frozen-frog-2026-10-30/`.
 
 **The CPU figure is the one that decides deployment** (owner, 2026-10-19): FROG's frame period is **25 ms**, so
 19.32 ms median leaves **5.7 ms of headroom (23%)** and the p99 leaves **3.3 ms**. A GPU number does not substitute.
-Measured under item 29's protocol — the three frozen seeds and the `dim 128` control interleaved inside one session on
+Measured under the one CPU protocol — the three frozen seeds and the `dim 128` control interleaved inside one session on
 an idle host, 2,000 consecutive scans at batch 1, one `--stage2` for every arm. On the cold host the `stage2` phase,
 which is byte-identical work, spreads just **0.084 ms** across arms; that is the floor, and the frozen seeds' totals
 spread 0.14 ms, *below* it, which is the check this sweep exists to pass.
@@ -313,11 +313,11 @@ fits the frame period and has nothing left for a slow frame, a busy robot or a s
 > the warm sweep's 25.29 ms. The cold sweep reads **24.65 ms**, inside it. The claim was session-dependent and is
 > withdrawn; what survives is that the control has no usable margin, which is the weaker and defensible statement.
 
-> **Measured twice, and it reproduces.** Item 47's warm sweep and item 57's cold sweep agree to **0.4%** on the total
+> **Measured twice, and it reproduces.** The warm sweep and the cold one agree to **0.4%** on the total
 > (19.39 and 19.32 ms) and **0.9%** on the `stage2` phase (10.56 and 10.45 ms), and their ratios agree too (memory
 > −28.8% and −28.3%, total −14.6% and −13.5%). The cold run is quoted because its floor is four times tighter.
 >
-> **These rows are still not comparable with item 49's 17.73 ms**, and the discrepancy is now narrowed rather than
+> **These rows are still not comparable with the earlier 17.73 ms**, and the discrepancy is now narrowed rather than
 > explained. Two hypotheses are dead: it is **not thermal** (the cold host reproduces the level) and **not the
 > stage-2 checkpoint** (`a69_no_aggregator_s0` and `a71_soft_label_s0` are both 960,323 parameters and both
 > aggregator-free, so their forward arithmetic is identical — only the training target differs). The `stage2` phase
@@ -342,21 +342,21 @@ stage-2 aggregator, the beam target, the slot width and the recurrence, so files
 **Built 2026-10-31: `weights_archive/frozen-frog-2026-10-31-calibrated/`**, the calibrated companion (§5.4), with its
 own [`MANIFEST.md`](../weights_archive/frozen-frog-2026-10-31-calibrated/MANIFEST.md). Every weight tensor is
 `torch.equal` to the 2026-10-30 release; the only difference is the added `calibration` key. **Cite 2026-10-30 for
-the rank-based numbers and 2026-10-31 for everything read at a fixed threshold** — which since item 58 (§5.5) means the
+the rank-based numbers and 2026-10-31 for everything read at a fixed threshold** —  which since the recalibration (§5.5) means the
 phantom column is measured on the calibrated release and every other row on the 2026-10-30 one. They agree wherever the
 transform is monotone, which is everywhere except a fixed threshold.
 
 ### 5.4 Score calibration
 
-> **Measured 2026-10-31 (item 48), three seeds, fitted on val.** A post-hoc temperature and bias on the memory's
-> output logit, stored in each stage-3 checkpoint. It exists because A51 phase 1b found the rescore head shifts the
+> **Measured 2026-10-31, three seeds, fitted on val.** A post-hoc temperature and bias on the memory's
+> output logit, stored in each stage-3 checkpoint. It exists because the diagnosis found the rescore head shifts the
 > *whole* score distribution down — a median −3.292 logits on people it keeps against −1.497 on those it loses —
 > which leaves rank-based AP better while silently decalibrating any fixed threshold.
 
     calibrated_logit = (logit + bias) / temperature
 
 Applied in `ObjectMemory._rescored`, to the candidate logit **only**: without a coasting head `_coasting` pins that
-logit at `SILENT_COAST_LOGIT`, and a bias there would un-silence a head item 24 removed. The constructor default is
+logit at `SILENT_COAST_LOGIT`, and a bias there would un-silence the coasting head that was removed. The constructor default is
 the exact identity `(1.0, 0.0)`, so a checkpoint predating the key scores bit-identically.
 
 | | seed 0 | seed 1 | seed 2 |
@@ -399,12 +399,12 @@ artifact of float32 scoring, two orders of magnitude below the 0.01 pp this proj
 ### 5.5 The phantom column, re-measured on the calibrated checkpoints
 
 §5.4's transform is monotone, so it cannot move an AP -- but it moves every number read at a **fixed** threshold, and the
-phantom column is the fixed-threshold row this project leads with. Item 58 re-ran it: `utils/empty_scene.py` over all
+phantom column is the fixed-threshold row this project leads with. The phantom recalibration re-ran it: `utils/empty_scene.py` over all
 **72,533 person-free frames** of FROG `transferred`, three seeds, each stage 3 paired with the stage 2 whose candidates it
-learnt from, which is exactly how item 47 measured it. The script needed no change and no flag; `object_memory` restores the
+learnt from, which is exactly how the freeze measured it. The script needed no change and no flag; `object_memory` restores the
 pair from the checkpoint, which is the point of shipping it there.
 
-| person-free frames, 3 seeds | uncalibrated (item 47) | **calibrated** (item 58) | change |
+| person-free frames, 3 seeds | uncalibrated | **calibrated** | change |
 | --- | ---: | ---: | ---: |
 | stage-2 candidates, FP/frame @0.3 | 2.1336 | **2.1336** | **identical** |
 | whole detector, FP/frame @0.3 | 0.6749 (sd 0.073) | **0.5956** (sd 0.045) | **-11.8%** |
@@ -415,7 +415,7 @@ pair from the checkpoint, which is the point of shipping it there.
 | — frames holding any @0.9 | 0.15% | **1.20%** | +1.05 pp |
 
 **The candidates row is identical to four decimal places, and that is the control.** The key is stored in stage 3; stage 2's
-candidates come from a network item 48 never touched. So every change in the rows below it belongs to the memory's score and
+candidates come from a network the calibration never touched. So every change in the rows below it belongs to the memory's score and
 to nothing else -- not to a different cache, a different split or a different decode.
 
 **The effect reverses with the threshold, and only measuring it would have said so.** Dividing by a temperature below 1

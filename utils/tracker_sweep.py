@@ -32,7 +32,7 @@ Which tracker, stated precisely because the paper cites it
   track): low-score detections may extend a track but never start one.
   `--tracker byte-cbmot` additionally reports CBMOT's track confidence
   (Benbarka et al., IROS 2021) instead of the detection's score, which is how a
-  tracker can *raise* a weak detection (`TODO.md` A56).
+  tracker can *raise* a weak detection.
 
 Two implementation points that decide whether the numbers mean anything:
 

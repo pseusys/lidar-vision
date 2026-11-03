@@ -1,9 +1,9 @@
 """
 Unit tests for FROG_Dataset's split selection, train/val carving and odometry
-strictness -- the four data-side bugs recorded as TODO.md A11-A14.
+strictness -- the four data-side bugs this file is named for.
 
 Each test here corresponds to a failure that was found on the *real* dataset
-first (TODO.md A11-A14 carry the measured numbers), then reproduced
+first (the changelog carries the measured numbers), then reproduced
 synthetically so it can be checked without a 360 MB download. Per
 memory/dos-and-donts.md, a synthetic pass alone does not close any of these
 items -- the real-data check is recorded in the TODO entry.
@@ -54,7 +54,7 @@ def _write_h5(path, n, *, with_split_field=True, recording_gap_after=None,
         if with_split_field:
             # FROG's own interleaved per-frame holdout: every 10th frame is
             # their val half. We honour split==0 to reproduce their training
-            # set exactly, and never use their val half -- see A12.
+            # set exactly, and never use their val half -- see the held-out-recording tests below.
             split = np.zeros(n, dtype=np.uint8)
             split[::10] = 1
             h5.create_dataset("split", data=split)
@@ -70,7 +70,7 @@ def _write_odom(path, n, x_val=0.0):
 @pytest.fixture
 def frog_dir(tmp_path):
     """Every published FROG file plus its odometry -- the configuration in
-    which the A11 glob bug does maximum damage, and the one the real
+    which the glob bug does maximum damage, and the one the real
     cross-recording split needs."""
     _write_h5(tmp_path / "frog_11-36_12-43_train_val.h5", 4000,
               recording_gap_after=1999, pause_after=(500, 2500), pause_s=5.0)
@@ -85,7 +85,7 @@ def frog_dir(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# A11 -- split must select files, not glob whatever is on disk
+# The glob bug -- a split must select files, not glob whatever is on disk
 # ---------------------------------------------------------------------------
 
 class TestSplitSelectsFiles:
@@ -104,7 +104,7 @@ class TestSplitSelectsFiles:
         assert sum(len(s) for s in ds.scans) == 4000
 
     def test_each_split_reads_its_own_files_only(self, frog_dir):
-        """The headline A11 regression: `test` returned the training file's
+        """The headline regression: `test` returned the training file's
         every frame, so train + val == test exactly."""
         counts, scans = {}, {}
         for split in ("train", "val", "test"):
@@ -127,14 +127,14 @@ class TestSplitSelectsFiles:
 
 
 # ---------------------------------------------------------------------------
-# A12 -- val is a held-out RECORDING, and train matches the paper exactly
+# The overlap bug -- val is a held-out RECORDING, and train matches the paper exactly
 # ---------------------------------------------------------------------------
 
 class TestCrossRecordingVal:
     """Val is three whole recordings the model never trains on, not a carve-out
     of the training recordings.
 
-    The first attempt at fixing A12 held out contiguous blocks *inside* the
+    The first attempt at fixing it held out contiguous blocks *inside* the
     training recordings, with guard bands. That works, but it measures
     same-recording generalization -- which systematically overestimates the
     cross-recording performance the test set actually reports, so early
@@ -201,7 +201,7 @@ class TestCrossRecordingVal:
 
 
 # ---------------------------------------------------------------------------
-# A13 -- recording pauses become sequence boundaries
+# The session-gap bug -- recording pauses become sequence boundaries
 # ---------------------------------------------------------------------------
 
 class TestSessionSplitting:
@@ -222,7 +222,7 @@ class TestSessionSplitting:
         assert len(ds.scans) == 4
 
     def test_no_window_spans_a_pause(self, frog_dir):
-        """The A13 failure: a nominal 0.38 s window that really spans 74 s."""
+        """The session-gap failure: a nominal 0.38 s window that really spans 74 s."""
         ds = FROG_Dataset(datapath=frog_dir, split="train", time_frame_size=5,
                           auto_download=False, verbose=False)
         for seq in range(len(ds.scans)):
@@ -235,7 +235,7 @@ class TestSessionSplitting:
 
 
 # ---------------------------------------------------------------------------
-# A14 -- odometry is required, never silently faked
+# The faked-odometry bug -- odometry is required, never silently substituted
 # ---------------------------------------------------------------------------
 
 class TestOdometryIsRequired:
@@ -379,7 +379,7 @@ class TestHeldOutSplitComposition:
 
 
 # ---------------------------------------------------------------------------
-# A30 -- three loading modes over one dataset
+# Three loading modes over one dataset
 # ---------------------------------------------------------------------------
 
 def _recording_ids(ds):
@@ -430,7 +430,7 @@ class TestModeSelection:
 class TestTransferredMode:
     """`transferred` is the *same experiment* as `official` with a different
     question asked of it, so its training data must be identical bit for bit.
-    A32b's whole premise is that the checkpoint is shared; if these ever drift
+    The held-constant-data control's whole premise is that the checkpoint is shared; if these ever drift
     apart, the comparison silently becomes two experiments."""
 
     @pytest.mark.parametrize("split", ["train", "val"])
@@ -510,8 +510,8 @@ class TestBalancedMode:
     def test_test_split_holds_out_the_published_baselines_training_data(self):
         """LFE-Peaks, LFE-PPN and DROW were trained by their authors on FROG's
         official train set, i.e. on both recordings of the train_val file.
-        Either of them in `balanced`'s test would make A32's numbers a score on
-        their own training data -- the exact class of bug A11 records."""
+        Either of them in `balanced`'s test would make the LFE comparison a score on
+        their own training data -- the exact class of bug the glob tests record."""
         test_spec, _ = _MODES["balanced"]["test"]
         assert not any(key == "train_val" for key, _ in test_spec)
 

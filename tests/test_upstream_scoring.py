@@ -1,6 +1,6 @@
-"""`TODO.md` item 64: score Li2Former with their own decoder and their own metric, as a 2x2 over the two halves.
+"""Score Li2Former with their own decoder and their own metric, as a 2x2 over the two halves.
 
-Item 31's resume leg produced a decoupling worth explaining: their loss improves on held-out DROW in **both** terms
+The Li2Former port's resume leg produced a decoupling worth explaining: their loss improves on held-out DROW in **both** terms
 across epochs 5-6 -- `val_loss` 0.7013 -> 0.6511 -> 0.6494, below epoch 1's 0.6784 -- while our `val wp-AUC` sits in
 its worst band of the run and does not follow. Either the decode-and-score path disagrees with their loss about what a
 good prediction is, or it does not and the gap is in the weights. The 2x2 separates those: ours/ours is the chain's own

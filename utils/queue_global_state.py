@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Item 36: one global scene state in place of 256 addressable slots (`TODO.md` §A).
+"""one global scene state in place of 256 addressable slots (`TODO.md` §A).
 
 **The untested cell of the 2x2.** Slots *with* recurrence is the adopted model; slots *without* is `--no-recurrent`
-(A51 E10) and costs a lot; **recurrence without slots has never been run**. It is the strongest available attack on this
+ and costs a lot; **recurrence without slots has never been run**. It is the strongest available attack on this
 project's own contribution: if one scene-level state matches 256 addressable per-object slots, the slots are decoration.
 
 **One arm, attention pooling, minGRU** (the owner's call, 2026-10-22): run the *strongest* global variant first to
 estimate the ceiling of a swap. If it cannot reach the frozen model's 86% then a masked mean cannot either, and
-`global + selective` is moot -- the slots have earned their place and item 38 is decided by item 16's tie alone. If it
+`global + selective` is moot -- the slots have earned their place and the recurrence is decided by the three-way tie alone. If it
 *can*, the swap is not merely "minGRU instead of our rule" but a far simpler architecture with a citable mechanism and
 no bespoke slot machinery to defend, and the next question is three seeds (~30 h) to carry the headline.
 
@@ -21,7 +21,7 @@ and no 256-way attention -- so expect roughly 4-5 h. `--resume` is on: evaluatio
 not the same run continued** (`memory/interpreting-evaluation.md`); that is fine for a screening arm like this one, and
 the report has to say which it was.
 
-    python queue_item36.py --list
+    python queue_global_state.py --list
 """
 
 from run_queue import CHECKPOINTS, REPO, Job, main
@@ -36,7 +36,7 @@ JOBS = [
         cli=("train_takheliped.py", "step3a", "--stage2", str(STAGE2), *FROZEN,
              "--global-state", "--recurrence", "mingru",
              "--chunk-s", "1", "10", "--seed", "0", "--out-dir", str(OUT), "--resume")),
-    # Its CPU row under item 29's protocol. Cheap, and the arm's whole selling point beside simplicity is that it drops
+    # Its CPU row under the shared protocol. Cheap, and the arm's whole selling point beside simplicity is that it drops
     # the 256-slot bookkeeping -- but quote it only against rows measured in the same session (`interpreting-evaluation.md`).
     Job(name="global_mingru_cpu", outputs=(OUT / "latency_cpu_t4.json",), needs=("global_mingru",),
         cli=("tracking_baselines.py", "latency", "--device", "cpu", "--threads", "4", "--frames", "2000",

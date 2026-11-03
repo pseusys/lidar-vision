@@ -1,7 +1,7 @@
-"""What a slot creation/confirmation rule would actually remove (`TODO.md` §A item 14).
+"""What a slot creation/confirmation rule would actually remove.
 
 The memory cuts person-free false positives from 2.622 per frame to 0.740, and **what it keeps is furniture**: its surviving
-phantoms recur in the next frame 92.2% of the time against the candidates' 84.9% and real people's 99.8%. Item 14 proposes a
+phantoms recur in the next frame 92.2% of the time against the candidates' 84.9% and real people's 99.8%. The creation-rule work proposes a
 higher creation threshold or confirmation over several frames, on the reading that this is a creation-rule question.
 
 The reading deserves a test rather than an argument, because a confirmation rule filters **young** slots and furniture is the
@@ -9,7 +9,7 @@ opposite of young: a chair sits in the room for the whole recording, so its slot
 the memory. If the slots backing the surviving phantoms are old, no creation or confirmation rule can reach them, and the only
 thing such a rule would buy is a delay on genuinely new people. This module measures which it is.
 
-Item 27 is what makes the question well-posed: 99.997% of those phantoms are **rescored candidates** rather than coasting
+The phantom audit is what makes the question well-posed: 99.997% of those phantoms are **rescored candidates** rather than coasting
 reports, so each one has a slot matched to it whose age and hit rate can be read.
 """
 import sys
@@ -25,7 +25,7 @@ from slot_confirmation import PHANTOM, PERSON, confirmation_curve, populations, 
 
 class TestSlotAgeInFrames:
     def test_seconds_become_frames_at_the_sensors_own_period(self):
-        """FROG delivers a scan every 25 ms, so a slot one second old has been matched across 40 frames (item 1)."""
+        """FROG delivers a scan every 25 ms, so a slot one second old has been matched across 40 frames."""
         assert slot_age_frames(np.array([1.0]), period_s=0.025)[0] == pytest.approx(40.0)
 
     def test_a_slot_born_this_frame_is_zero_frames_old(self):

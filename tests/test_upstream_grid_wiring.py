@@ -1,4 +1,4 @@
-"""`TODO.md` item 64's wiring: one inference pass, four scorings, and cell 1 *identical* to the chain's number.
+"""The upstream grid's wiring: one inference pass, four scorings, and cell 1 *identical* to the chain's number.
 
 The 2x2 is only readable if its baseline cell is the same measurement `drow_eval` already ran. The way to
 guarantee that is to decode nothing twice: `evaluate_auc` grows one additive `return_raw` hook that hands back

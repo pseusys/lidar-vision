@@ -1,4 +1,4 @@
-"""Selecting a run's periodic checkpoints (`TODO.md` A50 phase 1 item 4).
+"""Selecting a run's periodic checkpoints.
 
 `duration_curve.checkpoints` turns a run directory into the `(epoch, path)` pairs to score. Two things make it worth pinning:
 the epoch is parsed back out of the filename `PeriodicCheckpoint` wrote, so the two must agree on the format; and a run that

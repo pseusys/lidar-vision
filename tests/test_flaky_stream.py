@@ -1,9 +1,9 @@
-"""Item 37: a stream with dropped frames, so the dt-aware design has something to be aware of.
+"""a stream with dropped frames, so the dt-aware design has something to be aware of.
 
-Item 16 found that the three recurrences tie, and the prerequisite check found why that was predictable: `frame_periods`
+The recurrence comparison found that the three recurrences tie, and the prerequisite check found why that was predictable: `frame_periods`
 hands stage 3 an **exponential running average of the stamped intervals, rate 1/32**, clipped to `[MIN_DT_S, MAX_DT_S]`.
 That averaging is right -- FROG stamps 40 Hz scans in bunches of 38 ms / 38 ms / under 0.1 ms, and dividing by one of
-those sent slot velocities to several m/s (A51 item 0a) -- but it means the model has never seen a per-frame `dt`, so
+those sent slot velocities to several m/s -- but it means the model has never seen a per-frame `dt`, so
 `exp(-dt * rate)` has been a fixed per-slot decay factor by construction.
 
 Hence two `dt` modes, which answer different questions and are both worth having:

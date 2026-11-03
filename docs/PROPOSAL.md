@@ -4,9 +4,9 @@
 Everything written before that date, this document included, calls it *the three-horizon detector*, and the code still spells it `three_horizon`.
 
 **Status:** design settled for review, 2026-09-14, and since built, trained and measured — see [`../memory/performance-log.md`](../memory/performance-log.md) for what it scores and [`../CHANGELOG.md`](../CHANGELOG.md) for where the design moved after this document was written. The sections below are the design as proposed, not a description of the current code.
-**Since built, 2026-10-08:** both of stage 2's temporal convolutions failed their ablations and are gone -- the fine one on 2026-09-17 (`../TODO.md` A50), the coarse one on 2026-10-08 (A60: end to end it lost 0.87 pp AP and bought +0.59 pp on people in their first second). Stage 2 now reads one frame with no state and no pose, so the calibration horizon below survives as an argument, not as a module; the temporal horizons left are the object memory's two, and the state carried between frames is the slots alone (~138 KB, not ~1.8 MB). The coarse code is at commit e76aa94.
+**Since built, 2026-10-08:** both of stage 2's temporal convolutions failed their ablations and are gone -- the fine one on 2026-09-17, the coarse one on 2026-10-08 (end to end it lost 0.87 pp AP and bought +0.59 pp on people in their first second). Stage 2 now reads one frame with no state and no pose, so the calibration horizon below survives as an argument, not as a module; the temporal horizons left are the object memory's two, and the state carried between frames is the slots alone (~138 KB, not ~1.8 MB). The coarse code is at commit e76aa94.
 **Readers:** the project owner, collaborating researchers, and anyone new to 2D LiDAR person detection.
-**Companion documents:** [`PAPER.md`](PAPER.md) holds the measurements this design rests on; [`../TODO.md`](../TODO.md) item A43 holds the work plan.
+**Companion documents:** [`PAPER.md`](PAPER.md) holds the measurements this design rests on; [`../TODO.md`](../TODO.md) holds the work plan.
 
 **How to read this.** §1 is the whole proposal on one page. §3 is the idea everything else follows from. §5.2 lists every building block with where it comes from. Numbers are measured in this repository unless marked *published*.
 
@@ -156,7 +156,7 @@ model.reset()                                  # between recordings
 | part of the state | contents | size |
 | --- | --- | --- |
 | fine cache | the last 2 frames of full-resolution features, with each beam's endpoint in room coordinates | 2 x 720 x 32 |
-| ~~coarse cache~~ (**removed 2026-10-08** with the coarse convolution, `TODO.md` A60) | the last 32 frames of low-resolution features, with the robot's pose for each | 32 x 90 x 128 |
+| ~~coarse cache~~ (**removed 2026-10-08** with the coarse convolution) | the last 32 frames of low-resolution features, with the robot's pose for each | 32 x 90 x 128 |
 | slots | 256 x [in use, value, position, velocity, learned state, statistics] | 256 x ~140 |
 
 In total, about 1.8 MB is carried from one frame to the next.
@@ -229,8 +229,8 @@ flowchart TB
 
 | memory | where | span | addressed by | horizon (§3) |
 | --- | --- | --- | --- | --- |
-| ~~fine temporal convolution~~ (**removed 2026-09-17**: tested, not needed; `TODO.md` A50) | stage 2, full resolution | ~0.08 s | beam | calibration |
-| ~~coarse space-time convolution~~ (**removed 2026-10-08**: end to end it lost 0.87 pp; `TODO.md` A60) | stage 2, bottleneck | ~1.3 s | angular sector | calibration, reaching into short |
+| ~~fine temporal convolution~~ (**removed 2026-09-17**: tested, not needed) | stage 2, full resolution | ~0.08 s | beam | calibration |
+| ~~coarse space-time convolution~~ (**removed 2026-10-08**: end to end it lost 0.87 pp) | stage 2, bottleneck | ~1.3 s | angular sector | calibration, reaching into short |
 | slot state, fast channels | stage 3 | ~1-10 s | object | short |
 | slot state, slow channels | stage 3 | ~10-60 s | object | long |
 
@@ -274,7 +274,7 @@ The last group is also what makes caching work: numbers measured relative to eac
 | layer | resolution | frames read | past offsets | why at this resolution |
 | --- | --- | --- | --- | --- |
 | fine | full, each beam separately | 3, consecutive | 0, 0.04, 0.08 s | pure calibration |
-| ~~coarse~~ (**removed 2026-10-08**, A60; a 3-tap convolution across sectors of the current frame stays) | 90 angular sectors, with neighbouring sectors | 5, eight frames apart | 0, 0.31, 0.61, 0.92, 1.22 s | a walking person crosses many beams in a second but only a few sectors |
+| ~~coarse~~ (**removed 2026-10-08**; a 3-tap convolution across sectors of the current frame stays) | 90 angular sectors, with neighbouring sectors | 5, eight frames apart | 0, 0.31, 0.61, 0.92, 1.22 s | a walking person crosses many beams in a second but only a few sectors |
 
 Each call computes one new frame per layer and reads the rest from its cache, so every frame is used at no extra cost.
 
@@ -355,7 +355,7 @@ Replayed on every frame of the FROG test recording, with candidates down to a sc
 | --- | --- | --- | --- | --- |
 | ~~`fine_lags_s`~~ | removed with the fine temporal convolution (2026-09-17) | - | - | - |
 | `max_range_m` | the model's range: missing, non-positive and farther readings all read as this value | `10.0` | FROG is annotated to 10 m; one rule for every dataset's no-return encoding (`memory/noise-structure.md`) | yes |
-| ~~`coarse_lags_s`~~ | removed with the coarse temporal convolution (2026-10-08, A60) | - | - | - |
+| ~~`coarse_lags_s`~~ | removed with the coarse temporal convolution (2026-10-08) | - | - | - |
 | `channels` | encoder widths | `[32, 64, 128]` | first sizing, comparable to LFE | yes |
 | `blocks_per_level` | ConvNeXt blocks per encoder level (decoder: 1) | `[2, 2, 2]`, bottleneck 2 | first sizing | yes |
 | `kernel_size` | depthwise convolution kernel | 7 | ConvNeXt's default | yes |
@@ -426,7 +426,7 @@ Multiply-adds are a hardware-independent count of the arithmetic a network perfo
 
 - **The cost of current temporal detectors comes from how many positions they process, not from attention.** DR-SPAAM runs a 128-512-channel CNN over a 56-point window around each of 720 beams (~40,000 positions per scan); Li2Former a 512-channel CNN over 720 windows of 64 points for 5 frames (~230,000). Their attention is cheap by comparison: Li2Former attends over only 5 frames per beam, and DR-SPAAM's 720 x 720 beam comparison is ~7 G of its 48 G. A whole-scan network processes 720 positions with narrow channels.
 - **This proposal's own quadratic part** — 256 slots exchanging information — is roughly 34 M of its 303 M.
-- **The Li2Former row is this project's reimplementation, not the published model** (corrected 2026-11-01, `TODO.md` item 31). The authors' released network, as their `__init__` builds it, has **29,466,056 parameters against the 4,703,939 counted here**, because it cascades omni-dimension aggregation blocks where ours had a single temporal encoder layer. Its attention is also **not** only over the 5 frames per beam: in the omni-dimension modes a 3-layer spatial encoder attends across all 720 cutouts of a scan, and a BatchFormer stream attends across the whole batch while training, so the quadratic term is 720 x 720 rather than 5 x 5 and the "attention is cheap by comparison" reading does not survive either way. **Trained here as `PARALLEL` with the auxiliary stream off, the network is 16,852,424 parameters** (2026-11-01: their deployment yaml's `MODE: TEMPORAL` was measured to leave 22.07 M of those 29.47 M without a gradient, so it is not the published configuration -- `TODO.md` item 31). The multiply-adds and training memory have not been recounted on their network.
+- **The Li2Former row is this project's reimplementation, not the published model** (corrected 2026-11-01). The authors' released network, as their `__init__` builds it, has **29,466,056 parameters against the 4,703,939 counted here**, because it cascades omni-dimension aggregation blocks where ours had a single temporal encoder layer. Its attention is also **not** only over the 5 frames per beam: in the omni-dimension modes a 3-layer spatial encoder attends across all 720 cutouts of a scan, and a BatchFormer stream attends across the whole batch while training, so the quadratic term is 720 x 720 rather than 5 x 5 and the "attention is cheap by comparison" reading does not survive either way. **Trained here as `PARALLEL` with the auxiliary stream off, the network is 16,852,424 parameters** (2026-11-01: their deployment yaml's `MODE: TEMPORAL` was measured to leave 22.07 M of those 29.47 M without a gradient, so it is not the published configuration). The multiply-adds and training memory have not been recounted on their network.
 - **Training memory.** Li2Former's 2 GB per frame explains why it ran out of memory here at batch size 2. This proposal stores ~22 MB per frame: a 35-frame clip needs ~0.8 GB, but a 10-second chunk trained end to end ~5.7 GB, so full-model training needs short gradient windows or activation checkpointing.
 - **Limits of the count.** Multiply-adds are not milliseconds: attention and memory lookups run slower than their count suggests, so the model must be timed once built. The first sizing's 1.49 M parameters are above this project's usual 100-500 K range, mostly because of the 4x block widening (§12).
 
@@ -457,7 +457,7 @@ Multiply-adds are a hardware-independent count of the arithmetic a network perfo
 | change | what it tests |
 | --- | --- |
 | remove the fine temporal convolution | the calibration horizon (**done**: a tie at three seeds, removed 2026-09-17) |
-| remove the coarse temporal convolution | the ~1.3 s motion scale (**done**: dropped by A60's end-to-end rule, 2026-10-08) |
+| remove the coarse temporal convolution | the ~1.3 s motion scale (**done**: dropped by its end-to-end rule, 2026-10-08) |
 | remove stage 3 | the short and long horizons together |
 | replace stage 3 with SORT on the same candidates | learned matching and state against a classical tracker |
 | remove the feedback prior | whether memory must change what the detector sees |

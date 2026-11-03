@@ -1,7 +1,7 @@
 """Writes `no_temporal_stage2.pt`: a small no-temporal stage 2 (`coarse_lags=(0,)`) built by the code at commit e76aa94, the last with
 the coarse temporal convolution, with its state dict, inputs and outputs. `tests/test_three_horizon.py` loads that state dict into
 today's single-frame network and requires the same outputs, which is what keeps every stage-3 result's stage 2 loading identically
-(`TODO.md` A60). Regenerating it needs that commit's code: `git worktree add ../lv-e76aa94 e76aa94`, then run this from there."""
+. Regenerating it needs that commit's code: `git worktree add ../lv-e76aa94 e76aa94`, then run this from there."""
 import sys
 from pathlib import Path
 

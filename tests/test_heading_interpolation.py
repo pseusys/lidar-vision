@@ -1,4 +1,4 @@
-"""The two heading interpolations whose difference item 3 is about (`TODO.md` §A item 3).
+"""The two heading interpolations, and the difference between them.
 
 `FROG_Dataset._load_odom` interpolated heading straight through 0 at every +-180 degree crossing until 2026-09-14: 54
 single-frame jumps above 2 degrees on the test recording, up to 144 degrees. Fixing it moved the displacement oracle from 4.20

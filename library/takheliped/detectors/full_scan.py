@@ -27,7 +27,7 @@ It sets BEAM_BATCH=True (like DrSpaamDetector), so the DataLoader passes
 convolves along the beam axis, so flattening splices B frames into one long
 scan and lets normalization statistics, SE gates and the convolutions
 themselves leak between frames that happen to share a minibatch — which made
-measured accuracy a function of batch size (TODO.md A18).
+measured accuracy a function of batch size.
 
 Input shape: (B, N_beams, T, 1); a bare (N_beams, T, 1) single scan is also
 accepted and treated as B=1.
@@ -44,7 +44,7 @@ give a total beam receptive field of 15 beams (±3.75° at 0.5°/beam).
 
 Two retired siblings
 --------------------
-This module held three architectures until TODO.md item 32 (2026-10-31).
+This module held three architectures until two of them were retired (2026-10-31).
 FullScanTCNDetector (causal temporal TCN over T + a dilated 1D CNN over beams,
 on a shared DilatedScanBackbone) and TemporalUNetDetector (a 1D U-Net with T
 input channels, heatmap head by default) were retired: nothing had trained on
@@ -312,7 +312,7 @@ class SpaceTimeCNNDetector(nn.Module):
         frames in time, a bigger batch leaked more temporal context and scored
         higher: measured on the real val split at dtime=10, beam-level person
         AUC ran 0.9644 (batch 1) -> 0.9696 (4) -> 0.9765 (16) -> 0.9810 (64),
-        while the robot itself runs `forward_one()` at batch 1 (TODO.md A18).
+        while the robot itself runs `forward_one()` at batch 1.
         """
         if x.dim() == 3:
             x = x.unsqueeze(0)                 # (N, T, 1) → (1, N, T, 1)

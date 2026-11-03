@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What do a dataset's raw range readings actually contain? (`TODO.md` A49, spec approved 2026-09-17.)
+"""What do a dataset's raw range readings actually contain? (spec approved 2026-09-17.)
 
 The answer picks the denoising mechanism, if any (`memory/noise-structure.md`), so the report is grouped by those categories:
 

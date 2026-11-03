@@ -3,8 +3,8 @@
 *keywords:* A56, pre-registration, paper claims, claim ledger, tracking ladder, ByteTrack, CBMOT, rule scorer, E14, E15, E16, E20, E21, E22, GOSPA, block bootstrap, stratified gain, occlusion, first-detection latency, val-tuned baseline
 
 **Status: done 2026-10-03.** The predictions below were written 2026-09-30 and were not edited after the runs started; the Outcome section at the end scores each one.
-**Updated before any run, 2026-10-02:** E10 now has two seeds (81.84 / 82.04, mean 81.94; its AP loss of 1.40 sits inside the 1.45 bar, while recall at matched FP and coasting precision still clear), and E19 ran as A51 S2 (a free-space input for the coasting head: better coasting ranking, flat end to end), so it is dropped from this batch.
-The literature behind it is [`../../docs/RESEARCH.md`](../../docs/RESEARCH.md) §7.4; the work items are [`../../TODO.md`](../../TODO.md) A56; the slot evidence it builds on is [`../slot-design-evidence.md`](../slot-design-evidence.md).
+**Updated before any run, 2026-10-02:** E10 now has two seeds (81.84 / 82.04, mean 81.94; its AP loss of 1.40 sits inside the 1.45 bar, while recall at matched FP and coasting precision still clear), and E19 ran as S2 (a free-space input for the coasting head: better coasting ranking, flat end to end), so it is dropped from this batch.
+The literature behind it is [`../../docs/RESEARCH.md`](../../docs/RESEARCH.md) §7.4; the work items are [`../../TODO.md`](../../TODO.md); the slot evidence it builds on is [`../slot-design-evidence.md`](../slot-design-evidence.md).
 This file records what is predicted and what each outcome changes in the paper, so that a result cannot be reinterpreted after it arrives.
 
 ## Where the evidence stands
@@ -34,9 +34,9 @@ Until rung 2 is measured, "a memory inside the detector beats post-hoc tracking"
 | C4 | The memory uses about 10 s of history and pays where the detector is weakest | E1 (95% of the gain by 10 s), E3 (flat across crowd size) | the gain concentrates on occluded, far or stationary people, as MoDAR reports for 3D | E20 | "memory helps everywhere", which E3 already supports |
 | C5 | The memory adds no confirmation latency, unlike `min_hits` tracking | none | first detection no later than the candidates' | E21 | the latency is stated as a cost |
 | C6 | Constant per-frame cost, flat in slot count, well inside a 25 ms frame | E4 (4.3-4.5 ms, 64 to 720 slots); stage 2 + decode ~10.4 ms | one end-to-end streaming benchmark of the proposed architecture | E22 | components reported separately, as now |
-| C7 | Room coordinates help only with good odometry | D1 (+1.14, 3 seeds), E2 (crossover ~0.01-0.02 m/s) | training with jittered poses closes the crossover | E11 (A51, agreed) | the caveat is stated |
+| C7 | Room coordinates help only with good odometry | D1 (+1.14, 3 seeds), E2 (crossover ~0.01-0.02 m/s) | training with jittered poses closes the crossover | E11 (agreed) | the caveat is stated |
 | C8 | Honest negatives: attention is unnecessary; the value rule is CBMOT's and earns nothing here; feedback into stage 2 does nothing | E6, E7, E13, D2, E12 | nothing | -- | -- |
-| C9 | The slots are also a tracker, and the detector transfers zero-shot | none | identities (JRDB) or mocap (Plozza et al.) | E17 (A49) | out of scope for this paper |
+| C9 | The slots are also a tracker, and the detector transfers zero-shot | none | identities (JRDB) or mocap (Plozza et al.) | E17 | out of scope for this paper |
 
 ## Pre-registered predictions and decisions
 
@@ -70,8 +70,8 @@ Until rung 2 is measured, "a memory inside the detector beats post-hoc tracking"
 | E22 | end-to-end streaming latency of the proposed architecture | stages 1-3 (E13), one stream, 2,000 frames, median and p99, GPU and CPU | ~20 min | C6 |
 | -- | uncertainty for every evaluation-only comparison | paired block bootstrap: 30 s blocks within the test recording, 1,000 resamples, 95% interval on the AP difference, per seed of the learned arm | ~10 min per pair | C2 |
 
-Every classical hyperparameter is tuned on val and scored on test once; tuning on test is what inflated A38's first result (`../rejected-ideas.md`).
-Not in this batch: E17 and E18 wait for A49; E19 already ran as A51 S2; E11 ran as A51 S3.
+Every classical hyperparameter is tuned on val and scored on test once; tuning on test is what inflated the radius sweep's first result (`../rejected-ideas.md`).
+Not in this batch: E17 and E18 wait for JRDB; E19 already ran as S2; E11 ran as S3.
 
 ## Tests, written before the code
 
@@ -93,9 +93,9 @@ About 6 h of machine time, no training.
 ## Outcome
 
 Run 2026-10-02/03 with `utils/tracking_baselines.py` (results in `checkpoints_three_horizon/a56/`, `report.json`).
-**On the old stage-2 recipe** (vote-grid candidates, 77.66%; E13 83.86%). The re-run on the adopted recipe (C1's `nms-mean` candidates, the A60 memories at 85.87%), one replay per stage-2 seed, is `TODO.md` A61, done 2026-10-09 (`checkpoints_three_horizon/a61/summary.json`); the numbers further below are the old recipe's.
+**On the old stage-2 recipe** (vote-grid candidates, 77.66%; E13 83.86%). The re-run on the adopted recipe (C1's `nms-mean` candidates, the memories at 85.87%), one replay per stage-2 seed, was done 2026-10-09 (`checkpoints_three_horizon/a61/summary.json`); the numbers further below are the old recipe's.
 
-### On the adopted recipe (A61, 2026-10-09)
+### On the adopted recipe (2026-10-09)
 
 | what reads the stage-2 candidates | AP, 3 seeds | vs candidates, per seed | recall at matched FP | GOSPA |
 | --- | --- | --- | --- | --- |
@@ -107,7 +107,7 @@ Run 2026-10-02/03 with `utils/tracking_baselines.py` (results in `checkpoints_th
 | **learned state, no attention (E13)** | **85.87%** | **+4.13 / +3.66 / +3.26; over E14 +2.84 [+1.99, +3.73] / +2.31 [+1.28, +3.36] / +1.94 [+0.94, +3.01]** | 95.47% | **0.454** |
 
 - **The claim survives**: E13 over the tuned tracker +2.36 pp (old recipe +2.90), every seed's interval above zero. The tuned tracker's own gain shrank more, +3.30 -> +1.32: a stronger stage 2 leaves a rule less to fix.
-- **Predictions** (`TODO.md` A61): E14's gain missed low (+1.3 against +1.5 to +2.5); E13 - E14 held (+1.0 to +2.5, all three above zero); E15 below the candidates held; the lead on occluded people (+3.4 recall at matched FP over E14), a trajectory's first 0.5 s (+3.4) and beyond 8 m (+3.2) held.
+- **Predictions**: E14's gain missed low (+1.3 against +1.5 to +2.5); E13 - E14 held (+1.0 to +2.5, all three above zero); E15 below the candidates held; the lead on occluded people (+3.4 recall at matched FP over E14), a trajectory's first 0.5 s (+3.4) and beyond 8 m (+3.2) held.
 - **Changed: recall at one matched false-positive rate is now a tie with the tuned tracker** (95.47 against 95.56%; old recipe +1.0). The memory trades visible, standing and near people (-0.5, -1.8, -1.5) for occluded, new and far ones; its lead is ranking over the whole curve (AP, GOSPA 0.454 against 0.493), not more people at one threshold. The paper must not claim higher recall at matched FP on this recipe.
 - First-frame detection: E13 93.0%, the candidates 91.2%, E14 83.0% -- still no confirmation delay.
 Test split, AP at 0.5 m on every 5th annotated frame; every classical setting tuned on val and scored on test once; 95% intervals from a paired block bootstrap (30 s blocks, 1,000 resamples), one per learned seed.
@@ -169,7 +169,7 @@ Every claim survives: E13 over E14 per seed is **+2.74 [+1.85, +3.68], +3.02 [+2
 Removing the copies helps every method, and helps least those that double-report most, since a double report was the only way to score a copy.
 Scripts and outputs: `checkpoints_three_horizon/a56/duplicates/`.
 
-**Nor does the double reporting move the comparison** (`TODO.md` A58, same day): a merge radius chosen on val buys no output anything (E13 -0.04 to -0.05 pp, E14 chooses none), and with both merged E13 over E14 is +2.90 [+2.00, +3.81], +3.16 [+2.14, +4.24], +2.51 [+1.09, +3.82].
+**Nor does the double reporting move the comparison** (same day): a merge radius chosen on val buys no output anything (E13 -0.04 to -0.05 pp, E14 chooses none), and with both merged E13 over E14 is +2.90 [+2.00, +3.81], +3.16 [+2.14, +4.24], +2.51 [+1.09, +3.82].
 Even an oracle that removes every redundant detection near a person lifts E13 and E14 alike, by about 0.5 pp (`rejected-ideas.md`).
 
 ### First detection (E21), 672 linked test trajectories

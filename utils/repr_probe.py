@@ -76,7 +76,7 @@ def _windows(scan, beams, hw):
 def _local_cartesian(scan, beams, angles, k=12, win_sz=None, hw_fixed=None):
     """Metric offsets from the window's own centre point, in that beam's frame.
 
-    The owner's proposal (TODO.md A42): drop polar preprocessing and hand the
+    The owner's proposal: drop polar preprocessing and hand the
     model Cartesian coordinates from the start.  For each sampled beam, take
     its neighbours, convert to (x, y), subtract the centre beam's own endpoint
     and rotate so that endpoint's bearing points along +y.
@@ -202,7 +202,7 @@ def sample(split, mode, stride, rng_seed, hw_fixed):
         out[(aname, "centred")] = _depth_centred(w, z).astype(np.float32)
         out[(aname, "lfe")] = _depth_lfe(w).astype(np.float32)
 
-    # A42: the same two angular choices, but metric offsets from the window's
+    # The local-Cartesian pair: the same two angular choices, but metric offsets from the window's
     # own centre point instead of a 1D range tunnel. 24 points x 2 channels =
     # 48 dims, matching the cutout exactly so this is not a dimensionality
     # comparison.

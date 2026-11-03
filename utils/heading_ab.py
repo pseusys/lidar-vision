@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Why did the displacement oracle move from 4.20 to 2.58 when the heading-wrap bug was fixed? (`TODO.md` §A item 3.)
+"""Why did the displacement oracle move from 4.20 to 2.58 when the heading-wrap bug was fixed?
 
 Until 2026-09-14 `FROG_Dataset._load_odom` interpolated heading **wrapped**, so a pair of odometry samples straddling +-180
 degrees interpolated the long way round: 54 single-frame jumps above 2 degrees on the test recording, up to 144 degrees. Fixing
-it changed A45's role-C displacement bound from **4.20 to 2.58** false positives removed per true positive lost -- and the two
+it changed the role-C displacement bound from **4.20 to 2.58** false positives removed per true positive lost -- and the two
 obvious explanations both predict the opposite sign:
 
     inflated boxes     a spurious rotation moves every detection, which *enlarges* a trail's world-frame bounding box, so

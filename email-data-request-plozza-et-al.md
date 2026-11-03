@@ -58,4 +58,4 @@ Best regards,
 - **The fallback question matters**: if they decline the data, the two questions still inform `TODO.md` (mounting height feeds
   the knee-height assumption; their view on detector-limited tracking is exactly the modularity gap this project argues).
 - **Precondition on our side before using any of it:** temporal lags are currently counted in frames, so a 20 Hz sensor would
-  silently double the coarse horizon from 0.8 s to 1.6 s. A49's "settings in physical units" must land first.
+  silently double the coarse horizon from 0.8 s to 1.6 s. The "settings in physical units" work must land first.

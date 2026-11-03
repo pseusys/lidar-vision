@@ -7,24 +7,24 @@ Open questions live in [`../TODO.md`](../TODO.md); this file is for settled ones
 
 Each entry states what was proposed, what was measured, and what new evidence would be needed to reopen it.
 
-## A learned association width (TODO.md item 20, A51's D5)
+## A learned association width
 
 *keywords: item 20, D5, association width, gate_m, SlotRules, S4, 99.2%, flat curve*
 
 **Idea.** Make the Gaussian width that matches a candidate to a slot learned and input-dependent, rather than the fixed
-`gate_m` in `SlotRules`. It was the last of A51's "what could become trainable" list to stay open.
+`gate_m` in `SlotRules`. It was the last of the "what could become trainable" list to stay open.
 
-**Why rejected without a run (owner's call, 2026-10-22).** A51's S4 had already swept the parameter it would learn:
+**Why rejected without a run (owner's call, 2026-10-22).** An earlier sweep had already covered the parameter it would learn:
 **99.1 / 99.2 / 99.2%** of annotated people have a live slot within 0.5 m at gates of 0.3 / 0.6 / 1.0 m. The association
 is not the limit -- it reaches essentially everybody, and the curve is flat across a 3x range -- so a learned width has
 **0.8% of people to recover** and no gradient in the measurement to suggest where it would find them. S4 was closed as
-"not worth a training run" on this same reading; item 20 was gated on item 8 and inherits it.
+"not worth a training run" on this same reading, which this question inherits.
 
 **What would reopen it.** A dataset where association demonstrably fails: more crowding than FROG's 3.06 people per
 frame, or a frame rate low enough that a person moves further than the gate between scans (DROW at 12.5 Hz is 3.2x
-FROG's period, so A63 is where to look).
+FROG's period, so DROW and JRDB are where to look).
 
-## The full voteless LFE head: a Gaussian heatmap with a peak decoder (TODO.md item 44(b))
+## The full voteless LFE head: a Gaussian heatmap with a peak decoder
 
 *keywords: item 44b, LFE head, peaks decoder, heatmap, no vote regression, dropped without an arm, fixed-weight decomposition*
 
@@ -39,7 +39,7 @@ Two independent results bound it:
    through LFE-Peaks' own decoder scores **71.26% against `nms-mean`'s 79.88%**, and **50.3% against 81.6%** at 8-10 m
    at a tight operating point. Of that 8.62 pp gap, **2.84 pp is centre regression a voteless head cannot recover at
    all**.
-2. **The objective half was then measured by item 44(a)'s probe**, which is the part a fixed-weight decomposition
+2. **The objective half was then measured by the soft target's probe**, which is the part a fixed-weight decomposition
    *cannot* bound -- that page says so itself: "the network's +6.15 is a lower bound, since our probability map was
    trained for votes, not for peaks". Trained *for* a Gaussian target, `peaks` improves **+2.81 pp** (72.54% ->
    75.35%) -- and still trails `nms-mean`'s **82.78%** by **7.4 pp**.
@@ -50,17 +50,17 @@ existing measurements already reach from opposite directions.
 
 **What would reopen it.** A dataset where candidate *positions* are not the limiting factor, or a deployment that
 cannot afford the vote head's decode. Neither describes FROG, where stage 2 already places 98.1-98.5% of people inside
-the 0.5 m match radius (item 34).
+the 0.5 m match radius.
 
-**What survives.** Item 44(a)'s half -- `beam_heatmap` and `compute_loss(soft_labels=)` -- is independent of this and
+**What survives.** The soft Gaussian target's half -- `beam_heatmap` and `compute_loss(soft_labels=)` -- is independent of this and
 remains a live candidate on its own evidence.
 
-## A learned grid over the room: spatial binding in place of object binding (TODO.md item 22)
+## A learned grid over the room: spatial binding in place of object binding
 
 *keywords: item 22, grid slots, cell_m, spatial binding, occupancy grid, 2x2, room frame, measured not assumed*
 
 **Idea.** Replace object-bound slots with cells of the room. The obvious reviewer question about this architecture --
-"why slots rather than an occupancy grid?" -- and the classical robotics answer, never tested here. Item 36 had shown
+"why slots rather than an occupancy grid?" -- and the classical robotics answer, never tested here. The global-state ablation had shown
 *addressability* matters but never **which kind**, so the paper's central claim was assumed rather than supported.
 
 **Run as sparse "grid slots" (the owner's design), because a dense grid is not the question.** FROG's venue is
@@ -85,19 +85,19 @@ Coarser cells are worse, so the loss is not a resolution artefact.
 measurement. The write-up can state that object binding was compared against the spatial alternative at matched
 capacity in the same room frame and recovers 2.3x the value -- rather than asserting it.
 
-**Where it lives.** `SlotRules.cell_m` and `--cell-m` on `step3a`; `tests/test_grid_slots.py`; `utils/queue_item22.py`.
+**Where it lives.** `SlotRules.cell_m` and `--cell-m` on `step3a`; `tests/test_grid_slots.py`; `utils/queue_object_binding.py`.
 Off by default and bit-identical when off.
 
 **What would reopen it.** A deployment with no usable odometry, where object binding's dependence on the association's
 geometric consistency is a liability -- the sensor-frame row suggests cell binding degrades more gracefully, losing
 0.84 pp to the frame where object binding loses 1.31.
 
-## Slot Attention's own update, abandoned on a numerical guard (TODO.md item 42)
+## Slot Attention's own update, abandoned on a numerical guard
 
 *keywords: item 42, Slot Attention, Locatello, --iterations, NaN gradients, training guard, abandoned unmeasured*
 
-**Idea.** `docs/RESEARCH.md` credited Slot Attention for the *abstraction* and not the mechanism. Item 36 proved the
-abstraction load-bearing and item 38 preferred a citable cell to a re-implemented one, so the published *update* --
+**Idea.** `docs/RESEARCH.md` credited Slot Attention for the *abstraction* and not the mechanism. The global-state ablation proved the
+abstraction load-bearing, and a citable cell was preferred to a re-implemented one, so the published *update* --
 iterated competitive attention, softmax over slots, with a GRU state step -- was the conclusion of that logic.
 
 **What happened** (2026-10-25). Implemented as `--iterations N` with 24 tests and a clean two-recording smoke. The arm
@@ -131,11 +131,11 @@ off. The failing state is kept at `checkpoints_three_horizon/a70_slot_attention_
 people on FROG, which is part of why the arm was not worth a second night. DROW at 12.5 Hz, where a person moves 3.2x
 further between scans, is the place to look.
 
-## Position refinement: slots regressing a correction to the candidate's position (TODO.md item 46, A51's O3)
+## Position refinement: slots regressing a correction to the candidate's position
 
 *keywords: item 46, O3, position refinement, --refine, candidate_xy, matched_person_xy, recall at matched FP, coverage*
 
-**Idea.** The only mechanism on the architecture list that moves a detection rather than rescoring it. Item 35 gave it
+**Idea.** The only mechanism on the architecture list that moves a detection rather than rescoring it. The coverage audit gave it
 the reason it had lacked for a year: at its own operating point the memory recovers 203 person-observations and loses
 2,990, so its entire +3.9 pp of AP is ranking, and a position correction was the one way carried state might become
 coverage.
@@ -153,15 +153,15 @@ positions when the head is absent, so the evaluation path never branches on a fl
 `refinement_loss` in `utils/train_takheliped.py`. Off by default and bit-identical when off.
 
 **What would reopen it.** A dataset where candidate *positions* are the limiting error rather than candidate *scores*.
-FROG's stage 2 already places 98.1-98.5% of people inside the 0.5 m match radius (item 34), so there is almost no
+FROG's stage 2 already places 98.1-98.5% of people inside the 0.5 m match radius, so there is almost no
 position error for a correction to remove; DROW at 12.5 Hz, where a person moves 3.2x further between scans, is where
-to look (A63).
+to look.
 
-## Hungarian association, and four stage-2 shape knobs (TODO.md items 43 and 45)
+## Hungarian association, and four stage-2 shape knobs
 
 *keywords: item 43, item 45, hungarian, linear_sum_assignment, mutual nearest-neighbour, kernel_size, expansion, blocks, bottleneck_blocks, batch 1*
 
-**Item 43, Hungarian association.** The standard primitive against the adopted mutual-nearest-neighbour rule, over the
+**Hungarian association.** The standard primitive against the adopted mutual-nearest-neighbour rule, over the
 gated sub-problem per stream. **86.08% against the control's 86.40%**, -0.32 pp inside the 1.32 pp bar, and **+0.08 ms**
 on a 19.46 ms CPU total, inside the noise its identical `stage2` control phase measures. It differs only in operating
 point: recall **88.94%** against 84.33%, at FP 1.330 against 0.911, because a globally optimal assignment keeps more
@@ -172,9 +172,9 @@ CPU and was wrong** -- 4.3x per training epoch on 1 s chunks does not transfer t
 (`interpreting-evaluation.md`). Training total was 1.4x (13.99 h against 10.06, 58 epochs against 64), and the arm
 survived two OOMs on `--resume`.
 
-**Item 45, four shape knobs** -- all already `CalibrationNetwork` arguments, chosen once and never varied. Averaged
+**four shape knobs** -- all already `CalibrationNetwork` arguments, chosen once and never varied. Averaged
 weights through `nms-mean`, control mean 82.19 (range 82.08-82.28): `expansion2` **82.27**, `kernel11` **82.15**,
-`kernel5` **82.11**, `deeper` **81.87**. All inside or at the range. **Depth is flat just as item 19 found width flat**,
+`kernel5` **82.11**, `deeper` **81.87**. All inside or at the range. **Depth is flat just as the sweep found width flat**,
 and halving ConvNeXt's inverted bottleneck changes nothing.
 
 **Not run from the same item, deliberately:** `--neighbours` changes `N_BEAM_FEATURES` and the stem's input width, and
@@ -183,14 +183,14 @@ and halving ConvNeXt's inverted bottleneck changes nothing.
 **Where they live.** `--association hungarian` in `SlotRules` with `_assign` in the detector; `--kernel-size`,
 `--expansion`, `--blocks`, `--bottleneck-blocks` on `step2`, all four in `network_shape`. Off by default.
 
-## Ablating stage 2's whole-scan aggregator, and dropping stage 3's curriculum (TODO.md items 40 and 41)
+## Ablating stage 2's whole-scan aggregator, and dropping stage 3's curriculum
 
 *keywords: item 40, item 41, --no-aggregator, whole-scan max, --chunk-s 10, curriculum, averaged weights, best checkpoint, 1.40 pp*
 
 Both were **flat**, and both are kept in the tree because each would simplify the architecture at no measured cost if
 the owner wants it.
 
-**Item 40, the whole-scan max aggregator.** `--no-aggregator` drops `x.amax(dim=-1).expand_as(x)` from the bottleneck's
+**the whole-scan max aggregator.** `--no-aggregator` drops `x.amax(dim=-1).expand_as(x)` from the bottleneck's
 concatenation, halving `aggregate`'s input width and saving 16,384 parameters. On the averaged weights through
 `nms-mean`: **82.24% against the control's 82.19% mean and 82.08-82.28 range**, with the highest recall of the four
 (94.7%). Nothing lost.
@@ -200,11 +200,11 @@ Weight averaging gained this arm **+1.40 pp** where the controls gain +0.1 to +0
 than a point and only the averaged one describes what stage 3 loads. **Score stage-2 arms on averaged weights**; the
 best-checkpoint column in `step2_results.json` is not a substitute and can invert the verdict.
 
-**What it leaves open.** A59 put about half the lead over LFE-Peaks in the output head; items 19a, 19b and 40 have now
+**What it leaves open.** The attribution ladder put about half the lead over LFE-Peaks in the output head; items 19a, 19b and 40 have now
 found the block interchangeable, the widths flat and the aggregator free. The other half of stage 2's lead has **no
 identified owner**, and the aggregator is described as a defining feature in `../docs/RESEARCH.md` §5.2.
 
-**Item 41, the 1 s curriculum stage.** `--chunk-s 10` alone: **85.97% against the control's 86.40%**, -0.43 pp inside
+**the 1 s curriculum stage.** `--chunk-s 10` alone: **85.97% against the control's 86.40%**, -0.43 pp inside
 the 1.32 pp bar, reached in **7.66 h against 10.06** and 38 epochs against 64. The operating point moved (FP 0.678
 against 0.911, recall 79.3% against 84.3%) for the same integrated AP, so the two are not interchangeable at a fixed
 threshold.
@@ -212,14 +212,14 @@ threshold.
 **Where they live.** `--no-aggregator` on `step2` with an `aggregator` key in `network_shape`; `--chunk-s 10` needs no
 code at all. Both off by default and bit-identical when off.
 
-## Sensor-frame vote targets in stage 2's head (TODO.md item 18)
+## Sensor-frame vote targets in stage 2's head
 
 *keywords: item 18, --vote-frame sensor, swap_vote_frame, make_targets frame, a67_sensor, beam-relative offsets, across along*
 
 **Idea.** DROW's head, which this project inherited, regresses the offset to a person's centre in **each beam's own
 rotated frame** -- `(across, along)`, measured from that beam's endpoint. One person is therefore a different target for
 every bearing that sees it. The arm gives every beam the sensor's **one shared Cartesian frame** instead, so a person is
-one target. A59 put about half this project's lead over LFE-Peaks in the output head, which is what made the head worth
+one target. The ladder put about half this project's lead over LFE-Peaks in the output head, which is what made the head worth
 probing.
 
 **What was measured** (2026-10-21, three seeds, averaged weights, adopted `nms-mean` decoder): **81.42% mean against the
@@ -235,19 +235,19 @@ asks every beam for the same global coordinate and turns the bearing into someth
 `make_targets(frame=...)` in `utils/train.py`, and `beam_frame_votes` in `utils/train_takheliped.py`, which rotates the
 head's output back at the decoders' door so no decoder knows which arm produced it.
 
-## A plain residual block, and doubling stage 2's widths (TODO.md item 19)
+## A plain residual block, and doubling stage 2's widths
 
 *keywords: item 19, --block residual, ResidualBlock, ConvNeXtBlock, --channels 64 128 256, a67_residual, a67_wide, capacity plateau*
 
 **Idea.** Two untested parts of stage 2: whether the **ConvNeXt block** is the reason it works (depthwise large kernel,
 inverted bottleneck) or whether a plain residual block of two full convolutions would do (He et al., CVPR 2016); and
-whether **more capacity** helps, since A59's W arm had only ever priced shrinking.
+whether **more capacity** helps, since the width arm had only ever priced shrinking.
 
 **What was measured** (2026-10-21, three seeds each, averaged weights, `nms-mean`): the residual block **82.02% against
 82.19%**, -0.17 pp with overlapping ranges; the doubled widths **82.25%**, +0.06 pp for roughly **three times the
 parameters**.
 
-**Why rejected: the plateau is flat in both directions.** Shrinking to LFE's widths cost 1.4 pp (A59 arm W) and widening
+**Why rejected: the plateau is flat in both directions.** Shrinking to LFE's widths cost 1.4 pp and widening
 gains nothing, so the adopted 32/64/128 sits at the top of a flat region and **capacity is not where this detector's score
 lives**. The block is interchangeable, so ConvNeXt is kept for being no worse and already trained, not for being
 necessary -- which is what a write-up should say about it.
@@ -256,7 +256,7 @@ necessary -- which is what a write-up should say about it.
 `library/takheliped/detectors/takheliped.py`) and `--channels 64 128 256`, which needed no new code. Both are recorded in
 `network_shape`, so a checkpoint rebuilds into the network it was trained as.
 
-## Stage 2's coarse temporal convolution (TODO.md A60)
+## Stage 2's coarse temporal convolution
 
 *keywords: A60, coarse convolution, CausalTemporalConv, coarse_lags, --coarse-lags, align_sectors, TemporalCache, CalibrationState, calibration horizon, e76aa94, restore*
 
@@ -264,13 +264,13 @@ necessary -- which is what a write-up should say about it.
 
 **What was measured.** At stage 2 alone it tied or lost: 77.92% (old controls) or 76.65% (fresh) against the no-temporal 77.23%, and on the adopted recipe 81.09% against 81.93%. **End to end** (2026-10-08, E13's stage 3 on each, three seeds, FROG test): **85.01% against 85.87%** AP, -0.86 at AP@0.3, and on people in their first second in view -- the only place a memory cannot help -- **+0.59 pp** against a +2 pp bar written before the runs (`utils/coarse_e2e.py`, `checkpoints_three_horizon/a60/a60.json`). The memory added less on top of a coarse stage 2 (+2.4 to +3.0) than on top of a no-temporal one (+3.3 to +4.1). It cost +201,216 parameters (+20.6%), ~3.3x the training time per epoch, a ~1.8 MB streaming cache, and odometry inside stage 2.
 
-**Why rejected (owner's call, 2026-10-08): the object memory gets more out of the same sub-second span** -- emptied every 0.5 s it already adds +1.75 pp (A51 E1) -- and the convolution earns nothing anywhere it was measured.
+**Why rejected (owner's call, 2026-10-08): the object memory gets more out of the same sub-second span** -- emptied every 0.5 s it already adds +1.75 pp -- and the convolution earns nothing anywhere it was measured.
 
 **Where it lives, to restore it.** Commit **e76aa94**, `library/takheliped/detectors/takheliped.py`: `align_sectors`, `TemporalCache`, `CausalTemporalConv`, `CalibrationState`, `POSE_CHANNELS`, and `CalibrationNetwork`'s `coarse_lags`, `poses` and `step`; `utils/train_takheliped.py`: `clip_length`, `clip_frames`, `clip_batch`, `mirror_clips` (which also mirrored poses), `network_candidates`' poses, `JointState.calibration`, `detach_joint`'s cache copy, and `step2 --coarse-lags/--clip-frames`. One line restores either file: `git show e76aa94:<path> > <path>`. Checkpoints that need it: `default_s*`, `confirm_nofine_s*`, `step2_no_fine`, `step2_control`, `exclude_limit_s*`, `a60_default_c1_s*`.
 
-**Reopen if** a dataset or sensor makes the memory's first second matter more -- a lower frame rate, where 0.8 s is a few scans (A49), or a scene where people mostly appear briefly -- and measure it end to end again, not at stage 2.
+**Reopen if** a dataset or sensor makes the memory's first second matter more -- a lower frame rate, where 0.8 s is a few scans, or a scene where people mostly appear briefly -- and measure it end to end again, not at stage 2.
 
-## A second, wider depth-centring channel in stage 2 (TODO.md A59 arm F3)
+## A second, wider depth-centring channel in stage 2
 
 *keywords: A59, F3, median_windows_deg, --median-windows-deg, MEDIAN_WINDOW_DEG, range minus median, blind spot, 33 deg*
 
@@ -282,7 +282,7 @@ necessary -- which is what a write-up should say about it.
 
 **Reopen if** a dataset puts most people within 2 m of the sensor (a service robot in a corridor), where the blind spot covers the bulk of the data rather than 14% of it.
 
-## A merge radius on the object memory's output (TODO.md A58)
+## A merge radius on the object memory's output
 
 *keywords: A58, merge radius, NMS, double report, duplicate detection, coasting slot beside a candidate, merge_detections, oracle bound*
 
@@ -290,7 +290,7 @@ necessary -- which is what a write-up should say about it.
 1.7%), and stage 3 has no merge step, while the merge radius is the best-priced precision lever measured here. Merge its output
 as the LFE detectors merge theirs.
 
-**What was measured** (2026-10-05, `tracking_baselines.py merge`, the saved A56 frames; radius chosen per output on val from
+**What was measured** (2026-10-05, `tracking_baselines.py merge`, the saved baseline frames; radius chosen per output on val from
 none / 0.10-0.60 m, test every 5th annotated frame scored once):
 
 | output | val chooses | test AP, none -> chosen | at 0.30 m | at 0.50 m | oracle: every redundant detection removed |
@@ -313,7 +313,7 @@ doubles may rank higher), or a training change that makes the coasting slot besi
 for a fix inside the model, which would stop a slot coasting beside its own person, is the oracle's +0.26-0.41 pp on slots
 alone (`checkpoints_three_horizon/a56/merge_oracle.json`).
 
-## A hand-coded rescoring rule in place of the memory's learned head (TODO.md A56)
+## A hand-coded rescoring rule in place of the memory's learned head
 
 *keywords: A56, E14, E15, CBMOT, ByteTrack, rule scorer, track confidence, score update, value as score, saturation, decay*
 
@@ -336,7 +336,7 @@ occluded people and new trajectories.
 **What would reopen it.** A platform where a deployed rule must replace a learned head (no GPU, no training data); then E14's tuned
 configuration is the starting point, not the value rule.
 
-## Four slot-memory ideas closed by measurement (TODO.md A51)
+## Four slot-memory ideas closed by measurement
 
 *keywords: A51, slots, stage 3, S3, S4, T3, D2, more candidates, learned association, slot statistics, accumulated value, capacity*
 
@@ -362,7 +362,7 @@ latest candidate score **scored 83.94% against B0's 83.34% mean**, so it does no
 briefly hidden person's slot; on FROG the learned slot state appears to cover that already. One seed, so this is "claim it and you
 will be asked for evidence you do not have", not "it is wrong".
 
-## A per-beam fine temporal convolution (the "calibration" denoiser) in the three-horizon detector (TODO.md A50)
+## A per-beam fine temporal convolution (the "calibration" denoiser) in the three-horizon detector
 
 *keywords: A50, fine convolution, fine_lags, --fine-lags, align_beams, calibration horizon, denoising, jitter, 3 taps, 5 taps, 7 taps, tested hypothesis, not required*
 
@@ -381,7 +381,7 @@ will be asked for evidence you do not have", not "it is wrong".
 
 **What would reopen it.** A dataset whose checker report shows jitter comparable to the match radius, or spikes that are not motion, with a model trained on it that loses AP to that noise.
 
-## Excluding beams at the range limit from stage 2's training loss: a tie, not needed (TODO.md A50)
+## Excluding beams at the range limit from stage 2's training loss: a tie, not needed
 
 *keywords: A50, --limit-beams-in-loss, training_beams, calibration_loss, limit beams, missing returns, loss mask, open space negatives*
 
@@ -393,7 +393,7 @@ will be asked for evidence you do not have", not "it is wrong".
 
 **What would reopen it.** A dataset where limit beams are rare enough that the class balance is not affected, or a variant that keeps them as negatives for classification and drops only their vote loss.
 
-## Median-based temporal denoising of range scans, replacing the fine convolution (TODO.md A50)
+## Median-based temporal denoising of range scans, replacing the fine convolution
 
 *keywords: A50, denoise_ranges, --fine-denoise, project_ranges, most recent non-outlier, median outlier rejection, fine convolution, temporal denoising, thin moving objects, legs*
 
@@ -430,10 +430,10 @@ Phantoms are furniture: static, long-lived, and fixed in the world while the rob
 
 | mechanism | best FP per FN |
 | --- | --- |
-| detection-frequency per cell, exponentially forgetting (A41) | 0.57 |
-| background model from raw scan returns, keyed on hit rate (A44) | 1.90 (LFE-PPN 3.32) |
-| trail-length filter, *acausal oracle* (A45) | 2.54 |
-| displacement filter, *acausal oracle* (A45) | 4.20 |
+| detection-frequency per cell, exponentially forgetting | 0.57 |
+| background model from raw scan returns, keyed on hit rate | 1.90 (LFE-PPN 3.32) |
+| trail-length filter, *acausal oracle* | 2.54 |
+| displacement filter, *acausal oracle* | 4.20 |
 | *SORT, for reference* | *3.8* |
 | *merge radius, for reference* | *21.9* |
 
@@ -442,7 +442,7 @@ Only the acausal displacement oracle beats SORT, and it is unreachable by constr
 
 The 89.7% was measured on **person-free** frames, where a filter cannot destroy a true positive. It bounds *removal*, never *discrimination*, and the cost column turns out to be most of the story.
 
-The deeper reason is structural and shows directly in A44's table: at a 30 s minimum observation span only **11.3%** of phantoms qualify, and at 100 s none do. **On a mobile robot, how long something has been at a location is dominated by how long the robot looked at it.** A museum robot drives past a chair rather than watching it, so world-location persistence is largely a statement about the robot's own transit -- and short-lived is exactly what a person is too.
+The deeper reason is structural and shows directly in the background map's table: at a 30 s minimum observation span only **11.3%** of phantoms qualify, and at 100 s none do. **On a mobile robot, how long something has been at a location is dominated by how long the robot looked at it.** A museum robot drives past a chair rather than watching it, so world-location persistence is largely a statement about the robot's own transit -- and short-lived is exactly what a person is too.
 
 **What would reopen it.**
 A **stationary or slowly-patrolling** platform, where per-location observation span is set by the scene rather than by the robot's path -- the premise fails on mobility, not on the physics.
@@ -450,7 +450,7 @@ The published case where place-keyed memory does pay is exactly that one: Luber,
 
 **What this does not reject.** The horizon argument itself. 786 frames is still the span over which the separating evidence exists; what is rejected is reaching it through location.
 
-## Two candidate decoders in parallel, fused by stage 3 (TODO.md item 34)
+## Two candidate decoders in parallel, fused by stage 3
 
 *keywords: item 34, union_decode, parallel decoders, complementarity, pool coverage, candidate floor, 98.41%, oracle at the wrong operating point, two score scales*
 
@@ -495,7 +495,7 @@ of error as `AGENTS.md` rule 3's cross-regime comparisons.
 which a second decoder would have people left to contribute. `union_decode` and `pool_coverage` stay in the tree, tested, so
 checking that costs one run.
 
-## A range-split candidate decoder, and the NMS radius with it (TODO.md items 13 and 17)
+## A range-split candidate decoder, and the NMS radius with it
 
 *keywords: item 13, item 17, range_split_decode, split-6m, split-8m, nms-mean-0.4, nms-mean-0.6, decoder geometry, score scale, matched false positives*
 
@@ -503,7 +503,7 @@ checking that costs one run.
 finds **85.3-85.6%** of people at 8-10 m where the adopted `nms-mean` finds **80.9-81.6%**, because aggregating many weak
 votes helps where few beams are on target; `nms-mean` finds **86.6-89.7%** of close pairs where the grid finds **66.8-70.5%**.
 Close pairs are a near-range problem and sparse returns a far-range one, so run `nms-mean` within R metres of the sensor and
-the vote grid beyond it, and keep both wins. The NMS radius was swept beside it as the control (`TODO.md` A38's lesson).
+the vote grid beyond it, and keep both wins. The NMS radius was swept beside it as the control, which the range-aware radius had already taught.
 
 **What was measured** (2026-10-15, `stage2_probe.py`, the adopted recipe's three seeds, `official` test every 5th annotated
 frame, every decoder scored at LFE-Peaks' own 1.784 false positives per frame):
@@ -532,14 +532,14 @@ within **88.0-89.7%**, inside the seed spread. Decoder geometry **redistributes*
 changing the total: 0.4 m buys 2-5 pp on close pairs and loses 4-5 pp at 8-10 m, 0.6 m does the reverse. There is no setting
 that is better, only settings that are differently wrong, and the adopted 0.5 m sits in the middle of the trade.
 
-**This also closes item 17**, which merged here once its own precondition showed the 64-candidate pool is never full
+**This also closes the pool-size question**, which merged here once its own precondition showed the 64-candidate pool is never full
 (`CHANGELOG.md` 2026-10-15): the remaining lever was the decoder's suppression, and the suppression has no free prize in it.
 
 **Reopen if** a dataset is crowd-dominated rather than range-dominated. `nms-mean` at 0.4 m is the best close-pair decoder
 measured here, by 2-5 pp on all three seeds, and on data where most people have a neighbour under 0.6 m that trade reverses.
 FROG has 9%.
 
-## Range-aware merge/NMS radius, `r(d) = a + b*d` (TODO.md A38)
+## Range-aware merge/NMS radius, `r(d) = a + b*d`
 
 *keywords: A38, merge_radius_slope, nms_radius_slope, range-aware radius, close-pair, over-merging, tuning on test*
 
@@ -579,7 +579,7 @@ A constant radius beats the best range-aware cell on both detectors and at both 
 
 More sharply: **AP and the Tier 0 measurement disagree about the direction.** AP wants *more* merging; Tier 0 measured over-merging costing ~5 pp of recall at a fixed operating point. Both are right about their own quantity. AP charges fully for a duplicate and barely at all for a close-pair miss, because the surviving merged detection still matches *one* of the two people -- so the second person's loss shows up only as a single missed GT, against a duplicate's full false positive. This is the same structural blindness `docs/PAPER.md` argues about false positives, on a different axis.
 
-**Confirmed on the operating-point metric too (A40, same day).** The re-run scored against recall, duplicates, phantoms and close-pair misses at threshold 0.3 rather than AP. At matched recall the constant still wins: LFE-Peaks at 76.9% recall costs 1.380 FP/frame constant against 1.445 range-aware, LFE-PPN at ~85.8% costs 3.001 against 3.079. The single comparison it does not lose is LFE-PPN at `d = 0.3 m`, where the two are within noise. **It loses or ties on both metrics, both detectors and both association distances, and never wins.**
+**Confirmed on the operating-point metric too (same day).** The re-run scored against recall, duplicates, phantoms and close-pair misses at threshold 0.3 rather than AP. At matched recall the constant still wins: LFE-Peaks at 76.9% recall costs 1.380 FP/frame constant against 1.445 range-aware, LFE-PPN at ~85.8% costs 3.001 against 3.079. The single comparison it does not lose is LFE-PPN at `d = 0.3 m`, where the two are within noise. **It loses or ties on both metrics, both detectors and both association distances, and never wins.**
 
 **And the motivation itself did not survive.** The ~5 pp of recall this was built to recover is not there: recall moves only **1.8 pp** across radii from 0.20 m to 0.50 m, while duplicates fall 18-fold. Tier 0's close-pair figure counted detections *before* thresholding; at the operating point the class is 1.1% of people. The radius is a precision lever.
 
@@ -612,7 +612,7 @@ Widen the temporal window from `T=5` consecutive frames (~125 ms of real time) t
 
 **What was tried.**
 A full retrain of `FullScanTCNDetector` on FROG with `--time-frame 10 --dtime 20`, otherwise identical hyperparameters to the existing `fullscan_tcn.best.pth` baseline.
-**`FullScanTCNDetector` was retired on 2026-10-31** (`TODO.md` item 32); to re-run this, the class lives at commit `98b0716`.
+**`FullScanTCNDetector` was retired on 2026-10-31**; to re-run this, the class lives at commit `98b0716`.
 Early-stopped at epoch 8 (best at epoch 3), final val-set wp-AUC 54.8% — a ~15-point regression from the `dtime=1` baseline's 69.5-69.7%.
 
 **Why rejected.**

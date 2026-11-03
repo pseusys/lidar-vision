@@ -1,5 +1,5 @@
 """
-Unit tests for the person-free-split metric (TODO.md A31).
+Unit tests for the person-free-split metric.
 
 On a split with no annotated people, wp-AUC is not "low", it is *undefined*:
 precision is 0 at every threshold and recall has no denominator. The metric
@@ -110,7 +110,7 @@ class TestSplitGuard:
     """The metric is only meaningful where every detection *is* a false
     positive. Running it on a split that contains people would report misses
     and hits as phantoms, which is precisely the class of mislabelled number
-    A31 exists to stop."""
+    the per-mode metric exists to stop."""
 
     def _fake_dataset(self, wps):
         class _DS:
@@ -188,7 +188,7 @@ class TestTrackedEvaluationWalksEveryFrame:
 class TestEgoMotionDeltas:
     """FROG odometry is not zero -- 1.88 cm and up to 0.4 deg per frame -- and
     the claim that it was came from `_load_or_fake_odom()` substituting zeros
-    on failure (TODO.md A14). Over a track's lifetime 0.4 deg/frame is a third
+    on failure. Over a track's lifetime 0.4 deg/frame is a third
     of a metre at 8 m range, most of the tracker's gate."""
 
     def _odoms(self, xya):

@@ -43,7 +43,7 @@ Workflow rules — what to edit, when to abstract, what to re-run — are in [`d
   Never hardcode `device="cpu"` in new code outside a one-off script that has an explicit reason to (see `commands.md`'s note on `evaluate.py`'s own CPU-only convention).
 - **Trainable detectors stay CNN/TCN-only — no RNN, no attention.**
   This is the research's own scope boundary (`docs/RESEARCH.md` §2, constraint 1), not an oversight; don't reintroduce recurrence or attention into `spacetime_cnn` without checking with the owner first.
-  (`fullscan_tcn` and `temporal_unet` carried the same boundary and were retired on 2026-10-31, `TODO.md` item 32.)
+  (`fullscan_tcn` and `temporal_unet` carried the same boundary and were retired on 2026-10-31.)
 - **Intended linter: `ruff`.** Not yet configured — see `TODO.md`.
 
 ## C++

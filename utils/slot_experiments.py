@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The four evaluation-only slot experiments a write-up about the object memory needs (`TODO.md` A51 phase 5).
+"""The four evaluation-only slot experiments a write-up about the object memory needs.
 
 None of them trains anything: each replays a trained stage 3 over the FROG `official` test split and changes one thing about how
 it is run or scored.
@@ -49,13 +49,13 @@ HEADING_DEG_PER_S = 0.5
 CROWD_BUCKETS = ((0, 1), (2, 3), (4, 5), (6, 99))
 SLOT_COUNTS = (64, 128, 256, 512, 720)
 TIMED_FRAMES = 500
-# Item 39, bracketing the adopted 0.6 m: half it, and on up to a width at which every slot is about equally near,
-# which is item 36's global-state arm approached from the other direction.
+# The width sweep, bracketing the adopted 0.6 m: half it, and on up to a width at which every slot is about equally near,
+# which is the global-state arm approached from the other direction.
 SIGMAS_M = (0.3, 0.45, 0.6, 0.9, 1.5, 3.0)
-#: Item 50. Brackets the adopted 256 in both directions, because a sweep that only shrinks cannot show 256 is too
+#: The slot-budget arm. Brackets the adopted 256 in both directions, because a sweep that only shrinks cannot show 256 is too
 #: small. FROG holds at most a few dozen people in view, so the low end is where the interesting answer lives.
 CAPACITIES = (32, 64, 128, 256, 512)
-# Item 37. Four shapes share a 20% drop so gap shape is separated from how much data was lost; the last raises the share
+# Four shapes share a 20% drop so gap shape is separated from how much data was lost; the last raises the share
 # to 50% at the same shape. Bursts stay under 40 frames because MAX_DT_S is 1.0 s and a longer gap saturates the clamp.
 FLAKY_PATTERNS = (
     ("none", lambda s: np.ones(len(s.data.time), bool)),
@@ -214,16 +214,16 @@ def cost(args, device) -> Dict:
 
 
 def sigma(args, device) -> Dict:
-    """AP against `sigma_m`, the width of the recall attention's distance bias (`TODO.md` item 39).
+    """AP against `sigma_m`, the width of the recall attention's distance bias.
 
     **Replayed, not retrained**, which is minutes instead of hours: `step` reads `self.sigma_m` on every call, so a
     trained memory can be played at other widths with its weights untouched -- exactly how `cost` replays it at other
     slot counts.
 
-    **Why this parameter.** Item 36 settled that addressing is the entire mechanism (one global state captures 5% of the
+    **Why this parameter.** The global-state ablation settled that addressing is the entire mechanism (one global state captures 5% of the
     slots' gain), which makes `sigma_m` the number that defines the thing that matters. It has never been varied in any
-    form; A51's S4 swept `gate_m`, the *association* gate inside `manage_slots`, which is a different parameter in a
-    different component -- and that is why item 20 was closed and this is its sharper replacement.
+    form; an earlier sweep covered `gate_m`, the *association* gate inside `manage_slots`, which is a different parameter in a
+    different component -- and that is why the learned-width question was closed and this is its sharper replacement.
 
     **Read a flat curve weakly.** The weights adapted to 0.6, so a replay understates how much the width matters; a
     sharp curve is strong evidence and a flat one only says the trained model is locally insensitive. Train an arm only
@@ -243,10 +243,10 @@ def sigma(args, device) -> Dict:
 
 
 def native_timing(split) -> Dict:
-    """How uniform FROG actually is, both as stamped and as the model is fed it (`TODO.md` item 37).
+    """How uniform FROG actually is, both as stamped and as the model is fed it.
 
     The two differ on purpose and the difference is the item's premise: the raw stamps come in bunches of roughly 38 ms,
-    38 ms and under 0.1 ms, so `frame_periods` averages them over `DT_AVERAGE_FRAMES` (A51 item 0a). Whatever jitter the
+    38 ms and under 0.1 ms, so `frame_periods` averages them over `DT_AVERAGE_FRAMES`. Whatever jitter the
     stamps carry, what reaches `exp(-dt * rate)` is that average -- so this is the number that says whether the
     mechanism has ever had anything to act on.
     """
@@ -262,7 +262,7 @@ def native_timing(split) -> Dict:
 
 
 def flaky(args, device) -> Dict:
-    """AP against dropped frames, in both `dt` modes: the only way FROG can test the dt-aware design (`TODO.md` item 37).
+    """AP against dropped frames, in both `dt` modes: the only way FROG can test the dt-aware design.
 
     **The metric is the gain over the arm's own candidates on the same decimated stream, not its raw AP.** Dropping
     frames removes information, which moves the scored population's difficulty for every arm alike and for the
@@ -304,7 +304,7 @@ def output_path(args) -> Path:
 
 
 def slots(args, device) -> Dict:
-    """AP against the slot count (`TODO.md` item 50), the last number in the design nobody has priced.
+    """AP against the slot count, the last number in the design nobody has priced.
 
     **Replayed, not retrained.** `object_memory(..., capacity=k)` rebuilds the trained memory at another slot count
     with its weights untouched -- the same trick `cost` uses to price the O(K) terms and `sigma` uses for the recall

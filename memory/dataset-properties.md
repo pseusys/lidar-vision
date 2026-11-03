@@ -90,7 +90,7 @@ How far an annotated person has actually moved, in the **world** frame (odometry
 **The FROG column was restated on 2026-10-10** and the middle column is what this file carried before.
 Every row was measured over too few frames: the horizon is specified in seconds and converted with the frame rate, and the rate was the median stamped interval, 26.2 Hz, where FROG's sensor delivers a scan every 25 ms — so a "1 s horizon" spanned 0.65 s of real motion (`interpreting-evaluation.md`).
 The restated figures are *lower* at every horizon, because people are now given the time the row claims.
-**DROW's column is not restated here**: its rate moved too, from the median's 10.0 Hz to 12.70, so its figures span 1.27x too *long* and will move upward; it is re-measured with the rest of the DROW work (`TODO.md` A63), because nothing on FROG depends on it.
+**DROW's column is not restated here**: its rate moved too, from the median's 10.0 Hz to 12.70, so its figures span 1.27x too *long* and will move upward; it is re-measured with the rest of the DROW work, because nothing on FROG depends on it.
 
 **Three things this settles.**
 
@@ -109,10 +109,10 @@ from each recording's own centre.
 | 16-41 | 17,623 | 123.9 | 134.7 | 803.1 | 80.5 |
 | train+val (11-36 + 12-43) | 120,396 | 144.1 | 250.2 | 1,260.6 | 154.0 |
 
-**Why it matters, beyond description.** It decides what a spatial memory can be (`TODO.md` item 22): a dense
+**Why it matters, beyond description.** It decides what a spatial memory can be: a dense
 person-scale grid over this extent is **~46,000 cells**, 180x the recall attention's O(P*K) cost, while tiling it with
 the slots' 256 cells gives **~11 x 17 m** cells against a 0.5 m match radius. Neither is the experiment, which is why
-item 22 is run as **sparse grid slots** instead. It also qualifies every "room frame" claim in `docs/RESEARCH.md`
+the binding arm is run as **sparse grid slots** instead. It also qualifies every "room frame" claim in `docs/RESEARCH.md`
 section 5.3: the property being exploited is that a static object keeps its world coordinate over a 150 m traversal,
 which is a stronger statement than it sounds.
 
@@ -122,7 +122,7 @@ which is a stronger statement than it sounds.
 
 **What a temporal window of a given size buys**, at each dataset's own rate:
 
-| window | FROG frames (26.2 Hz; really 40 Hz, TODO A49) | DROW frames (10 Hz; really 12.7 Hz, TODO A49) | people it could possibly help with |
+| window | FROG frames (26.2 Hz; really 40 Hz) | DROW frames (10 Hz; really 12.7 Hz) | people it could possibly help with |
 | --- | --- | --- | --- |
 | 2 s | 52 | 20 | ~53% (FROG) / ~63% (DROW) |
 | 5 s | 131 | 50 | ~64% / ~71% |
@@ -395,11 +395,11 @@ per-object gap-bridging and a map does not help it.
   precision on person-free `transferred`), as everywhere else in this file.
   **And that limits the precision half more than it first appears: it is a bound on *removal*,
   not on *discrimination*.** The trail-length filter never had to separate a phantom from a
-  person, because the split contains no people. A41 measured what happens when a real
+  person, because the split contains no people. The persistence map measured what happens when a real
   mechanism must: a world-cell persistence map reaches 77.5% phantom removal on person-free
   frames and removes 73.8% of *all* detections on populated ones, taking recall from 79.3% to
   23.2%. **Do not quote 89.7% as an achievable target.** Measured properly on populated frames
-  (`horizon_sweep.py --discrimination`, A45), the best acausal trail-length filter reaches an
+  (`horizon_sweep.py --discrimination`), the best acausal trail-length filter reaches an
   exchange rate of **2.5 false positives per false negative**, and keyed on *displacement* --
   the feature `docs/PAPER.md` actually argues for -- **4.20**, against SORT's 3.8 and the merge
   radius's 21.9. The removal figure had no cost column and the cost column is most of the
@@ -455,6 +455,6 @@ Two consequences, both negative and both worth knowing before building anything:
 ## What is not measured yet
 
 - **Whether temporal *ordering* carries information about the label at all**, model-free. The 0.5pp shuffle result tested one architecture with a known-weak spatial backbone; it is not evidence about the data.
-- **Whether missed people leave sub-threshold evidence.** If the 21% of people a detector misses mostly produce weak-but-persistent responses, a temporal model has recall headroom that a tracker which only filters cannot reach. A tracker that *rescores* from track confidence can (CBMOT, `../docs/RESEARCH.md` §7.4.1), so that part of the headroom is not exclusive to an architecture, and `../TODO.md` A56 E14-E15 measure how much of it a rule reaches.
+- **Whether missed people leave sub-threshold evidence.** If the 21% of people a detector misses mostly produce weak-but-persistent responses, a temporal model has recall headroom that a tracker which only filters cannot reach. A tracker that *rescores* from track confidence can (CBMOT, `../docs/RESEARCH.md` §7.4.1), so that part of the headroom is not exclusive to an architecture, and E14-E15 measure how much of it a rule reaches.
 - **JRDB**, at all. Needs manual registration and is not downloaded (`gotchas.md`).
 - **Any venue beyond these two.**

@@ -9,7 +9,7 @@ A cheap SpaceTimeCNN screening run (utils/train.py --subsample 0.2 --epochs 8)
 ranked dtime=15 below dtime=1 -- but that run's own per-epoch val_loss showed
 dtime=15 still improving faster early on before overfitting the small
 screening subsample, while dtime=1 never converged in the budget at all
-(docs: CHANGELOG.md 2026-09-09, TODO.md A1). That confounds "this dtime has
+(docs: CHANGELOG.md 2026-09-09). That confounds "this dtime has
 less useful information" with "this run hadn't converged yet". This script
 sidesteps training entirely and asks the input-side question directly: does
 the raw temporal signal at each (T, dtime) actually separate person beams
@@ -93,7 +93,7 @@ PERSON_HALFWIDTH_BEAMS = 4     # +/- beams around a person's angular position
 FRAME_STRIDE = 15              # sample every 15th annotated frame for AUC
 MI_SUBSAMPLE = 20_000          # random (feature, label) pairs for the MI estimate
 RNG_SEED = 0
-DT_NATIVE_S = 0.025            # FROG's real rate, 25 ms per scan; 0.03815 until 2026-10-10, which was the stamped median (TODO.md A49)
+DT_NATIVE_S = 0.025            # FROG's real rate, 25 ms per scan; 0.03815 until 2026-10-10, which was the stamped median
 
 T_VALUES = (2, 3, 5, 10, 15, 20, 25)
 # Target total window spans (seconds), sampled densely on both sides of the
@@ -123,7 +123,7 @@ def per_beam_feature_and_label(ds, angles, T, dtime):
             # of DROW's 0.5 deg. Omitting it halved the proxy's rotation
             # correction relative to what training applies through cfg.laser_inc
             # -- a train/proxy inconsistency on the exact axis the proxy is used
-            # to choose (TODO.md A19).
+            # to choose.
             aligned = aligned_raw_scan(scans_hist, odoms_hist,
                                        FROG_Dataset.LASER_INCREMENT,
                                        angles=angles)[:, :, 0]  # (T, N)

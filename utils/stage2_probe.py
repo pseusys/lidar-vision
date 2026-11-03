@@ -1,5 +1,5 @@
 ﻿#!/usr/bin/env python3
-"""What TAKHeLiPeD's stage-2 FROG score is made of (`TODO.md` A59): one network's per-beam outputs through four decoders, and
+"""What TAKHeLiPeD's stage-2 FROG score is made of: one network's per-beam outputs through four decoders, and
 where its recall lies against LFE's at a matched false-positive rate.
 
 Stage 2 with no temporal input at all scores ~77% AP on FROG `official` test, against DR-SPAAM's published 73.7% (`T=1`) and
@@ -13,8 +13,8 @@ everything upstream of it (`memory/static-detector-diagnosis.md`).
     nms            the official DR-SPAAM decoder: greedy over beams by probability, each keeping its own vote, 0.5 m apart
     nms-mean       the same, each detection at the probability-weighted mean of the votes it suppresses: stage 2's decoder since 2026-10-06
     nms-0.3        `nms` at LFE's 0.30 m, which separates the suppression radius from single-beam scoring
-    nms-mean-R     `nms-mean` at 0.30 / 0.40 / 0.60 m: the constant controls for the range-split arms below (`TODO.md` A38)
-    split-Rm       `nms-mean` within R metres of the sensor, the vote grid beyond it -- items 13 and 17, merged
+    nms-mean-R     `nms-mean` at 0.30 / 0.40 / 0.60 m: the constant controls for the range-split arms below
+    split-Rm       `nms-mean` within R metres of the sensor, the vote grid beyond it -- the two questions, merged
     peaks          LFE-Peaks' decoder: `find_peaks` on the per-beam probability, the peak beam's endpoint, merged at 0.30 m
     peaks-vote     the same peaks, each reported at its beam's vote rather than its endpoint: the centre regression alone
 
@@ -66,7 +66,7 @@ RANGE_EDGES_M = (0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0, 10.0)
 CROWD_EDGES_M = (0.0, 0.6, 1.0, 2.0, math.inf)
 BISECTION_STEPS = 12                # a threshold to 2.4e-4, far finer than the scores' own steps
 # The breakdown is the slow part; these are the decoders a choice is between. The constant radii sit beside the range-split
-# arms deliberately: A38's range-aware radius beat its control only until the control was widened to the same average size.
+# arms deliberately: the range-aware radius beat its control only until the control was widened to the same average size.
 BREAKDOWN_DECODERS = ("vote-grid", "nms-mean", "nms-mean-0.4", "nms-mean-0.6", "split-6m", "split-8m", "peaks", "union")
 # Pairs whose misses are worth comparing: each is a decoder that beats `nms-mean` somewhere. Their union bounds every
 # parallel-decoder scheme at once, because nothing can report a person that neither of them found.
@@ -92,7 +92,7 @@ def vote_grid_decode(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, vot
 
 
 def range_split_decode(scan, angles, prob, votes, split_m: float) -> Detections:
-    """`nms-mean` within `split_m` of the sensor, the vote grid beyond it (`TODO.md` items 13 and 17).
+    """`nms-mean` within `split_m` of the sensor, the vote grid beyond it.
 
     Each decoder is better exactly where the other is worse. At LFE-Peaks' false-positive rate the vote grid finds 85.3%
     of people at 8-10 m against `nms-mean`'s 81.6%, because aggregating many weak votes helps where few beams are on
@@ -242,7 +242,7 @@ def print_breakdowns(title: str, named: Dict[str, Dict[str, object]]) -> None:
 def pool_coverage(frames: List[Frame], floor: float) -> Dict[str, float]:
     """How many annotated people have **any** candidate at all, at the floor candidates really enter stage 3 at.
 
-    This is the lens item 34 is about, and it is not the matched-false-positive one. A candidate is not a detection: it
+    This is the lens that matters here, and it is not the matched-false-positive one. A candidate is not a detection: it
     enters the memory at `CANDIDATE_FLOOR` (0.01), the pool is capacity-limited rather than score-limited -- never more
     than ~17 of its 64 slots are in use on any of 245,146 frames -- and stage 3's whole job is to rescore what it is
     given. So what matters is whether a person is *in the pool* for the memory to find, not whether stage 2 already
@@ -292,7 +292,7 @@ def main() -> None:
         print(f"\n=== {path.parent.name}/{path.name} ({sum(p.numel() for p in net.parameters()):,} parameters) ===", flush=True)
         for name, row in run["decoders"].items():
             print(f"  {name:<11} AP {row['ap']:.2%}  AP@0.3 {row['ap_03']:.2%}  at {OPERATING_THRESHOLD}: recall {row['recall_03']:.1%}  FP/frame {row['fp_per_frame_03']:.3f}", flush=True)
-        # What stage 3 is handed, before any operating threshold: the number item 34 turns on.
+        # What stage 3 is handed, before any operating threshold: the number the comparison turns on.
         run["pool"] = {name: pool_coverage(frames_, CANDIDATE_FLOOR) for name, frames_ in decoded.items()}
         print(f"\n  people with any candidate at the {CANDIDATE_FLOOR} candidate floor (what stage 3 receives):", flush=True)
         for name, row in run["pool"].items():

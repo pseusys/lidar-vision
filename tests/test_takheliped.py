@@ -279,8 +279,8 @@ class TestObjectMemory:
         return outs
 
     def test_a_step_says_which_slot_backs_each_candidate(self):
-        """`TODO.md` item 14 needs the association observable: a rescored candidate's score rests on the slot matched to
-        it, so diagnosing the memory's phantoms means reading that slot's age -- and item 27 established that 99.997% of
+        """Diagnosing the memory needs the association observable: a rescored candidate's score rests on the slot matched to
+        it, so diagnosing the memory's phantoms means reading that slot's age -- and the phantom audit established that 99.997% of
         the person-free phantoms are rescored candidates rather than coasting reports, so every one of them has one."""
         torch.manual_seed(0)
         model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
@@ -364,7 +364,7 @@ class TestObjectMemory:
         assert not torch.allclose(with_a.candidate_logit, with_b.candidate_logit)
 
     def test_without_the_scalar_gate_rescoring_still_starts_silent(self):
-        # T1 (`TODO.md` A51): the same "untrained stage 3 is exactly stage 2" property, from a zero-initialised last layer
+        # T1: the same "untrained stage 3 is exactly stage 2" property, from a zero-initialised last layer
         torch.manual_seed(0)
         model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, rescore_gate=False)
         assert model.rescore_gate is None
@@ -384,7 +384,7 @@ class TestObjectMemory:
         assert head_gradient(rescore_gate=False) > 0.0
 
     def test_a_rescoring_limit_bounds_the_correction_both_ways(self):
-        # O1 (`TODO.md` A51): the signed correction is what shifted the whole score distribution down
+        # O1: the signed correction is what shifted the whole score distribution down
         torch.manual_seed(0)
         model = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, rescore_gate=False, rescore_limit=3.0)
         for out, score, valid in self._run(model, 4):
@@ -398,7 +398,7 @@ class TestObjectMemory:
             assert shift.abs().max() > 1.0                      # and the limit binds rather than silencing the head
 
     def test_in_sensor_coordinates_a_static_object_drifts_as_the_robot_moves(self):
-        """D1 (`TODO.md` A51 phase 3b): room coordinates are the design's central claim -- a chair keeps zero velocity because the
+        """Room coordinates are the design's central claim -- a chair keeps zero velocity because the
         slot stays put while the robot moves. The ablation keeps slots in the sensor frame, where the same chair appears to move."""
         # the robot drives 0.2 m forward in 0.1 s, so the same static object is 0.2 m nearer in its own frame -- small enough that
         # association still holds either way, which is what isolates the frame from the gate
@@ -469,7 +469,7 @@ class TestObjectMemory:
         assert not any(name.startswith("value_") for name, _ in model.named_parameters())
 
     def test_without_the_exchange_its_parameters_are_gone_and_rescoring_still_starts_silent(self):
-        """E6 (`TODO.md` A51 phase 5): the slot-to-slot self-attention is one of the three learned mechanisms, has never been
+        """E6: the slot-to-slot self-attention is one of the three learned mechanisms, has never been
         ablated, and is the design's only O(K^2) term."""
         torch.manual_seed(0)
         full = ObjectMemory(SlotRules(capacity=16), dim=32, heads=4)
@@ -501,7 +501,7 @@ class TestObjectMemory:
         assert not torch.allclose(first.slots.state, second.slots.state)
 
     def test_without_recurrence_only_the_bookkeeping_reaches_the_rescoring(self):
-        """E10 (`TODO.md` A51): with no slot state, the head sees a candidate and the statistics of the slot the hand-coded
+        """E10: with no slot state, the head sees a candidate and the statistics of the slot the hand-coded
         association gave it -- value, age, time since match, displacement, speed, hit rate. If that matches the full model, the
         memory is a tracker with a learned scorer rather than a learned memory."""
         torch.manual_seed(0)
@@ -580,7 +580,7 @@ class TestCalibrationNetwork:
 # ---------------------------------------------------------------- feedback: memory drawn into stage 2's bottleneck
 
 class TestStage2WithoutTime:
-    """The coarse temporal convolution was removed 2026-10-08 (`TODO.md` A60: end to end it lost 0.87 pp). Every stage-3 result
+    """The coarse temporal convolution was removed 2026-10-08 (end to end it lost 0.87 pp). Every stage-3 result
     rests on no-temporal checkpoints, whose one-lag `coarse.conv` was a plain 3-tap convolution across bottleneck sectors; it is now
     `context`, and such a checkpoint must load into today's network and compute exactly what it did. The fixture was written by the
     code at commit e76aa94 (`tests/fixtures/make_no_temporal_stage2.py`). A checkpoint whose convolution read past frames cannot be
@@ -621,7 +621,7 @@ class TestStage2WithoutTime:
 
 
 class TestAttributionArms:
-    """Two of the arms that test why stage 2 beats LFE (`TODO.md` A59, F1 and W): LFE's input alone, and LFE's widths. Each is a
+    """Two of the arms that test why stage 2 beats LFE: LFE's input alone, and LFE's widths. Each is a
     constructor option; the default network is pinned by the fixture above."""
 
     def test_the_lfe_input_is_lfe_s_own_normalisation(self):
@@ -687,7 +687,7 @@ class TestLegacyCheckpoints:
 
 
 class TestCalibrationDropout:
-    """Dropout is opt-in (`TODO.md` A50 phase 1 item 4): off by default, on the head's input only, and parameter-free."""
+    """Dropout is opt-in: off by default, on the head's input only, and parameter-free."""
 
     def _net(self, dropout):
         torch.manual_seed(0)
@@ -776,7 +776,7 @@ class TestMemoryWithVisibility:
         return ObjectMemory(SlotRules(capacity=16), dim=32, heads=4, **kw)
 
     def test_the_statistics_vector_is_one_wider_and_the_heads_follow(self):
-        # The coasting head reads the statistics, so it is the probe -- opt in, since it left the architecture in item 24.
+        # The coasting head reads the statistics, so it is the probe -- opt in, since it left the architecture when its ablation cost nothing.
         on, off = self._model(visibility=True, coast=True), self._model(coast=True)
         assert on.coast.in_features == off.coast.in_features + 1
         assert on.statistics.in_features == off.statistics.in_features + 1
@@ -795,7 +795,7 @@ class TestMemoryWithVisibility:
 
 
 class TestRescoringOff:
-    """A51 E12a: with the correction gone, the memory's only route to the loss is the prior it draws into stage 2."""
+    """With the correction gone, the memory's only route to the loss is the prior it draws into stage 2."""
 
     def _model(self, **kw):
         torch.manual_seed(0)
@@ -858,11 +858,11 @@ class TestCalibrationPrior:
 
 
 class TestCoastingAblation:
-    """Item 24: does the coasting head earn its parameters?
+    """does the coasting head earn its parameters?
 
     It is the mechanism that lets a slot report a person no candidate covers, and the measurements say it almost never
     does: **0.0012 / 0.0000 / 0.0020 times per scored frame** on the populated split -- one seed emits nothing at all --
-    and item 27 found **2 / 0 / 0** reports across all 72,533 person-free frames at the operating threshold, with zero at
+    and the phantom audit found **2 / 0 / 0** reports across all 72,533 person-free frames at the operating threshold, with zero at
     0.5 and 0.9. A paper should not describe a mechanism that never acts, so either removing it costs nothing, which is a
     result, or it costs something, which is the defence.
 
@@ -909,14 +909,14 @@ class TestCoastingAblation:
 
 
 class TestMetricOffsets:
-    """Item 15: a first layer that reads a fixed width **in metres** instead of a fixed number of beams.
+    """a first layer that reads a fixed width **in metres** instead of a fixed number of beams.
 
     A person 0.8 m wide subtends 42 beams at 2 m and 9 at 9 m, so a fixed 7-beam kernel is correct at exactly one range
     and wrong everywhere else -- which is what Tier 0's 1-NN probe measured when it priced the adaptive angular window at
     **+2.5 pp**, with the advantage **purely long-range**: +4.9 pp at 8-10 m, zero at 4 m. DROW gets this for free because
     its cutout is resampled per beam; a full-scan network has to be given it.
 
-    `A59`'s F1 arm shifted the prior against input-*feature* changes -- swapping our ten channels for LFE's measured
+    The feature arm shifted the prior against input-*feature* changes -- swapping our ten channels for LFE's measured
     nothing. This is not that: it changes which beams the first layer reads, not what each beam says.
     """
 
@@ -1033,7 +1033,7 @@ class TestTheNetworkKeepsItsDefault:
 
 
 class TestTheRecurrenceFamily:
-    """Item 16: why a bespoke selective diagonal recurrence and not a GRU?
+    """why a bespoke selective diagonal recurrence and not a GRU?
 
     This is the question a reviewer asks about the paper's central mechanism, and D3 made it sharper rather than softer:
     fixing the decay rate costs **1.04 pp**, so the learned, input-dependent rate is load-bearing. The defence therefore
@@ -1105,14 +1105,14 @@ class TestTheRecurrenceFamily:
 
 
 class TestTheVoteFrame:
-    """Item 18: the head regresses the offset to the person's centre -- in which frame?
+    """the head regresses the offset to the person's centre -- in which frame?
 
     DROW's convention, which this project inherited, is the **beam's own** frame: `(across, along)`, where `along` is
     measured from the beam's own endpoint outward along the beam and `across` is perpendicular to it. Every beam
     therefore regresses in a frame rotated by its own bearing, so the same person at the same place is a different
     target for each beam that sees it. The alternative is the **sensor's** Cartesian frame, shared by every beam.
 
-    A59 put about half this project's lead over LFE-Peaks in the output head, which is why the item exists and also why
+    The decomposition put about half this project's lead over LFE-Peaks in the output head, which is why this test exists and also why
     it is a defence rather than an improvement: the head is already the good part. The two parameterisations name the
     same point, so the conversion is exact and the question is purely what is easier to learn.
     """
@@ -1180,9 +1180,9 @@ class TestTheVoteFrame:
 
 
 class TestThePlainResidualBlock:
-    """Item 19: is the ConvNeXt block the reason, or would a plain residual block do?
+    """is the ConvNeXt block the reason, or would a plain residual block do?
 
-    A59's W arm priced *shrinking* to LFE's widths at 1.4 pp and bought no speed at batch 1, so capacity is not where
+    The width arm priced *shrinking* to LFE's widths at 1.4 pp and bought no speed at batch 1, so capacity is not where
     the score is -- but the block itself has never been ablated. A plain residual block (He et al., CVPR 2016) is two
     full convolutions with a normalisation and a non-linearity between them: no depthwise separation, no inverted
     bottleneck, no large kernel budget spent on a per-channel filter. The widening arm needs no code -- `--channels`
@@ -1237,7 +1237,7 @@ class TestThePlainResidualBlock:
         assert not any("depthwise" in name for name in plain)
 
     def test_widening_needs_no_new_code(self):
-        """Item 19's second half is `--channels`, which already exists; this pins that it reaches the weights."""
+        """The second half is `--channels`, which already exists; this pins that it reaches the weights."""
         wide = CalibrationNetwork(_angles(128), channels=(64, 128, 256), blocks=(1, 1, 1))
         narrow = CalibrationNetwork(_angles(128), channels=(32, 64, 128), blocks=(1, 1, 1))
 
@@ -1246,9 +1246,9 @@ class TestThePlainResidualBlock:
 
 
 class TestTheRecallWidthIsReplayable:
-    """Item 39: `sigma_m` is the width of the recall attention's distance bias, and it has never been varied.
+    """`sigma_m` is the width of the recall attention's distance bias, and it has never been varied.
 
-    Item 36 settled that **addressing is the entire mechanism** -- one global state captures 5% of the slots' gain -- so
+    The global-state ablation settled that **addressing is the entire mechanism** -- one global state captures 5% of the slots' gain -- so
     `sigma_m` is the parameter that defines the thing that matters, and a grep of `memory/` and `CHANGELOG.md` finds it
     never swept in any form. S4's sweep was of `gate_m`, the *association* gate inside `manage_slots`, which is a
     different parameter in a different component.
@@ -1310,7 +1310,7 @@ class TestTheRecallWidthIsReplayable:
         assert all(torch.equal(before[k], v) for k, v in model.state_dict().items())
 
     def test_a_very_wide_bias_flattens_the_addressing(self):
-        """The limit the sweep brackets: at a large enough width every slot is equally near, which is item 36's arm
+        """The limit the sweep brackets: at a large enough width every slot is equally near, which is the global-state arm
         reached from the other direction -- so the curve should have a shape rather than be flat by construction."""
         model = self._memory()
 
@@ -1324,11 +1324,11 @@ class TestTheRecallWidthIsReplayable:
 
 
 class TestTheWholeScanAggregator:
-    """Item 40: stage 2's whole-scan max, named as a defining feature everywhere and never ablated.
+    """stage 2's whole-scan max, named as a defining feature everywhere and never ablated.
 
     `docs/RESEARCH.md` §5.2 and `performance-log.md` both describe this network as "a ConvNeXt U-Net **with a whole-scan
-    aggregator**". A59's decomposition put about half the lead over LFE-Peaks in the output head and left the rest with
-    "the network's form"; item 19 has since shown the widths flat in both directions and the block interchangeable, so
+    aggregator**". The decomposition put about half the lead over LFE-Peaks in the output head and left the rest with
+    "the network's form"; the shape sweeps have since shown the widths flat in both directions and the block interchangeable, so
     the aggregator is the leading unexplained candidate for stage 2's advantage.
     """
 
@@ -1364,7 +1364,7 @@ class TestTheWholeScanAggregator:
     # network the U-Net's own receptive field already spans the scan. Asserting that silencing the pooled block
     # *reduces* the far end's response is also false, because at random initialisation the max path can cancel against
     # the convolutional one, so the sign is arbitrary (0.00141 against 0.00176 on seed 0). Whether the aggregator earns
-    # its place is exactly what item 40's trained arm measures; a unit test that depended on the sign of an untrained
+    # its place is exactly what the trained ablation measures; a unit test that depended on the sign of an untrained
     # draw would be flaky and would prove nothing. The structural tests above -- default on, bit-identical when on, the
     # bottleneck's width, and the prior's zeroed slice -- are what can be pinned here.
 
@@ -1376,18 +1376,18 @@ class TestTheWholeScanAggregator:
 
 
 class TestHungarianAssociation:
-    """Item 43: the standard primitive in place of this project's mutual-nearest-neighbour rule.
+    """the standard primitive in place of this project's mutual-nearest-neighbour rule.
 
     The adopted association is **mutual** nearest-neighbour: a slot's nearest candidate and that candidate's nearest
     slot must agree, within `gate_m`. That is already a principled heuristic, and it differs from a globally optimal
-    assignment **only under contention** -- when several slots compete for the same candidate. A59's S4 measured the
+    assignment **only under contention** -- when several slots compete for the same candidate. The association sweep measured the
     association as already reaching 99.2% of annotated people, so the accuracy headroom is about 0.8%; the reason to run
-    it is that "why not Hungarian?" is a reviewer's question about the one component item 36 proved load-bearing.
+    it is that "why not Hungarian?" is a reviewer's question about the one component the global-state ablation proved load-bearing.
 
     **Solved over the gated sub-problem only.** `dist` is `inf` outside `alive & usable`, and `linear_sum_assignment`
     cannot take that; the gated block is also far smaller -- roughly 24 live slots by 22 usable candidates rather than
     256 by 64 -- which matters because `manage_slots` runs every frame inside the phase that already dominates the CPU
-    budget (item 36: the memory is 9.1 ms of 19.4).
+    budget: the memory is 9.1 ms of 19.4.
     """
 
     RULES = SlotRules(capacity=2, gate_m=0.6)
@@ -1482,7 +1482,7 @@ class TestHungarianAssociation:
 
 
 class TestASpawnedSlotReadsItsOwnCandidate:
-    """`TODO.md` item 54: a slot spawned this frame must take *its own* candidate's encoding into its first update.
+    """A slot spawned this frame must take *its own* candidate's encoding into its first update.
 
     `step` gathers the encoding by `events.match_index`, which `manage_slots` sets to **-1** for any slot that did not
     *match* -- and a slot that **spawned** did not match. `clamp(min=0)` then turns that into index 0, and because
@@ -1516,7 +1516,7 @@ class TestASpawnedSlotReadsItsOwnCandidate:
         own = a.events.source == 1                  # the slot that spawned from candidate 1
         assert own.any(), "candidate 1 must spawn a slot for this test to mean anything"
         assert torch.allclose(a.slots.state[own], b.slots.state[own], atol=1e-7), \
-            "a spawned slot's state depends on another candidate -- item 54"
+            "a spawned slot's state depends on another candidate"
 
     def test_a_matched_slot_still_reads_the_candidate_it_matched(self):
         """The guard on the fix: it must not break the matched path, which was always correct."""
@@ -1541,9 +1541,9 @@ class TestFixedDecayNeedsTheSelectiveRecurrence:
 
     `fixed_decay_s` is read in exactly one place -- inside `_recur`'s `selective` branch, as `1 / fixed_decay_s`.
     `gru` and `mingru` have no decay term at all, so under them the flag is stored, restored from a checkpoint,
-    passed to the constructor, and then **ignored**. `--recurrence` now defaults to `mingru` (item 52), so
+    passed to the constructor, and then **ignored**. `--recurrence` now defaults to `mingru`, so
     `step3a --fixed-decay-s 8` today trains a model bit-identical to the control and would report the control's
-    number as A51's D3 -- which `TODO.md` queues for re-running on the adopted recipe. That is exactly the
+    number as the arm's -- which `TODO.md` queues for re-running on the adopted recipe. That is exactly the
     `--global-state` failure class: parsed, plumbed, inert.
 
     `TestEveryStage3FlagReachesTheModel` cannot catch it, because the flag *does* reach the constructor. Refusing the

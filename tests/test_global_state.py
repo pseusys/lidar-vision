@@ -1,7 +1,7 @@
-"""Item 36: one global recurrent state instead of 256 addressable slots -- the untested cell of the 2x2.
+"""one global recurrent state instead of 256 addressable slots -- the untested cell of the 2x2.
 
     slots + recurrence     the adopted model
-    slots - recurrence     `--no-recurrent` (A51 E10), and it costs a lot
+    slots - recurrence     `--no-recurrent`, and it costs a lot
     recurrence - slots     **this**, never run
 
 It is the strongest available attack on this project's own contribution: if one scene-level state matches 256
@@ -167,7 +167,7 @@ class TestWhatThePoolingMustRespect:
         assert torch.allclose(a.slots.state, b.slots.state, atol=1e-6)
 
     def test_elapsed_time_reaches_the_state_even_though_mingru_cannot_read_it(self):
-        """With no bookkeeping, the scene statistics are `dt`'s only route -- and item 37 showed that route matters."""
+        """With no bookkeeping, the scene statistics are `dt`'s only route -- and the dropped-frame sweep showed that route matters."""
         model = _memory(True, recurrence="mingru")
         xy, score, valid, pose = _inputs()
 

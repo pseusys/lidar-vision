@@ -1,8 +1,8 @@
-"""One definition of a dataset's frame rate, for every figure quoted per second (`TODO.md` §A item 1).
+"""One definition of a dataset's frame rate, for every figure quoted per second.
 
 FROG's recorder stamps scans in bunches -- roughly 38 ms, 38 ms, then under 0.1 ms -- so **the median interval reads 26.2 Hz
 where the sensor delivers a scan every 25 ms**, and a median was what `evaluate.py` used. Every `FP/s` in the repo was therefore
-1.53x low on the real clock, and the "38.2 ms real-time budget" the cost claims were set against is really 25 ms (A49).
+1.53x low on the real clock, and the "38.2 ms real-time budget" the cost claims were set against is really 25 ms.
 
 The rate is elapsed time over frames, inside each recording. A gap longer than a recording pause is not a frame interval and
 must not be averaged in: FROG's loader already splits sessions at 0.5 s, but the helper does not get to assume its caller did.

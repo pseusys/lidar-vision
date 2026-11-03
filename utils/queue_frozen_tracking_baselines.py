@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 56: A61's tracking baselines re-run on the **frozen** candidates.
+"""The tracking baselines re-run on the **frozen** candidates.
 
 `docs/PAPER.md`'s argument 2 -- "the gain is the learned memory, not association" -- is the one a tracking reviewer will
 attack, and its table is measured on the **superseded** stage 2: nothing 82.19%, SORT 82.31%, ByteTrack 81.17%,
@@ -8,13 +8,13 @@ different network (82.80%, soft Gaussian target, no aggregator) and the memory's
 so **the margin over the tuned tracker is unmeasured on the model the paper proposes**. A better stage 2 helps a tracker too,
 and could help it more or less than it helps the memory -- which is the question, and no arithmetic on the old row answers it.
 
-**Four steps per seed, in A61's order, ~4.3 h each.** `rule` (~2.5 h) tunes the memory's own bookkeeping with a rule score over
+**Four steps per seed, in the original order, ~4.3 h each.** `rule` (~2.5 h) tunes the memory's own bookkeeping with a rule score over
 a 54-config grid on val, then replays test; `track` (~35 min) tunes SORT, ByteTrack and ByteTrack+CBMOT by coordinate descent;
 `arms` (~1 h) replays the memory itself and the candidates; `report` (~15 min) does AP with 95% block-bootstrap intervals,
 GOSPA, the strata and first-detection latency. Then one `summary` lines the three reports up by arm.
 
 **`rule` cannot be dropped to save 7.5 h, tempting as that is.** `report` picks `best_classical` as the strongest of whichever
-of `bytetrack_cbmot`, `rule_cbmot`, `bytetrack`, `sort_m1` happen to **exist on disk** -- and A56's E15 found the rule scorer
+of `bytetrack_cbmot`, `rule_cbmot`, `bytetrack`, `sort_m1` happen to **exist on disk** -- and the baseline study found the rule scorer
 lands within 1 pp of E14's best, so on the frozen candidates it might *be* the strongest. Omitting it would silently inflate
 the memory's margin, which is the failure `AGENTS.md` rule 3 exists to prevent. That is also why every `report` declares
 `needs`: a failed or blocked `rule` must **block** its report rather than let it quietly score three methods instead of four.
@@ -23,7 +23,7 @@ the memory's margin, which is the failure `AGENTS.md` rule 3 exists to prevent. 
 `run_queue.ordered()` is Kahn's algorithm **by levels**: it emits every job whose dependencies are satisfied before any job
 that depends on one, so a single `needs` on `report_s0` was enough to push all three reports behind all nine replays. Each
 job therefore names its predecessor as well as its real data dependencies, which makes the queue a strict sequence: seed 0's
-four finish (~4.3 h) and its `report.json` can be read against A61's row while seeds 1-2 run (~8.6 h more). Verify with
+four finish (~4.3 h) and its `report.json` can be read against the unfrozen row while seeds 1-2 run (~8.6 h more). Verify with
 `--list`, which prints the real execution order.
 
 **A job declares the files it writes last, and `track` learnt that the hard way.** `run_queue.spawn_process` starts a
@@ -42,13 +42,13 @@ archive is the citable copy and `candidate_cache_path` keys the ~1 GB candidate 
 directory, file name and mtime, so a copy rebuilds it from scratch (`weights_archive/.../MANIFEST.md`).
 
 **The arm is labelled `FRZ`, deliberately not `E13`.** `summary` lines arms up by label across seeds, and these are different
-weights from A61's static arm; sharing its name is how a cross-regime comparison gets made by accident.
+weights from the unfrozen static arm; sharing its name is how a cross-regime comparison gets made by accident.
 
-    python queue_item56.py --list                    # what is left to run
-    python queue_item56.py --steps rule_s0 track_s0
-    python queue_item56.py                           # the gate, then every step whose outputs are missing
+    python queue_frozen_tracking_baselines.py --list                    # what is left to run
+    python queue_frozen_tracking_baselines.py --steps rule_s0 track_s0
+    python queue_frozen_tracking_baselines.py                           # the gate, then every step whose outputs are missing
 
-Expect `arms` to hang in ROCm teardown after writing everything, as it did in A61 -- the runner judges a job by its outputs and
+Expect `arms` to hang in ROCm teardown after writing everything, as it did before -- the runner judges a job by its outputs and
 kills a child that lingers past them. Launch detached through the Task Scheduler, as `memory/long-running-tasks.md` shows.
 """
 
@@ -77,14 +77,14 @@ def arm_of(seed: int) -> str:
 
 
 def rule(seed: int) -> Job:
-    """The memory's bookkeeping with a rule score: a 54-config grid on val, then test (A56 E15)."""
+    """The memory's bookkeeping with a rule score: a 54-config grid on val, then test."""
     out = out_dir(seed)
     return Job(name=f"rule_s{seed}", outputs=(out / "rule_val.pkl", out / "rule_test.pkl"),
                cli=("tracking_baselines.py", "rule", "--stage2", stage2(seed), "--out", str(out)))
 
 
 def track(seed: int) -> Job:
-    """SORT, ByteTrack and ByteTrack+CBMOT, tuned by coordinate descent on val, then test (A56 E14).
+    """SORT, ByteTrack and ByteTrack+CBMOT, tuned by coordinate descent on val, then test.
 
     The eight replays are the product; `track_rows.json` is written before them and cannot stand for the job being done.
     """

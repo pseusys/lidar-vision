@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 64: score Li2Former with **their** decoder and **their** metric, as a 2x2 over the two halves.
+"""Score Li2Former with **their** decoder and **their** metric, as a 2x2 over the two halves.
 
 Our `drow_eval` number and their published 76.4% AP@0.5 are not the same measurement twice. Ours decodes votes
 with `votes_to_detections` -- every beam's vote accumulated into a 0.1 m grid, blurred, collected within 0.3 m --

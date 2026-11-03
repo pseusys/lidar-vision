@@ -1,4 +1,4 @@
-"""`_merge_nearby`'s range-aware radius (TODO.md A38).
+"""`_merge_nearby`'s range-aware radius.
 
 The radius that decides whether two centroids are one person was a single
 scalar in metres.  Tier 0 (`memory/static-detector-diagnosis.md`) measured it

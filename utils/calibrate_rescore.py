@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Fit a post-hoc temperature and bias on the memory's output logit, so a fixed threshold means something (`TODO.md` item 48).
+"""Fit a post-hoc temperature and bias on the memory's output logit, so a fixed threshold means something.
 
-A51 phase 1b measured the rescore head shifting the *whole* score distribution down -- a median -3.292 logits on people it
+The diagnosis measured the rescore head shifting the *whole* score distribution down -- a median -3.292 logits on people it
 keeps against -1.497 on people it loses -- which leaves rank-based AP better while silently decalibrating any fixed
 threshold. The repo's own conclusion was "the fix is calibration of the rescore head"; this is that fix, done post-hoc.
 
@@ -257,7 +257,7 @@ def main() -> None:
     ap.add_argument("--apply", type=Path, default=None,
                     help="store the pair from a JSON this script already wrote into --memory and do nothing else; "
                          "re-checks the report's gates first and never re-measures")
-    ap.add_argument("--split", default="val", help="the split to fit on; it must not be test (item 48)")
+    ap.add_argument("--split", default="val", help="the split to fit on; it must not be test")
     ap.add_argument("--stride", type=int, default=1)
     ap.add_argument("--streams", type=int, default=16)
     ap.add_argument("--limit-recordings", type=int, default=0)
@@ -291,7 +291,7 @@ def main() -> None:
         frames = frames_out["memory"]
         # A coasting report is not a rescored candidate: the transform cannot move its logit, so fitting on one and
         # then checking against a metric that counts it would compare two different sets. The frozen architecture has
-        # no coasting head (item 24 removed it), so this is a guard against a future arm, not a code path.
+        # no coasting head any more, so this is a guard against a future arm, not a code path.
         carried = [i for i, (score, _, _) in enumerate(frames) if frames_out["rescored"][i] != len(score)]
         if carried:
             raise SystemExit(f"{len(carried)} frames carry coasting reports, which this transform does not apply to; "

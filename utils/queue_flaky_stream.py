@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Item 37's flaky-stream sweep over four arms, plus item 35's oracle pair (`TODO.md` §A).
+"""The flaky-stream sweep over four arms, plus the oracle pair.
 
 Everything here is **evaluation only** -- no training, no checkpoints written -- so the whole chain is about two hours and
 every job writes its own results file, which makes a pause between jobs free.
 
-**Why four arms and not three.** Item 16 found the three recurrences tie, and the prerequisite check found why that was
+**Why four arms and not three.** The recurrence comparison found the three recurrences tie, and the prerequisite check found why that was
 predictable: what reaches `exp(-dt * rate)` is `frame_periods`' 32-interval average, measured at **25.04 ms with a 5-95%
 spread of 24.51-25.59** on FROG. A 2% spread makes the adopted rule arithmetically a fixed decay factor, so the arms were
 never distinguishable. Dropping frames creates the gaps; `dt_mode` decides what the model is told about them.
@@ -13,7 +13,7 @@ never distinguishable. Dropping frames creates the gaps; `dt_mode` decides what 
     mingru      no notion of elapsed time; takes a step
     gru         the same, and the arm a reviewer names
     d3          **the sharpest arm**: the adopted rule with ONE fixed decay time for every slot instead of a learned,
-                input-dependent one. D3 cost 1.04 pp on the uniform stream and is the only A51 arm below its floor
+                input-dependent one. D3 cost 1.04 pp on the uniform stream and is the only arm below its floor
                 besides O1, so the learned decay is load-bearing *somehow* -- and if what it is for is handling
                 non-uniform timing, D3 should lose more here than it did there. If it does not, the learned decay is
                 doing something other than tracking real time, which is worth knowing before the mechanism is written up.
@@ -22,7 +22,7 @@ never distinguishable. Dropping frames creates the gaps; `dt_mode` decides what 
 included: the only checkpoints for it are `a51_e10_norecurrent_s*` on the older B0 backbone, whose stage 2 differs, and a
 cross-backbone row in this table would not be comparable.
 
-    python queue_item37.py --list
+    python queue_flaky_stream.py --list
 """
 
 from queue_step1_defences import ORACLE

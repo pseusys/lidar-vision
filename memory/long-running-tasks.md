@@ -47,15 +47,15 @@ schtasks /create /tn "lidar_<item>" /tr "`"$python`" `"$queue`"" /sc once /st $p
 schtasks /run   /tn "lidar_<item>"
 ```
 
-**The chain itself is `utils/run_queue.py`** since 2026-10-09 (A57), not a copied PowerShell script: `$queue` is a committed
+**The chain itself is `utils/run_queue.py`** since 2026-10-09, not a copied PowerShell script: `$queue` is a committed
 Python module that builds `Job`s and calls `main`, and the runner owns retries, the skip-if-done rule, the guard classification
-and the progress lines. It takes `--list`, `--steps` and `--progress`. Every launcher incident in `TODO.md` A57's table came
+and the progress lines. It takes `--list`, `--steps` and `--progress`. Every launcher incident recorded in `CHANGELOG.md` came
 from the eight hand-copied copies, so write a queue module and do not copy a launcher again.
 
 **A job declares the files it writes LAST, and this is not a style preference.** `spawn_process` polls
 `finished(job) or _printed_its_last(log)` and, once either is true, waits `EXIT_GRACE_SECONDS` (600) and then **kills the
 child**. The grace exists for the ROCm teardown hang, where a job lingers after writing everything. It also means a job
-that declares an **early** file is a job the runner will cut off mid-work. Item 56's `track` declared only
+that declares an **early** file is a job the runner will cut off mid-work. The frozen-baseline chain's `track` declared only
 `track_rows.json`, which its coordinate descent writes ten minutes before the eight replays finish: seed 0 escaped by six
 seconds (606 s), seeds 1 and 2 were killed, and each lost `bytetrack_cbmot`'s test pickle. `run_report` then dropped the
 method **silently** -- it keeps only methods whose pickle exists -- scored three classical pipelines instead of four, and
@@ -67,7 +67,7 @@ against a seed that worked.
 
 **`run_queue.ordered()` sorts in levels, and declaration order only decides between jobs at the same level.** It is Kahn's
 algorithm emitting every currently-ready job before any job that depends on one, so **a single `needs` reorders the whole
-queue**: item 56's three `report` jobs each named only their own seed's three replays, and all three reports landed behind
+queue**: the frozen-baseline chain's three `report` jobs each named only their own seed's three replays, and all three reports landed behind
 all nine replays -- turning "seed 0 first, inspect, then the rest" into "everything, then three reports 13 hours later".
 The fix is to name the **predecessor** as well as the real data dependencies, which makes the written order the executed
 one. **`--list` prints the real execution order: read it before launching**, since that is the whole point of a flag that
@@ -86,7 +86,7 @@ the arm; relaunch the chain, which skips what is already finished. The retry cou
 relaunch starts them fresh -- the burnt attempts cost nothing but a confusing log directory.
 
 **Never give the one-off trigger a future time.** An earlier version of this template used `/st 23:59`, and on 2026-10-02 the
-A56 tasks then fired a second time at 23:59, re-running two finished chains over their own outputs (their pickles survived, two
+Those tasks then fired a second time at 23:59, re-running two finished chains over their own outputs (their pickles survived, two
 logs were truncated). `schtasks` warns that a past `/st` "may not run"; that is the point, since `/run` starts it now.
 Delete the task once its chain is done.
 
@@ -142,7 +142,7 @@ is what the restart check below is for.
 
 | symptom | what it is | what to do |
 | --- | --- | --- |
-| process alive, log unchanged >15 min | a finished ROCm process hanging at exit, even past `os._exit` (`gotchas.md`) | kill it, so the chain moves on; 7.5 h was lost to one, and a watchdog with a wrong regex nearly lost another. Better: let the chain do it -- wait for the step's final log line, then stop the process two minutes later (A56's `StepUntil`) |
+| process alive, log unchanged >15 min | a finished ROCm process hanging at exit, even past `os._exit` (`gotchas.md`) | kill it, so the chain moves on; 7.5 h was lost to one, and a watchdog with a wrong regex nearly lost another. Better: let the chain do it -- wait for the step's final log line, then stop the process two minutes later (that chain's `StepUntil`) |
 | process gone, no results file, no guard message | crash, kill, or a driver bugcheck | relaunch with `--resume`; it continues from the last evaluation |
 | a guard message in the log (`not finite at chunk`, `candidates' val AP moved`, `the training loss is`) | the run is **wrong**, not interrupted | stop, report immediately, do not retry |
 | free memory under ~2 GB | something else is competing | stop the intruder before the run dies |
@@ -161,7 +161,7 @@ written, so: no results file means work remains -- leave it alone. Results file 
 means the hang -- kill it. Confirm with two CPU samples a few seconds apart if you want a second signal, but remember
 CPU burn alone is not proof of progress (a crashed-but-hanging process also burns CPU); the file is the evidence.
 
-**`empty_scene.py` has both phases and the hang blocks the whole chain** (2026-10-30, item 47's phantom column). It
+**`empty_scene.py` has both phases and the hang blocks the whole chain** (2026-10-30, the freeze's phantom column). It
 rebuilds its own `transferred` candidate cache per stage-2 seed -- **1654 s, 27.5 min**, before it scores a frame --
 and it prints nothing while doing so, because the launcher's `Out-File` buffers the pipeline, so the log is *empty*
 rather than merely stale. It then hangs after writing its JSON, exactly like `step3a`. In a loop over three seeds that

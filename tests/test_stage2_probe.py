@@ -1,5 +1,5 @@
 ﻿"""The decoders `utils/stage2_probe.py` swaps under one stage-2 network, and the per-person breakdown it reads at a matched
-false-positive rate (`TODO.md` A59).
+false-positive rate.
 
 The decoders are ports, so what is pinned is the behaviour each source defines: the official DR-SPAAM repository's
 `nms_predicted_center` keeps a detection's best beam and suppresses every vote within `min_dist` of it; LFE-Peaks' decoder puts a
@@ -151,7 +151,7 @@ def _reference_nms(scan, angles, prob, votes, min_dist, average):
 
 
 class TestGreedyOrderIsTheDefinition:
-    """What an incorrect speed-up of the decode loop would break, pinned before the loop was touched (item 30).
+    """What an incorrect speed-up of the decode loop would break, pinned before the loop was touched.
 
     The decode runs 314 Python iterations per frame to keep 22 detections, so only the survivors need iterating -- but
     `members` must keep being drawn from the beams still **alive**, not from every beam within the radius. The two differ
@@ -214,14 +214,14 @@ class TestGreedyOrderIsTheDefinition:
 
 
 class TestRangeSplitDecode:
-    """One decoder near the sensor and another far from it (`TODO.md` items 13 and 17, merged 2026-10-15).
+    """One decoder near the sensor and another far from it (the two questions merged 2026-10-15).
 
     The measurement that motivates it: at LFE-Peaks' false-positive rate the vote grid finds **85.3%** of people at
     8-10 m where `nms-mean` finds 81.6%, because aggregating many weak votes helps when few beams are on target -- while
     `nms-mean` finds **86.6%** of close pairs against the vote grid's 66.8%, which is why it was adopted. Each decoder is
     better exactly where the other is worse, so the question is whether splitting them by range keeps both.
 
-    `TODO.md` A38 is the standing warning: a range-dependent *radius* already lost to a well-chosen constant, and its
+    The range-aware radius is the standing warning: it already lost to a well-chosen constant, and its
     headline survived only until a control separated "range-aware helps" from "bigger helps". The constants are swept
     beside this for the same reason.
     """

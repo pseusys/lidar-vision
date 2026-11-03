@@ -5,7 +5,7 @@ dead weight?
 
 Motivation: LFE-Peaks/LFE-PPN are single-frame (no temporal input at all) yet
 match or beat FullScanTCN/TemporalUNet on FROG (both retired by TODO.md
-item 32; this ran when all three existed), and SpaceTimeCNN's lead is
+retired since; this ran when all three existed), and SpaceTimeCNN's lead is
 plausibly explained by raw capacity/joint fusion rather than motion modeling
 (Section 8.5.1). Two concrete reasons to suspect the temporal signal itself
 is compromised on FROG specifically:

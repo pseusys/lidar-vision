@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 47: the three-seed freeze of the adopted architecture. **Prepared, not launched.**
+"""The three-seed freeze of the adopted architecture. **Prepared, not launched.**
 
 The architecture settled on 2026-10-25 and every published number predates it. `docs/PAPER.md`'s table is the
 **selective** recurrence on the aggregator-ful stage 2 with the 1 s curriculum; the adopted model is **slots + minGRU,
@@ -8,17 +8,17 @@ no aggregator, no curriculum**, a **64-wide** slot state and 256 slots. All of t
 replaces them.
 
 **Mind which reference you compare against.** The 86.20% and 86.12% quoted below were measured before `TODO.md`
-item 54 was fixed (a spawned slot read candidate 0's encoding), which cost 0.39 pp. The fixed-code reference is
+the spawn defect was fixed (a spawned slot read candidate 0's encoding), which cost 0.39 pp. The fixed-code reference is
 **85.73%** (`a74_fixed256_s0`), and it is still on the *hard-label* stage 2.
 
-**Why stage 2 is in here at all.** Item 40 removed the whole-scan aggregator, which lives in stage 2, so the three
+**Why stage 2 is in here at all.** The aggregator ablation removed the whole-scan aggregator, which lives in stage 2, so the three
 control seeds (`a59_c1_recipe_dropout01_s{0,1,2}`) no longer match the adopted architecture and cannot be reused. Only
 seed 0 of the aggregator-free stage 2 exists (`a69_no_aggregator_s0`), so seeds 1 and 2 are trained here first. Each is
 averaged over the val-chosen window, because **the averaged weights are what stage 3 loads** -- averaging gained 15 of
-18 A59 runs, +0.66 pp mean, and one arm +1.40 pp.
+18 stage-2 runs, +0.66 pp mean, and one arm +1.40 pp.
 
 **The stage-2 target is the one thing still open**, and it decides which checkpoints this chain reads. `TODO.md`
-item 44(a) -- the soft Gaussian beam target -- is being confirmed at three seeds by `queue_item44a_confirm.py`, which
+The soft Gaussian beam target is being confirmed at three seeds by `queue_soft_label_confirm.py`, which
 deliberately names its hard-label arms `a71_stage2_s1/s2`, the very names below. So **if hard labels win, this chain's
 stage-2 half is already done** and only the three stage-3 arms remain (~22 h); if soft labels win, point `stage2()` at
 `a71_soft_label_s0` / `a72_soft_s1` / `a72_soft_s2` and add `--label-sigma-m 0.3` to the stage-2 jobs.
@@ -36,9 +36,9 @@ runs -- roughly 40 minutes apiece, already inside the ~4 h figure but invisible 
 
 **What this chain does NOT do**, deliberately, because neither belongs in a sequential queue:
 
-* **CPU latency.** Item 29's protocol is a *matched, interleaved* sweep on an idle host -- every arm plus the control,
+* **CPU latency.** The matched CPU protocol's protocol is a *matched, interleaved* sweep on an idle host -- every arm plus the control,
   back to back, two or three rounds, reading the `stage2` phase first as the noise floor. A sequential queue runs each
-  job in its own session, which is exactly how item 16's wrong `gru_cpu` row was produced (23.87 ms against a true
+  job in its own session, which is exactly how the wrong `gru_cpu` row was produced (23.87 ms against a true
   20.57). Run it by hand afterwards: `tracking_baselines.py latency --device cpu --threads 4`, 2,000 consecutive scans,
   batch 1, against FROG's 25 ms period.
 * **The person-free phantom column.** `empty_scene.py` at three seeds, after the arms exist.
@@ -58,21 +58,21 @@ from run_queue import CHECKPOINTS, REPO, Job, main
 AVERAGED = "step2_calibration.averaged.pth"
 SEEDS = (0, 1, 2)
 #: The adopted stage-3 recipe: minGRU per slot, no slot exchange, no learned matching, no coasting head, no 1 s
-#: curriculum stage, and a **64-wide** slot state. Item 38 pinned the recurrence; items 40 and 41 removed the
-#: curriculum and the aggregator; **item 49 halved `dim` on 2026-10-27** -- it ties on accuracy (86.12% against
+#: curriculum stage, and a **64-wide** slot state. The recurrence comparison pinned minGRU; two ablations removed the
+#: curriculum and the aggregator; **`dim` was halved on 2026-10-27** -- it ties on accuracy (86.12% against
 #: 86.20%, recall at matched false positives 96.5% against 96.43%) and takes **28% off the memory phase** on the CPU
 #: (9.30 -> 6.70 ms), which nearly doubles p99 margin against FROG's 25 ms period. That is the axis the owner made
 #: decisive on 2026-10-19, so a tie on accuracy plus a win on CPU is an adoption. Both figures in that comparison
-#: predate the item 54 fix, so the *tie* stands -- they carried the same defect -- but neither is the reference here.
-#: 256 slots (item 50) and 4 heads (item 49) are the constructor defaults, so they need no flag.
+#: predate the spawn fix, so the *tie* stands -- they carried the same defect -- but neither is the reference here.
+#: 256 slots and 4 heads are the constructor defaults, so they need no flag.
 ADOPTED = ("--no-exchange", "--no-learned-match", "--no-coast", "--recurrence", "mingru", "--chunk-s", "10",
            "--dim", "64")
 GATE = Job(name="gate", cli=("-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"), cwd=REPO)
 
 
-#: The adopted stage-2 trio: aggregator-free **and** trained against item 44(a)'s soft Gaussian beam target, adopted
+#: The adopted stage-2 trio: aggregator-free **and** trained against the soft Gaussian beam target, adopted
 #: 2026-10-27 after replicating at three seeds (82.79% against 82.10%, non-overlapping ranges, 18.5% fewer false
-#: positives at the fixed threshold). All three are already trained and averaged by `queue_item44a_confirm.py`, so
+#: positives at the fixed threshold). All three are already trained and averaged by `queue_soft_label_confirm.py`, so
 #: every stage-2 job below reads `done` and only the stage-3 arms remain.
 STAGE2_DIRS = {0: "a71_soft_label_s0", 1: "a72_soft_s1", 2: "a72_soft_s2"}
 
@@ -100,11 +100,11 @@ def stage3(seed: int) -> Job:
 
 # **Seed 0 is a gate, not just the first arm** (the owner's procedure, 2026-10-28). The adopted combination -- the soft
 # Gaussian beam target *and* `--dim 64` -- has **never been run end to end**: `dim 64` was measured on the hard-label
-# stage 2 and the target was adopted afterwards. Each tied or won against its own control, but items 40 and 41 are the
+# stage 2 and the target was adopted afterwards. Each tied or won against its own control, but the two ablations are the
 # precedent for why that is not enough: both tied individually and "both at once" still needed its own number.
 #
 # So the chain runs **seed 0 alone** and stops. **The reference is 85.73%** -- `a74_fixed256_s0`, which is hard-label
-# stage 2 with `dim 64`, 256 slots and the item 54 fix in place. It is *not* the 86.12% this file used to quote; that
+# stage 2 with `dim 64`, 256 slots and the spawn fix in place. It is *not* the 86.12% this file used to quote; that
 # was `a71_dim64_s0` carrying the defect, worth 0.39 pp. The soft target gained +0.69 pp at stage 2 on candidates, so
 # the expectation for this arm is **roughly 86.4%** -- with the caveat that a stage-2 gain need not transfer to the
 # memory column at all, which is the whole reason seed 0 is a gate. **Accept anything within E13's 1.32 pp of 85.73%,

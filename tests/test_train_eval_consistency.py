@@ -1,16 +1,16 @@
 """
 The reported number must describe the saved weights, evaluated the way they
-were trained -- TODO.md A15, A16, A17.
+were trained -- three bugs that made it lie.
 
 Three bugs these lock down, all measured on the real dtime=10 run:
 
-A15  `evaluate_auc()`'s `dtime` defaults to 1 and `train_model()` never passed
+1.  `evaluate_auc()`'s `dtime` defaults to 1 and `train_model()` never passed
      it, so a model trained on 0.38 s windows was scored on 0.038 s windows.
      Cost: 76.3% vs 78.8% wp-AUC on held-out val.
-A16  the final AUC was computed *before* `load_checkpoint(best_path)`, so the
+2.  the final AUC was computed *before* `load_checkpoint(best_path)`, so the
      printed number came from the discarded last epoch while the file on disk
      held the best one. The two were never the same network.
-A17  early stopping ran on `val_loss`, whose scale swings 3x with batch
+3.  early stopping ran on `val_loss`, whose scale swings 3x with batch
      composition; a noise dip at epoch 3 killed a 30-epoch run at epoch 8.
      Cost: 78.8% (epoch 3) vs 79.7% (epoch 14).
 """
@@ -102,7 +102,7 @@ def _args(tmp_path, **kw):
 
 
 # ---------------------------------------------------------------------------
-# A15 -- dtime must reach the evaluator
+# 1. dtime must reach the evaluator
 # ---------------------------------------------------------------------------
 
 class TestDtimeReachesTheEvaluator:
@@ -148,7 +148,7 @@ class TestDtimeReachesTheEvaluator:
 
 
 # ---------------------------------------------------------------------------
-# A16 -- the reported number must describe the saved weights
+# 2. the reported number must describe the saved weights
 # ---------------------------------------------------------------------------
 
 class TestReportedAucMatchesSavedWeights:
@@ -188,7 +188,7 @@ class TestReportedAucMatchesSavedWeights:
 
 
 # ---------------------------------------------------------------------------
-# A17 -- select and stop on val wp-AUC
+# 3. select and stop on val wp-AUC
 # ---------------------------------------------------------------------------
 
 class TestEarlyStoppingOnWpAuc:
@@ -435,7 +435,7 @@ class TestValPassIsBounded:
 # ---------------------------------------------------------------------------
 
 class TestHistoryAblationIsExposed:
-    """A21's cheapest measurements -- ablate the temporal axis on a trained
+    """The cheapest temporal-contribution measurements -- ablate the temporal axis on a trained
     checkpoint and see whether wp-AUC moves -- cost one eval pass each and
     decide whether the temporal architectures have a rationale. They were
     unreachable from `evaluate.py`, which never exposed the knob
@@ -449,7 +449,7 @@ class TestHistoryAblationIsExposed:
             assert f'"{mode}"' in src, f"{mode} not offered by evaluate.py"
 
     def test_the_flag_reaches_evaluate_auc(self):
-        """A flag that parses but never arrives is the A15 bug again."""
+        """A flag that parses but never arrives is the first bug again."""
         tree = ast.parse((UTILS / "evaluate.py").read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
@@ -503,7 +503,7 @@ class TestTemporalWindowIntegrity:
     T-frame window, so draw order is irrelevant to its content. Worth locking
     down rather than asserting, because this project's entire claim is about
     temporal information -- and because there *was* a shuffle-dependent
-    cross-frame contamination here: before A18 a minibatch was concatenated
+    cross-frame contamination here: before the batch-independence fix a minibatch was concatenated
     along the beam axis, so whichever frames happened to be shuffled together
     leaked into each other through GroupNorm, the SE gate and the beam
     convolutions.
@@ -659,9 +659,9 @@ class TestCheckpointCarriesItsFrogPartition:
     """A checkpoint scored under the wrong FROG partition is not a worse number,
     it is a different experiment -- and `balanced`'s val contains recordings
     `official` trains on, so getting it wrong scores a model on its own
-    training data. That is exactly the class of bug A11 records, which is why
+    training data. That is exactly the class of bug the split tests record, which is why
     the partition travels with the weights rather than with the invocation
-    (TODO.md A30).
+.
     """
 
     def _ckpt(self, tmp_path, name, frog_mode):
@@ -694,7 +694,7 @@ class TestCheckpointCarriesItsFrogPartition:
             _resolve_frog_mode(paths)
 
     def test_transferred_and_official_share_a_checkpoint_by_construction(self):
-        """A32b's premise: a `transferred` number must be the *official*
+        """The held-constant-data premise: a `transferred` number must be the *official*
         checkpoint measured elsewhere. That only holds while the two modes'
         train and val entries are the same table rows."""
         from takheliped.datasets.frog_dataset import _MODES

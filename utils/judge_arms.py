@@ -1,4 +1,4 @@
-"""Judge every A51 arm against a multi-seed control, from the runs' `step3a_results.json` files alone.
+"""Judge every stage-3 arm against a multi-seed control, from the runs' `step3a_results.json` files alone.
 
 Standard library only and no torch, so this runs beside a live training job -- see `memory/gotchas.md` on the commit limit.
 
@@ -7,7 +7,7 @@ Standard library only and no torch, so this runs beside a live training job -- s
     python judge_arms.py --json out.json          # the same table as data
 
 An arm "clears" a metric when its distance from the control mean exceeds that metric's three-sigma bar. Two sets of bars are
-printed: the control's own (three times the sd of its seeds) and A51 E9's published ones, which came from the short control and
+printed: the control's own (three times the sd of its seeds) and the published ones, which came from the short control and
 are what `TODO.md` and `memory/slot-design-evidence.md` have judged against so far. They disagree by design -- a three-seed sd is
 a noisy estimate -- so an arm that clears one and not the other is reported as borderline rather than as a result.
 """
@@ -20,7 +20,7 @@ from pathlib import Path
 CHECKPOINTS = Path(__file__).resolve().parent.parent / "checkpoints_three_horizon"
 
 # The metrics a slot-design arm is judged on, as `(label, key, decimals, scale)`. `own_recall` is recall at the candidates'
-# false-positive rate, which is the operating point A51 reports; `ap` is the person-class AUC at 0.5 m that leads any answer.
+# false-positive rate, which is the operating point the study reports; `ap` is the person-class AUC at 0.5 m that leads any answer.
 METRICS = (
     ("AP", "ap", 2, 100.0),
     ("AP@0.3", "ap_0.3m", 2, 100.0),

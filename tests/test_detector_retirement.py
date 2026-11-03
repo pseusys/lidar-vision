@@ -1,4 +1,4 @@
-"""`TODO.md` item 32: `FullScanTCNDetector` and `TemporalUNetDetector` are retired, `SpaceTimeCNNDetector` is not.
+"""`FullScanTCNDetector` and `TemporalUNetDetector` are retired, `SpaceTimeCNNDetector` is not.
 
 Three of the project's first full-scan architectures lived in one module. Two of them influenced no decision and nothing has
 trained on them since 2026-09; the third is the one whose history ablation reorganised the whole queue, so the owner's

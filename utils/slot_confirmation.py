@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""What a slot creation or confirmation rule would remove (`TODO.md` §A item 14).
+"""What a slot creation or confirmation rule would remove.
 
-The object memory cuts person-free false positives from **2.622** per frame to **0.740**, and item 14 reads the survivors as a
+The object memory cuts person-free false positives from **2.622** per frame to **0.740**, and the creation-rule work reads the survivors as a
 creation-rule question: they recur in the next frame **92.2%** of the time against the candidates' 84.9% and real people's
 99.8%, so a higher creation threshold or a confirmation over several frames might remove them.
 
@@ -10,7 +10,7 @@ furniture is the opposite of young -- a chair sits in the room for the whole rec
 highest-hit-rate in the memory. If the slots behind the surviving phantoms are old, no creation rule reaches them, and all such
 a rule buys is a delay on genuinely new people. The measurement is the slot **age** distribution behind each population.
 
-Item 27 makes the question well-posed: 99.997% of the phantoms at the operating threshold are **rescored candidates**, not
+The phantom audit makes the question well-posed: 99.997% of the phantoms at the operating threshold are **rescored candidates**, not
 coasting reports, so every one of them has a slot matched to it whose statistics can be read.
 
 **What the delay costs, for scale.** FROG's trajectories run a median 4.5 s -- 180 frames at 40 Hz -- so a 5-frame

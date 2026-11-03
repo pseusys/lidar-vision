@@ -14,7 +14,7 @@ from .lfe_detector import LFEPeaksDetector, LFEPPNDetector
 # Neither Li2Former entry has published weights; train from scratch or skip.
 # `li2former` is this project's own reading of the paper's prose and is NOT the paper's
 # architecture; `li2former_official` wraps the authors' released network, downloaded into
-# include/ by setup.py. Only the latter's numbers belong in a Li2Former row (TODO.md item 31).
+# include/ by setup.py. Only the latter's numbers belong in a Li2Former row.
 # LFE-Peaks and LFE-PPN are ONNX-based; evaluation only.
 DETECTOR_REGISTRY: dict = {
     "algorithmic":       AlgorithmicDetector,

@@ -1,4 +1,4 @@
-"""World-frame persistence accumulator (TODO.md A41).
+"""World-frame persistence accumulator.
 
 Role C: a phantom is a chair, and a chair stays where it is. The oracle says
 89.7% of LFE-Peaks' phantom *detections* and 93.9% of LFE-PPN's sit on trails

@@ -3,10 +3,10 @@
 
 All three answer "why this and not the obvious alternative?" rather than hoping for a gain, and all three are already
 written -- this module exists only so the machine runs them back to back instead of idling between two launches. The
-runner judges a job by its outputs, so whatever is already finished is skipped: on 2026-10-20 that is item 16's
+runner judges a job by its outputs, so whatever is already finished is skipped: on 2026-10-20 that is the recurrence comparison's
 `selective_cpu`, `mingru` and `mingru_cpu`, leaving the `gru` arm and the whole of 18 and 19.
 
-Order is the concatenation, not a priority: item 16's `gru` is the long job (~10 h, a stage-3 arm) and items 18 and 19
+Order is the concatenation, not a priority: `gru` is the long job (~10 h, a stage-3 arm) and the head arms
 are nine stage-2 runs of about twenty minutes each. Nothing here depends on anything there, so a failure in one leaves
 the other running -- which is the point of one chain rather than two tasks contending for the GPU.
 
@@ -19,8 +19,8 @@ noise floor (`memory/interpreting-evaluation.md`).
     python queue_step1_defences.py --list
 """
 
-from queue_item16 import JOBS as RECURRENCE
-from queue_items1819 import JOBS as HEAD_AND_BLOCK
+from queue_selective_vs_gru import JOBS as RECURRENCE
+from queue_vote_frame_and_block import JOBS as HEAD_AND_BLOCK
 from run_queue import CHECKPOINTS, REPO, Job, main
 
 RESULTS = REPO / "results"
@@ -35,10 +35,10 @@ def oracle(name: str, threshold: float) -> Job:
     """How much of the interpolation bound the frozen memory actually takes, at one operating threshold.
 
     `takheliped_oracle.py` sweeps `BRIDGES_S` in one pass, so a run gives the whole ceiling curve from 0.2 s to 60 s. Two
-    thresholds, because **a ceiling has to be read at the operating point its consumer uses** (item 34's lesson, and
+    thresholds, because **a ceiling has to be read at the operating point its consumer uses** (a lesson already paid for, and
     `AGENTS.md` rule 3's family of error):
 
-        t03         0.3, the threshold A50 measured at, so the result is comparable to its 17.5% figure
+        t03         0.3, the threshold the earlier oracle measured at, so the result is comparable to its 17.5% figure
         matched_fp  the frozen model's own threshold, where its false-positive rate matches the candidates' and the
                     recall columns of the result tables are read
 
@@ -51,7 +51,7 @@ def oracle(name: str, threshold: float) -> Job:
                     "--threshold", str(threshold), "--out", str(out)))
 
 
-# The oracle sits between item 16 and items 18/19 on purpose: `ordered` keeps declaration order among independent jobs, so
+# The oracle sits between the recurrence and head arms on purpose: `ordered` keeps declaration order among independent jobs, so
 # these run once `gru` is off the GPU and before the nine stage-2 arms, with no false dependency on `gru` succeeding.
 ORACLE = [oracle("t03", 0.3), oracle("matched_fp", MATCHED_FP_THRESHOLD)]
 JOBS = [*RECURRENCE, *ORACLE, *HEAD_AND_BLOCK]

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 22: is spatial binding enough, or does the memory need object binding? The last pre-freeze arm.
+"""Is spatial binding enough, or does the memory need object binding? The last pre-freeze arm.
 
-**The gap this closes.** Item 36 proved *addressability* load-bearing -- one global state reaches 82.44% against the
+**The gap this closes.** The global-state ablation proved *addressability* load-bearing -- one global state reaches 82.44% against the
 slots' 85.88-86.08% -- but it never tested **which kind** of addressability. "Why slots rather than an occupancy grid?"
 is the obvious question about this architecture and a learned room grid is the classical robotics answer, so the
 contribution claim has been assumed rather than supported. This arm supports it or breaks it.
@@ -29,15 +29,15 @@ important outcome: it would say the object binding this paper is built on is doi
 that has to be known **before** the freeze rather than after publication. A clear loss is the expected one and is worth
 as much, because it converts the contribution from an assumption into a measurement.
 
-    python queue_item22.py --list
+    python queue_object_binding.py --list
 """
 
 from run_queue import CHECKPOINTS, REPO, Job, main
 
 AVERAGED = "step2_calibration.averaged.pth"
-#: The adopted stage 2 after items 40 and 44(a): aggregator-free, soft Gaussian beam target.
+#: The adopted stage 2: aggregator-free, soft Gaussian beam target.
 STAGE2 = CHECKPOINTS / "a71_soft_label_s0" / AVERAGED
-#: The adopted stage-3 recipe after items 38, 40, 41 and 49.
+#: The adopted stage-3 recipe: minGRU, no aggregator, no curriculum, 64-wide slots.
 ADOPTED = ("--no-exchange", "--no-learned-match", "--no-coast", "--recurrence", "mingru", "--chunk-s", "10",
            "--dim", "64")
 GATE = Job(name="gate", cli=("-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"), cwd=REPO)
@@ -58,7 +58,7 @@ JOBS = [
     # things rather than one -- binding *and* frame -- which completes a 2x2 whose other cells are already known:
     #
     #                      room frame      sensor frame
-    #     object binding   83.88%          82.57%   (A51 D1/E2, old architecture: the frame is worth +1.31 pp)
+    #     object binding   83.88%          82.57%   (old architecture: the frame is worth +1.31 pp)
     #     cell binding     grid1m          THIS
     #
     # Those two are stale in absolute terms but the *contrast* is what matters, and this arm says what the frame is

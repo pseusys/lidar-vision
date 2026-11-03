@@ -44,7 +44,7 @@ def dataset_rate(mode: str) -> float:
 
     **Never cached.** These pickles hold a detector pass, which is expensive, and used to hold the frame rate, which is not: a
     warm cache then replayed the stamped median's 26.2 Hz into every seconds axis after the definition was corrected to 40 Hz
-    (`TODO.md` A49). Paying one dataset load on a cache hit is the price of quoting the right rate.
+. Paying one dataset load on a cache hit is the price of quoting the right rate.
     """
     ds = FROG_Dataset(split="test", mode=mode, auto_download=False, verbose=False)
     return 1.0 / frame_period_s(ds.scan_time)
@@ -122,7 +122,7 @@ def collect_discrimination(args):
 
     `collect_precision` below runs on person-free frames, so every detection is
     a phantom by construction and the filter cannot destroy a true positive.
-    That bounds *removal*. A41 measured what happens when a mechanism has to do
+    That bounds *removal*. The persistence map measured what happens when a mechanism has to do
     both on real scenes -- recall 79.3% -> 23.2% -- so the one-sided bound was
     not predictive of anything.
 
@@ -379,7 +379,7 @@ def main():
                     help="the precision oracle on POPULATED frames, where a "
                          "trail filter can destroy true positives as well as "
                          "phantoms. The person-free version bounds removal "
-                         "only, and A41 showed that is not predictive")
+                         "only, and the persistence map showed that is not predictive")
     ap.add_argument("--mode", default="official",
                     choices=["official", "transferred", "balanced"])
     ap.add_argument("--max-gap", type=int, default=0,

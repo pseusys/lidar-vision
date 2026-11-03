@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The architecture re-think's sweep: items 39-46, plus 21 and 22, one arm each (`TODO.md` §A).
+"""The architecture re-think's sweep: one arm each for the shape, binding and head questions.
 
 **The owner's rule, 2026-10-23:** run every idea **at least once**; if the result sits inside variance, drop the idea and
 move on -- but do not rule out a *hidden gem*, a sudden substantial gain. The search is explicitly **not** exhaustive and
@@ -23,9 +23,9 @@ with what each one still needs:
     21  training stage 2 and stage 3 together           a joint arm; the feedback path is closed (E12), this is not
     22  a learned grid over the room                    substantial, and a sanity check rather than a candidate
 
-Item **37 is closed** (2026-10-22) and item **20 is covered by item 39**, which asks the sharper question: S4 already
+The dropped-frame sweep **is closed** (2026-10-22) and the learned association width **is covered by the recall-width arm**, which asks the sharper question: the gate sweep already
 showed the *association* gate flat, while `sigma_m` -- the width of the **recall attention's** distance bias, and the
-parameter item 36 made load-bearing -- has never been varied at all.
+parameter the global-state ablation made load-bearing -- has never been varied at all.
 
     python queue_architecture_sweep.py --list
 """
@@ -56,8 +56,8 @@ def stage2_arm(name: str, *flags: str) -> list:
 def stage3(name: str, *flags: str) -> Job:
     """One stage-3 arm of the adopted architecture plus `flags`, seed 0, against `a66_mingru_s0`.
 
-    **No CPU latency job, deliberately** (`memory/interpreting-evaluation.md`, 2026-10-24). `queue_item16.py` and
-    `queue_item36.py` each paired an arm with one, which looked like hygiene and produced item 16's wrong `gru_cpu` row
+    **No CPU latency job, deliberately** (`memory/interpreting-evaluation.md`, 2026-10-24). `queue_selective_vs_gru.py` and
+    `queue_global_state.py` each paired an arm with one, which looked like hygiene and produced the wrong `gru_cpu` row
     -- 23.87 ms against a true 20.57, because that job's `stage2` control phase read 10.49 ms instead of ~8.6 under
     session load. A sequential queue runs every job in its own session by construction, so it **cannot** produce
     comparable rows. Measure latency as a matched sweep by hand after the chain: every arm plus the control, back to
@@ -71,7 +71,7 @@ def stage3(name: str, *flags: str) -> Job:
 
 AGGREGATOR = CHECKPOINTS / "a69_no_aggregator_s0"
 #: The architecture after the owner's two simplifications of 2026-10-25, both adopted because they tie: stage 2 without
-#: the whole-scan aggregator (item 40, 16,384 parameters) and stage 3 without the 1 s curriculum stage (item 41, 24% of
+#: the whole-scan aggregator (16,384 parameters) and stage 3 without the 1 s curriculum stage (24% of
 #: training time). Dropping the curriculum also removes the 26-stream configuration behind two of this sweep's five
 #: out-of-memory failures, so it buys reliability as well as time.
 SIMPLE_STAGE2 = AGGREGATOR / AVERAGED
@@ -96,7 +96,7 @@ JOBS = [
     # against it rather than against `a66_mingru_s0`, whose stage 2 still had the aggregator.
     simplified("baseline"),
 
-    # Item 42's arm is **deliberately absent**, and this comment is the reason so nobody re-adds it. It ran 19 epochs on
+    # The Slot-Attention arm's arm is **deliberately absent**, and this comment is the reason so nobody re-adds it. It ran 19 epochs on
     # 2026-10-25 and died at epoch 20 on the non-finite-gradient guard -- finite outputs, finite parameters, NaN
     # gradients in all 30 -- and the cause was never found: a degenerate frame, the clamped normalisation and the
     # compounded MLP residual were each tested against the failing run's own weights and each refuted. The owner's call
@@ -105,18 +105,18 @@ JOBS = [
     # guard failure means the run is wrong rather than interrupted, so retrying is exactly what must not happen. The
     # code survives as `--iterations N`; `memory/rejected-ideas.md` carries the write-up.
 
-    # Item 41. The only arm on the list that needed no new code: drop the 1 s warm-up and train on 10 s chunks alone.
+    # The only arm on the list that needed no new code: drop the 1 s warm-up and train on 10 s chunks alone.
     # minGRU spent 1.16 h of its 10.06 h in the 1 s stage, so if this ties, every later arm gets ~12% cheaper and the
     # recipe loses a described component that does nothing.
     stage3("curriculum_10s", "--chunk-s", "10"),
 
-    # Item 39. Minutes, not an arm: `sigma_m` is replayed on the adopted memory with its weights untouched, because
+    # Minutes, not an arm: `sigma_m` is replayed on the adopted memory with its weights untouched, because
     # `step` reads it on every call. Read a flat curve weakly -- the weights adapted to 0.6 -- and train only if live.
     Job(name="sigma", outputs=(RESULTS / "sigma_mingru.json",),
         cli=("slot_experiments.py", "sigma", "--stage2", str(STAGE2), "--memory", str(ADOPTED_MEMORY),
              "--out", str(RESULTS / "sigma_mingru.json"))),
 
-    # Item 40. A stage-2 arm, so it follows A59's shape: train, average over the val-chosen window because the averaged
+    # The aggregator ablation. A stage-2 arm, so it follows the stage-2 shape: train, average over the val-chosen window because the averaged
     # weights are what stage 3 loads, then one probe pass against the three control seeds (82.19% mean).
     Job(name="no_aggregator", outputs=(AGGREGATOR / "step2_results.json",),
         cli=("train_takheliped.py", "step2", "--checkpoint-every", "0.25", "--no-aggregator",
@@ -128,14 +128,14 @@ JOBS = [
              *(str(CHECKPOINTS / CONTROL_STAGE2.format(seed=s) / AVERAGED) for s in (0, 1, 2)),
              str(AGGREGATOR / AVERAGED))),
 
-    # Item 43. The standard primitive in place of mutual nearest-neighbour. Expect it to tie on AP -- S4 put the
+    # The standard primitive in place of mutual nearest-neighbour. Expect it to tie on AP -- S4 put the
     # association's remaining headroom at about 0.8% of people -- and to cost more on the CPU, since it adds a scipy
-    # call per frame to the phase item 36 showed is already the larger half of the budget. Worth one arm anyway:
-    # "why not Hungarian?" is a reviewer's question about the one component item 36 proved load-bearing.
+    # call per frame to the phase that is already the larger half of the budget. Worth one arm anyway:
+    # "why not Hungarian?" is a reviewer's question about the one component the global-state ablation proved load-bearing.
     stage3("hungarian", "--association", "hungarian", "--chunk-s", "1", "10"),
 
-    # Item 45's cheap half: four stage-2 knobs chosen once and never varied, ~20 min each plus averaging. Scored by one
-    # probe pass over all of them against the three control seeds, the same shape items 18/19 and 40 used. `--neighbours`
+    # The shape sweep's cheap half: four stage-2 knobs chosen once and never varied, ~20 min each plus averaging. Scored by one
+    # probe pass over all of them against the three control seeds, the same shape the earlier shape arms used. `--neighbours`
     # and `--top-p` from the same item are deliberately absent -- the first changes the stem's input width, the second is
     # a candidate-cache key and rebuilding it costs more than the arm.
     *(job for name, flags in (("kernel5", ("--kernel-size", "5")),
@@ -143,10 +143,10 @@ JOBS = [
                               ("deeper", ("--blocks", "3", "3", "3")),
                               ("expansion2", ("--expansion", "2")))
       for job in stage2_arm(name, *flags)),
-    # Item 46 (A51's O3). The one arm on this list whose metric is **not** AP: item 35 measured the memory as net
+    # The position-refinement head. The one arm on this list whose metric is **not** AP: the coverage audit measured the memory as net
     # negative on coverage -- 203 person-observations recovered against 2,990 lost at its own threshold -- so all of its
     # gain is ranking, and a position correction is the only mechanism here that could turn carried state into recall.
-    # Score it on item 35's coverage columns beside AP; an AP-neutral result with better coverage is still a finding.
+    # Score it on that audit's coverage columns beside AP; an AP-neutral result with better coverage is still a finding.
     stage3("refine", "--refine", "--chunk-s", "1", "10"),
 
     Job(name="item45_probe", outputs=(RESULTS / "stage2_probe_item45.json",),

@@ -11,7 +11,7 @@ adapter is ours.
 Why this exists at all, when `li2former.py` already carries the name: that class is a conv backbone
 and one temporal encoder layer with no cross-beam path, written from the paper's prose before the
 authors' code was found.  It is not the paper's model, so a number measured from it could not go in
-the Li2Former row -- see `TODO.md` item 31 and `memory/detector-architectures.md`.
+the Li2Former row -- see `memory/detector-architectures.md`.
 
 What the authors' model does that ours did not
 ----------------------------------------------
@@ -114,7 +114,7 @@ LI2FORMER_CUTOUT_KWARGS = {
 def _upstream():
     """Their package, imported on construction rather than on import.
 
-    `library/setup.py` downloads it, so a checkout whose `include/` predates item 31 has everything
+    `library/setup.py` downloads it, so a checkout made before this class existed has everything
     except this one tree -- and importing it at module scope would take the whole detector package
     down with it. `DrowDetector` reads its weights from `include/` the same way, at construction.
     """

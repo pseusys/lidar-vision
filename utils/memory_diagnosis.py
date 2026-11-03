@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Why does stage 3 lose people stage 2 had already found? (`TODO.md` A50 phase 1b.)
+"""Why does stage 3 lose people stage 2 had already found?
 
 `takheliped_oracle.py` established the shape of the problem: over the FROG `official` test split the memory recovers 2,113
 annotated people the candidates missed and **loses 6,076 it had**, for a net -3,963. So stage 3's weakness is not forgetting --
@@ -32,17 +32,17 @@ down -- on the full split the people it *kept* were pushed down harder (median -
 so a threshold fixed at stage 2's 0.3 is no longer calibrated for stage 3's output. If lowering only stage 3's threshold
 recovers the people, the loss is an artefact of the fixed threshold and the fix is calibration, not architecture.
 
-`--slot-speed` needs no trained model (`TODO.md` A51 0a). FROG's stamps come in bunches (38 ms, 38 ms, under 0.1 ms), stage 3
+`--slot-speed` needs no trained model. FROG's stamps come in bunches (38 ms, 38 ms, under 0.1 ms), stage 3
 clips each interval to `MIN_DT_S`, and `manage_slots` divides a matched slot's displacement by it. This replays the rule-based
 bookkeeping on a candidate cache twice, with each stamped interval and with training's running time step, and sets each slot's
 velocity state against a reference that never divides by one interval: its displacement over at least `--window-s`.
 
-`--slot-rules` needs no trained model either (`TODO.md` A51 S1 and S2). `manage_slots`' association gate and fade time need no
+`--slot-rules` needs no trained model either. `manage_slots`' association gate and fade time need no
 retraining to change (`docs/PROPOSAL.md` §6.3), so they are swept first: for each pair, how often a live slot stands on an
 annotated person, how many slots match a candidate, how much the memory churns, and -- when a slot is lost and something
 reappears where it stood -- how long the gap was. The last one prices what a slot's state would have to survive.
 
-`--recovery` asks the question that decides where the remaining work goes (`TODO.md` A51). The oracle says ~10,000 annotated
+`--recovery` asks the question that decides where the remaining work goes. The oracle says ~10,000 annotated
 people are recoverable -- their own trajectory is detected before and after the gap -- and stage 3 reports about a fifth of them.
 For each person no kept detection covers, this measures whether the memory **already holds a live slot on them**. If it does, the
 slots are full enough and the failure is in reporting, so the coasting threshold and the rescoring calibration are the levers; the
@@ -225,7 +225,7 @@ def recovery(model: ObjectMemory, split: Split, device, streams: int, threshold:
     report's score, split by whether it would recover such a person, and the slots actually in use.
 
     Misses are also split by whether stage 2 produced **any** candidate near the person, at any score. That split is what says
-    how much headroom feeding the memory back into stage 2 could have (`TODO.md` A51 E12): where a candidate exists, rescoring
+    how much headroom feeding the memory back into stage 2 could have: where a candidate exists, rescoring
     can already raise it and feedback is not needed; where none exists, no amount of rescoring invents one, and only feedback --
     or a coasting report -- can reach that person. A live slot on such a person is the feedback-exclusive pool.
     """

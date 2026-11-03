@@ -36,7 +36,7 @@ counter-rotated by the robot's own heading change before matching — the
 same rotation-only approximation (no translation correction) already used
 throughout this codebase for temporal alignment (`aligned_raw_scan()`,
 `cutout()`'s odometry correction), for consistency rather than inventing a
-second convention. See docs/IDEAS_BACKLOG.md item 3.
+second convention.
 """
 
 from typing import List, Optional, Tuple
@@ -190,7 +190,7 @@ class SimpleTracker:
                      NOT: 1.88 cm and up to 0.4 deg per frame on the test
                      recording. The claim that FROG odometry is all-zero, which
                      this docstring used to make, described `_load_or_fake_odom()`
-                     substituting zeros on failure, not the robot (TODO.md A14).
+                     substituting zeros on failure, not the robot.
         ego_dxy    : robot's own translation since the previous `step()`,
                      already converted to this module's (x, y) convention —
                      see odom_xya_delta_to_tracker_frame(). (0.0, 0.0)
@@ -463,7 +463,7 @@ def _gated_matches(tracks: List[_ByteTrack], track_idx: List[int], det_pos: np.n
 
 
 class ByteTracker:
-    """ByteTrack (Zhang et al., *ECCV* 2022) for point detections, carrying CBMOT's track confidence (`TODO.md` A56 E14).
+    """ByteTrack (Zhang et al., *ECCV* 2022) for point detections, carrying CBMOT's track confidence.
 
     The association is ByteTrack's (`two_stage=True`): detections at or above `high_thresh` are matched against every confirmed
     track, tracked or lost; those between `low_thresh` and `high_thresh` against the confirmed tracks that were tracked last frame

@@ -186,7 +186,7 @@ def frame_period_s(times):
 
     **Not the median interval.** FROG's recorder stamps scans in bunches -- 38 ms, 38 ms, then under 0.1 ms -- so a median reads
     26.2 Hz where the sensor delivers a scan every 25 ms, which made every figure quoted per second 1.53x low and the real-time
-    budget 38.2 ms where it is really 25 ms (`TODO.md` A49, memory/interpreting-evaluation.md).
+    budget 38.2 ms where it is really 25 ms (`memory/interpreting-evaluation.md`).
 
     `times` is one array of scan timestamps per recording. Intervals that are negative, or longer than `MAX_LINKED_INTERVAL_S`,
     are dropped rather than averaged in: a recording pause is not a frame interval. Returns `None` when nothing is left, rather
@@ -209,7 +209,7 @@ def false_positive_rate(det_scores, det_frames, n_frames,
     undefined, not merely low: with no true positives, precision is 0 at every
     threshold and recall has no denominator. Reporting "AUC" there would name
     something the number is not, which this project has already paid for once
-    (TODO.md A31). Every detection is a false positive by construction, so a
+. Every detection is a false positive by construction, so a
     count is both well-defined and the quantity a deployment actually feels.
 
     Arguments:
@@ -328,7 +328,7 @@ def _win2global(r, phi, dx, dy):
 
 
 def swap_vote_frame(votes, angles):
-    """Vote offsets `[..., N, 2]` between the beam frame DROW uses and the sensor's own Cartesian one (`TODO.md` item 18).
+    """Vote offsets `[..., N, 2]` between the beam frame DROW uses and the sensor's own Cartesian one.
 
     A beam at bearing `phi` points along `u = (-sin phi, cos phi)` in the project frame (`project_cartesian_from_polar`),
     and `across` is measured along `v = (-cos phi, -sin phi)`, so the two parameterisations of one offset differ by the

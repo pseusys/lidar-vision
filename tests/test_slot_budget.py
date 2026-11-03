@@ -1,4 +1,4 @@
-"""Slot budget for the object memory (TODO.md A43, owner's question 3.9).
+"""Slot budget for the object memory (owner's question 3.9).
 
 Stage 3 holds a fixed number of slots K. A slot is spawned from an unmatched
 proposal and retired only after `retire` frames without a match, so at any

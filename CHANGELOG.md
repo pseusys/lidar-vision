@@ -38,6 +38,61 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The item numbering leaves the repository: code and docs now name what a thing tests (2026-11-03)
+
+*keywords: item notation, A-numbers, rename, readable without prior knowledge, operational notation, queue script names, strip_tags, mojibake, IDEAS_BACKLOG, rule 4b, owner's call*
+
+**The owner's call, and the line it draws.** The `item N` / `A<NN>` numbering is *operational notation*: it is how a
+`TODO.md` row, a `CHANGELOG.md` entry and a commit message refer to each other. It stays in those three places, and
+in each memory page's `*keywords:*` line so that a commit saying "item 36 closed" can still be grepped to the page
+that explains it. **Everywhere else it is gone** -- code, `docs/`, `memory/`, the frozen weights' manifests, and file
+names -- because "the repo should be readable without prior knowledge of them".
+
+**What moved.** 1,152 references in 149 files, in three passes:
+
+| pass | what it did | sites |
+| --- | --- | --- |
+| mechanical | parenthetical citations deleted outright -- `(`TODO.md` A51 E10)`, `(2026-11-01, item 31)` | **490** |
+| named | each id replaced by what it tested -- "the global-state ablation", "the adopted recipe", "the phantom audit" | **~600** |
+| by hand | sentences where the id was the subject and the clause had to be rewritten | **~60** |
+| left alone | `TODO.md`, `CHANGELOG.md`, commit messages, `*keywords:*` lines, and the rule in `AGENTS.md` that defines the notation | -- |
+
+**18 files were renamed**, 11 of them tracked, so a script now says what it runs rather than which row asked for it:
+`queue_item16` -> `queue_selective_vs_gru`, `queue_item22` -> `queue_object_binding`, `queue_item24` ->
+`queue_coast_ablation`, `queue_item36` -> `queue_global_state`, `queue_item37` -> `queue_flaky_stream`,
+`queue_item44a_confirm` -> `queue_soft_label_confirm`, `queue_item48` -> `queue_score_calibration`, `queue_item50` ->
+`queue_slot_budget`, `queue_item56` -> `queue_frozen_tracking_baselines`, `queue_item58` -> `queue_phantom_column`,
+`queue_items1819` -> `queue_vote_frame_and_block`. The seven files created earlier the same day were renamed before
+their first commit, so they have no history under the old names: `queue_li2former_drow`, `queue_li2former_drow_resume`,
+`queue_upstream_grid`, `test_li2former_drow_resume`, `test_upstream_grid_wiring`, `test_upstream_grid_queue`,
+`test_upstream_scoring`. **Entries above this one name the pre-rename paths**, which is what a dated record should do;
+`git log --follow` resolves them.
+
+**`AGENTS.md`'s rule 4b now states the convention** rather than only "never renumber", and the CPU-latency line in rule
+2b no longer names an item for its protocol. Two gitignored-artifact namespaces were deliberately **not** touched:
+`checkpoints*/` directory names (each checkpoint stores the absolute path of its own stage 2) and `results/*.json|log`.
+
+**Three defects fell out of the sweep.**
+
+1. **Seven references in `utils/train.py` pointed at `docs/IDEAS_BACKLOG.md`, a file that does not exist** -- the
+   shortcut-learning backlog, deleted at some point with no successor. The docstrings they hung off explain themselves
+   in full, so the dead pointers were removed rather than re-homed.
+2. **`memory/commands.md` documented `queue_item31b.py`, which was never written** (planned 2026-11-01, superseded by
+   the upstream grid) -- in the one file whose job is to stop invented commands. Replaced with the two chains that
+   exist, and the file also gained `--upstream-grid`, the convention check, and a test count that was stale by 685.
+3. **`docs/RESEARCH.md` is ~450 characters of mojibake** -- every em dash, arrow, multiplication sign and section sign
+   is double-encoded (UTF-8 once read as cp1252). Pre-existing, unrelated to this change, and **filed as item 66**
+   rather than fixed blind in a document that wants proofreading.
+
+**Tested:** 1,218 pass, `ruff` clean on `library utils tests` and on `memory/scripts`, `verify_memory.py` 0 errors with
+all 223 internal links resolving. The suite was run after each of the three passes, not only at the end.
+
+**And the tooling itself was the riskiest part of this change**, which is now a rule in `memory/dos-and-donts.md`: two
+"tidy-ups" inside the first mechanical pass each mangled the tree -- collapsing double spaces destroyed the indentation
+of 152 Python files, and deleting empty parentheses turned every `forward()` into `forward` in live code. Both were
+caught by comparing `git diff --shortstat` against the ~300 lines the pass should have touched, and both were undone
+with `git checkout` because nothing had been committed. Prove a repository-wide rewrite on one file first.
+
 ## Item 64 closed: their decoder and their metric are worth 0.1-0.5 pp, so the gap is the training (2026-11-03)
 
 *keywords: item 64, item 31, lidar_item64, queue_upstream_grid.py, grid_r05, grid_r03, upstream_scoring.py, score_grid, decode_ours, decode_theirs, --upstream-grid, _print_upstream_grid, return_raw, nms_detections, upstream_ap, calPrecisionRecall, peak F1, EER, 48.1%, 48.2%, 40.5%, 41.0%, 76.4%, 72.5%, 28.3 pp, +0.1 pp, +0.5 pp, strided slice wrong by 17x, eval-stride 60, harness self-test, escape basin, epoch 8, li2former_official_parallel_resumed.best.pth, 1218 tests, RESEARCH.md 3.3.1*

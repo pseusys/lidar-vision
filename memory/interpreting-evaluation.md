@@ -10,7 +10,7 @@ The standing comparison against published SOTA is in [`performance-log.md`](perf
 
 ## Training cost is not inference cost, and a queued latency row is not a comparable one (2026-10-24)
 
-**Two mistakes from item 43, both worth not repeating.**
+**Two mistakes from the Hungarian-association arm, both worth not repeating.**
 
 **First: a per-epoch training multiple says nothing about the deployment axis.** Hungarian association cost **4.3x per
 epoch** on 1 s curriculum chunks and ~1.8x on 10 s ones, and this project predicted from that, repeatedly and out loud,
@@ -21,8 +21,8 @@ over a ~24x22 gated block. Anything whose cost scales with the number of concurr
 training than it is in deployment. Measure the axis you intend to claim.
 
 **Second: the queue cannot produce comparable latency rows, and giving it latency jobs invites a wrong one.**
-`queue_item16.py` and `queue_item36.py` each paired an arm with a `tracking_baselines.py latency` job, which looked like
-good hygiene and produced item 16's wrong `gru_cpu` row -- 23.87 ms against a true 20.57, because its `stage2` control
+`queue_selective_vs_gru.py` and `queue_global_state.py` each paired an arm with a `tracking_baselines.py latency` job, which looked like
+good hygiene and produced the wrong `gru_cpu` row -- 23.87 ms against a true 20.57, because its `stage2` control
 phase read 10.49 ms instead of ~8.6 under session load. **A latency row is only comparable to rows measured beside it in
 the same session**, and a sequential queue runs every job in its own session by construction. So:
 
@@ -30,7 +30,7 @@ the same session**, and a sequential queue runs every job in its own session by 
 - **Measure latency as a matched sweep by hand, after the chain, on an idle host**: every arm plus the control, back to
   back, interleaved, two or three rounds.
 - **Read the `stage2` phase first.** It is byte-identical work across stage-3 arms, so its spread *is* the noise floor.
-  Item 43's three rounds agreed to 0.01 ms on the means, which is what made a 0.10 ms memory difference readable as
+  The Hungarian arm's three rounds agreed to 0.01 ms on the means, which is what made a 0.10 ms memory difference readable as
   noise rather than signal.
 
 ## The architecture search was not exhaustive, and the write-up must say so (owner's call, 2026-10-23)
@@ -50,17 +50,17 @@ rather than by omission.
 than noise; we did not try every variation, and the ones we rejected we rejected on one measurement each.* Not: *this is
 the best architecture.*
 
-**Where this bites hardest.** Items 15, 17, 18, 19, 20, 24, 25, 34 and A58/A60 are all single-arm negatives, and items
+**Where this bites hardest.** A long run of single-arm negatives, and items
 20 and S4 were closed **without any run at all**, on the grounds that the parameter's own sweep was flat. The three
 findings that do carry weight have more behind them: the memory's value over its candidates (three seeds), the removal
-of both attention mechanisms (E13, three seeds), and per-object addressability (item 36, a 3.44 pp gap against a 1.32 pp
+of both attention mechanisms (E13, three seeds), and per-object addressability (a 3.44 pp gap against a 1.32 pp
 bar). Quote those as results and the rest as screening.
 
 **This paragraph belongs in the paper's limitations**, not only here (`docs/PAPER.md`).
 
 ## A CPU millisecond moves between sessions, so only arms measured back to back can be compared (2026-10-20)
 
-**Found while answering item 16's second half**, and it changes how every future CPU row has to be taken. minGRU's memory
+**Found while answering the recurrence comparison's second half**, and it changes how every future CPU row has to be taken. minGRU's memory
 phase came out 0.18 ms above the adopted arm's -- until the one phase that *cannot* differ was checked.
 
 **Stage 2 is a free control in every stage-3 CPU row.** Every stage-3 arm loads the *same* averaged stage-2 checkpoint, so
@@ -77,7 +77,7 @@ and it bounds what a difference in the other phases can mean. Three readings per
 | `mingru` | **total** | **19.76** | **19.66** | **19.81** | **0.15** |
 
 **The offset is between sessions, not between arms.** `selective`'s r1 is the 2026-10-19 in-chain reading, and it agrees
-with item 30's independent 2026-10-11 row to 0.03 ms (19.15 both times). Tonight's session reads **~0.6 ms slower for both
+with the independent 2026-10-11 row to 0.03 ms (19.15 both times). Tonight's session reads **~0.6 ms slower for both
 arms alike**, about 3%. So a row is reproducible within a session and carries a few percent of drift across sessions.
 
 **Judged inside one session, which is the only matched comparison** (r2 and r3 of each arm, interleaved):
@@ -115,14 +115,14 @@ this host is the RX 9060 XT. Quoting it as a cost figure silently reports a GPU 
 measurements differ by more than a factor of two for exactly this reason -- **4.65 ms on the GPU against 9.14 ms on four
 CPU threads** -- and the memory is the *larger* half of the CPU total while being the smaller half of the GPU's.
 
-**The protocol to use instead** is item 29's, which every row of the speed table shares: `tracking_baselines.py latency
+**The protocol to use instead** is the matched one, which every row of the speed table shares: `tracking_baselines.py latency
 --device cpu --threads 4`, 2,000 consecutive FROG test scans, batch 1, median and p99 against the real 25 ms frame period.
-Item 30 also settled the thread count that matters: scaling **saturates at two**, so "two CPU cores" is the deployment
+The budget restatement also settled the thread count that matters: scaling **saturates at two**, so "two CPU cores" is the deployment
 claim, and one core misses the budget at 151%.
 
 ## Before anything else: every pre-2026-09-10 FROG number is retracted
 
-Four measurement bugs, all fixed (`TODO.md` A11-A19, `CHANGELOG.md`), none of them re-measured yet.
+Four measurement bugs, all fixed (`CHANGELOG.md`), none of them re-measured yet.
 Read `performance-log.md`'s status table before quoting any row — it says precisely which rows the fixes invalidated and which they did not.
 The two that generalize past this incident, and are worth carrying as habits:
 
@@ -172,7 +172,7 @@ Treat any LFE DROW/JRDB number as approximate, degraded-by-construction, not com
 
 The LFE evaluation paths therefore walk the raw sequence at full rate whenever a tracker is active, and score only the subset (`_lfe_frames`). Without a tracker the walk *is* the scored set, so no number measured before this existed moved.
 
-**Pass real ego-motion.** FROG's odometry is not zero — 1.88 cm and up to 0.4° per frame on the test recording. The belief that it was zero dates from `_load_or_fake_odom()` substituting zeros on failure (`TODO.md` A14) and survived in two code comments and a docstring; 0.4°/frame over a track's ~6-frame lifetime is 2.4°, which at 8 m is 33 cm — most of the tracker's 0.5 m gate.
+**Pass real ego-motion.** FROG's odometry is not zero — 1.88 cm and up to 0.4° per frame on the test recording. The belief that it was zero dates from `_load_or_fake_odom()` substituting zeros on failure and survived in two code comments and a docstring; 0.4°/frame over a track's ~6-frame lifetime is 2.4°, which at 8 m is 33 cm — most of the tracker's 0.5 m gate.
 
 ## A FROG number means nothing without its association distance
 
@@ -191,7 +191,7 @@ Two consequences when reading a FROG test number:
 - **Every AP is 0.7-1.05 pp below its de-duplicated value**, and the method that double-reports least loses most: candidates 77.66 -> 78.70, the tuned ByteTrack + CBMOT 80.96 -> 81.90, E13 83.86 -> 84.60.
   A gap between a double-reporting method and a clean one is therefore inflated by up to ~0.3 pp (E13 over E14: +2.90 official, +2.71 de-duplicated, every interval still above zero).
 - **A per-person statistic that counts the copies** credits double reporting as recall.
-  The A56 "unlinked annotations" the memory "found" 39% of were exactly these copies.
+  The "unlinked annotations" the memory "found" 39% of were exactly these copies.
 
 The official labels stay the reported protocol, because every published FROG and LFE number was scored on them.
 Quote the de-duplicated figure only as a sensitivity, and only beside the official one.
@@ -203,7 +203,7 @@ This is not hypothetical: the LFE-PPN anchor-decode calibration reported its ang
 
 And do **not** try to recover a decode convention by fitting localisation residuals against the raw offset channel. It was tried, it looked conclusive, and it is confounded: ground-truth association uses a *metric* radius, so angular residuals are capped at ~`r/d` by construction and any convention produces a `scale x depth = const` signature.
 
-**A dead regression head is the limiting case, and Li2Former's own released network is the worked example -- but the lesson is not the one a per-beam estimate predicts** (2026-11-01, item 31). Their `reg_head` ends in `nn.ReLU()`, which their own left-right-flip augmentation drives into its dead zone within two epochs: `pred_reg` becomes identically 0, the gradient through the clamp is exactly 0, and `loss_reg` goes bit-stable (`utils/diagnose_vote_head.py` proves it; `memory/detector-architectures.md` has the mechanism). Every detection is then placed at its own beam's measured point.
+**A dead regression head is the limiting case, and Li2Former's own released network is the worked example -- but the lesson is not the one a per-beam estimate predicts** (2026-11-01). Their `reg_head` ends in `nn.ReLU()`, which their own left-right-flip augmentation drives into its dead zone within two epochs: `pred_reg` becomes identically 0, the gradient through the clamp is exactly 0, and `loss_reg` goes bit-stable (`utils/diagnose_vote_head.py` proves it; `memory/detector-architectures.md` has the mechanism). Every detection is then placed at its own beam's measured point.
 
 Inverting the frozen loss through their AFM puts the typical vote magnitude at only **~0.19 m**, well inside a 0.5 m gate, which **predicts that the loss is nearly free at `d = 0.5`. That prediction is wrong, and the correction is the point:** the votes are consumed by a *clustering* step before anything is matched, and zero votes never converge -- the per-person votes stay smeared across the surface the beams hit, so one person yields several detections instead of one peak and the false positives take the precision. Measured on DROW over nine of twelve epochs: **val** wp-AUC converges near **29.7%** and **train** near **38.5%**, against a 61.9% floor for DROW3 and a published 76.4%. (An earlier reading of this same run put the plateau at 25.7% / 34.1% from two epochs and was withdrawn; the four-point and training-loss standards that replaced it are in the run-to-run spread section above.)
 
@@ -228,9 +228,9 @@ Check this the moment a reproduction lands, not later.
 
 Every detector falls into exactly one of: **replicated with official weights** (`drow`, `drspaam`, `lfe_peaks`, `lfe_ppn` — genuine published-model inference, no training performed here), **reimplemented with no official weights** (`li2former` — trained from scratch from the paper's description alone, since training never completed, no locally-measured number exists at all), or **novel** (`spacetime_cnn`, `fullscan_tcn`, `temporal_unet` — no prior paper describes them, so no official weights could exist).
 A "replicated" score is a reproduction of a published result; a "novel" score is this project's own claim, with nothing to check it against except internal consistency (train ~ test, ablation sanity).
-An official-weights evaluation of DR-SPAAM (T=1, T=5) through this project's own pipeline was attempted and abandoned (`TODO.md` A2) — the paper's own numbers are cited instead, deliberately, since the weights-compatibility check (zero missing/unexpected keys) already passed independently.
+An official-weights evaluation of DR-SPAAM (T=1, T=5) through this project's own pipeline was attempted and abandoned — the paper's own numbers are cited instead, deliberately, since the weights-compatibility check (zero missing/unexpected keys) already passed independently.
 
-**A released repository's deployment config is not the configuration its paper's number came from, and transcribing it faithfully is not the same as reproducing the model** (2026-11-01, item 31; cost: ~10 h of GPU on a meaningless arm, plus a day of reasoning about a 30% result as though it described the published model). Li2Former's only published config is `cfgs/ros_li2former.yaml`, a **ROS robot deployment** file: it sets `MODE: TEMPORAL`, which runs their 1-layer temporal encoder alone, never calls their 3-layer spatial encoder, and so has **no cross-beam path** — while the paper's entire contribution is **Omni-Dimension Aggregation**, i.e. both dimensions at once (`SERIAL`/`PARALLEL` in their code). Three quarters of the checkpoint's 29.47M parameters never received a gradient. The transcription was exact and verified against the upstream file; the mistake was upstream of that, in believing the file answered the question. **So before training someone else's network to compare against their number, check that the configuration is the one the number was measured on** — a deployment config is chosen for a robot's CPU budget, an ablation config for a table row, and neither has to be the headline model. Corroborating signal worth trusting next time: the configured model's active parameter count collapsed to ~4M, the size of the hand-written reimplementation it was brought in to replace, and **that coincidence was visible before the run started**. A paper whose contribution is an aggregation *mechanism* and a config that disables half the mechanism is a contradiction that should stop a launch.
+**A released repository's deployment config is not the configuration its paper's number came from, and transcribing it faithfully is not the same as reproducing the model** (2026-11-01; cost: ~10 h of GPU on a meaningless arm, plus a day of reasoning about a 30% result as though it described the published model). Li2Former's only published config is `cfgs/ros_li2former.yaml`, a **ROS robot deployment** file: it sets `MODE: TEMPORAL`, which runs their 1-layer temporal encoder alone, never calls their 3-layer spatial encoder, and so has **no cross-beam path** — while the paper's entire contribution is **Omni-Dimension Aggregation**, i.e. both dimensions at once (`SERIAL`/`PARALLEL` in their code). Three quarters of the checkpoint's 29.47M parameters never received a gradient. The transcription was exact and verified against the upstream file; the mistake was upstream of that, in believing the file answered the question. **So before training someone else's network to compare against their number, check that the configuration is the one the number was measured on** — a deployment config is chosen for a robot's CPU budget, an ablation config for a table row, and neither has to be the headline model. Corroborating signal worth trusting next time: the configured model's active parameter count collapsed to ~4M, the size of the hand-written reimplementation it was brought in to replace, and **that coincidence was visible before the run started**. A paper whose contribution is an aggregation *mechanism* and a config that disables half the mechanism is a contradiction that should stop a launch.
 
 The same file then supplied a second one, which is why the lesson is about the *file* and not about `MODE`: `NUM_CTS: 90` is their robot's cutout count, and it also caps their position encoding, so **the deployment config encoded the deployment's sensor as well as its compute budget**. DROW has 450 beams; the corrected mode attends over beams rather than scans, and the first batch died on the mismatch. **When a config comes from a deployment, assume every value in it describes that robot — its sensor geometry, its beam count, its latency budget — and check each against your own dataset, not just the ones the paper happens to discuss.** Three launches were spent on the second value after the first had already taught the lesson.
 
@@ -246,14 +246,14 @@ A model still improving (val wp-AUC rising, patience not triggered) at a cheap s
 **+1.9pp.** DR-SPAAM's own published FROG numbers at d = 0.5 m are `T=1` **73.7%** and `T=5` **75.6%** (73.3% / 75.3% in the paper's mAP column, `performance-log.md`) — the best temporal model in the literature gains about two points from five frames on this benchmark.
 LFE-Peaks reaches 65.6% from a **single frame** with ~65K parameters at 1.76 ms; neither LFE model carries any memory between scans.
 
-**Those five frames span about 0.15 s.** The FROG paper gives only "a temporal window size of 5 scans" and names no stride. It trained DR-SPAAM with the official repository (`VisualComputingInstitute/2D_lidar_person_detection`), whose DR-SPAAM config sets `scan_stride: 1` and whose loader takes scans `scan_idx - i * scan_stride`, i.e. consecutive; FROG's own export (`robotics-upo/2DLaserPeopleBenchmark`, `convert_frog_bags.py`) keeps every scan. Five consecutive scans at FROG's measured 26.2 Hz (`dataset-properties.md`) are 4/26.2 = 0.15 s apart end to end -- inferred from the code, since FROG's own DR-SPAAM config is not published. Even run as a stream, DR-SPAAM's template update (α = 0.5) halves an older scan's weight per scan. So the published temporal gain comes from the span `docs/PROPOSAL.md` gave stage 2's fine temporal convolution (~0.08 s), well inside its calibration horizon (the coarse convolution's ~1.3 s); both were removed after failing their ablations (A50, A60), and the short and long horizons, now the object memory's, have no published counterpart on this sensor.
+**Those five frames span about 0.15 s.** The FROG paper gives only "a temporal window size of 5 scans" and names no stride. It trained DR-SPAAM with the official repository (`VisualComputingInstitute/2D_lidar_person_detection`), whose DR-SPAAM config sets `scan_stride: 1` and whose loader takes scans `scan_idx - i * scan_stride`, i.e. consecutive; FROG's own export (`robotics-upo/2DLaserPeopleBenchmark`, `convert_frog_bags.py`) keeps every scan. Five consecutive scans at FROG's measured 26.2 Hz (`dataset-properties.md`) are 4/26.2 = 0.15 s apart end to end -- inferred from the code, since FROG's own DR-SPAAM config is not published. Even run as a stream, DR-SPAAM's template update (α = 0.5) halves an older scan's weight per scan. So the published temporal gain comes from the span `docs/PROPOSAL.md` gave stage 2's fine temporal convolution (~0.08 s), well inside its calibration horizon (the coarse convolution's ~1.3 s); both were removed after failing their ablations, and the short and long horizons, now the object memory's, have no published counterpart on this sensor.
 
 Keep that ceiling in view before reading any temporal result here as a large effect.
-It also frames the risk this project actually runs: every one of its three novel architectures exists *for* the temporal channel, so if the trained model turns out to be a static shape detector, LFE already does that job far more efficiently and the architectures have no rationale (`TODO.md` A21).
+It also frames the risk this project actually runs: every one of its three novel architectures exists *for* the temporal channel, so if the trained model turns out to be a static shape detector, LFE already does that job far more efficiently and the architectures have no rationale.
 
 The corollary is a reframing worth holding onto: on a benchmark where every frame contains 3-4 people, shape alone gets most of the way, so temporal information has little room to show up as raw AP.
 Where it *should* show up is in rejecting **static** false positives — a chair leg and a standing person are near-identical in a 2D knee-height slice, and motion is the only cue separating them.
-That is what `TODO.md` A20's person-free false-positive rate measures, and nobody has published it.
+That is what the person-free false-positive rate measures, and nobody has published it.
 
 ## The informational-capacity proxy's peak is a prior for where to train, not a prediction of the trained result
 
@@ -338,13 +338,13 @@ The rule going forward: screen at several seeds from the start, or let single-ru
 
 **Seeds do not pair runs; compare means, not per-seed differences.** Measured 2026-09-17. The default architecture was retrained at seeds 0-2 on current code and scored 78.19 / 76.64 / 75.13. The same seeds' earlier runs, rescored with the same decoding, gave 78.40 / 78.28 / 77.09. The code differed only in how targets anchor beyond 10 m. A same-seed gap of up to 1.96 points means a seed does not reproduce a run here: GPU kernels are nondeterministic, and seeding fixes data order but not the arithmetic. So a paired-by-seed t-test is not valid on this machine. Two paired "results" are retracted: static vs the default architecture ("t = 3.4") and limit-beam exclusion ("−0.93, lower on every seed"). The latter reversed to +0.34 against fresh controls. Five three-seed arms now pool to a per-run sd of **~0.95 points** (0.46-1.53 per arm), so the ~2.5-point single-run rule stands. At three seeds a mean difference needs roughly 1.5-2 points to count.
 
-**Stage 3's screening bars are per backbone, and one of them no longer exists.** B0's three seeds on the no-temporal stage 2 gave bars of 1.45 (AP), 1.29 (AP at 0.3 m), 0.86 (recall at matched FP) and 8.19 pp (coasting precision). On A59's adopted recipe the same three-seed reading (A61's E13 runs) gives **1.32, 1.62 and 2.37**, and **coasting precision has no bar at all**: the memory emits 0.0012 / 0.0000 / 0.0020 coasting reports per scored frame against B0's 0.176, so one seed's precision is undefined. Recall at matched false positives is the metric that loosened most, from 0.86 to 2.37, because stage 2 now reaches 95.47% there itself. Judge an arm against its own backbone's bars, and say which one a coasting number came from (`slot-design-evidence.md`).
+**Stage 3's screening bars are per backbone, and one of them no longer exists.** B0's three seeds on the no-temporal stage 2 gave bars of 1.45 (AP), 1.29 (AP at 0.3 m), 0.86 (recall at matched FP) and 8.19 pp (coasting precision). On the adopted recipe the same three-seed reading (the E13 runs) gives **1.32, 1.62 and 2.37**, and **coasting precision has no bar at all**: the memory emits 0.0012 / 0.0000 / 0.0020 coasting reports per scored frame against B0's 0.176, so one seed's precision is undefined. Recall at matched false positives is the metric that loosened most, from 0.86 to 2.37, because stage 2 now reaches 95.47% there itself. Judge an arm against its own backbone's bars, and say which one a coasting number came from (`slot-design-evidence.md`).
 
 **Corrected 2026-09-29: the stated reason was wrong, and the rule survives for a different one.** That 2026-09-17 measurement compared runs whose *code differed*, so it could never separate "a seed does not reproduce a run" from "the code change moved the result". A clean test now exists. `a51_b0f_s1` retrained stage 3 from scratch, same seed, same flags, same code, a different output directory and eight days later than `a51_b0_short_s1` -- and reproduced it **exactly**: all **46 of 46** evaluations agree on validation AP to six decimals, and every test metric matches (AP 83.17, AP@0.3 81.52, recall at matched FP 92.53, coasting precision 22.31). Only `ms/frame` differs, as a wall-clock measurement must. So the kernels this project uses **are** deterministic, and a seed **does** reproduce a stage-3 run here.
   What actually breaks reproduction is **`--resume`**. `a51_b0f_s0` was interrupted by a driver bugcheck and resumed; it tracks `a51_b0_short_s0` for **36 of 42** evaluations and diverges at exactly the first epoch after the resume point (10 s stage, epoch 4: 0.7885 against 0.7854), ending 0.41 pp higher in AP and 5.3 pp lower in coasting precision. A resumed run is therefore a **different draw**, not the same run continued -- fine as one sample of the arm, never a reproduction of it.
   **The practical rule does not change: still compare means, not per-seed differences.** An ablation changes the architecture, so it consumes the same seed's random stream differently and its "same seed" shares nothing with the control's beyond the number. Pairing is invalid because the runs are not paired, not because the arithmetic is noisy. What *is* now legitimate is re-running an identical configuration to verify a number, which is worth doing whenever a result looks too good.
 
-**Within a single run, the same caution applies to adjacent epochs -- and the series to read convergence off is the training loss, not the val AUC** (2026-11-01, item 31, cost: one wrong reading reported to the owner and withdrawn two hours later). Val wp-AUC swung +-5 pp between neighbouring epochs on the Li2Former DROW leg: 29.2 -> 28.9 -> **24.1** -> 29.7%, where epoch 8's dip sits between two 29s and epochs 4-5 produced an identical two-point dip that was wrongly reported as a ceiling. **Two points cannot establish a plateau on a noisy metric.** The training loss can, because it is monotone and nearly noiseless -- its per-epoch change on the same run went -0.0072 (epoch 2) -> -0.0012 -> -0.0008 -> -0.0006 -> **-0.0002** (epoch 9), which says "optimisation has stopped" without any smoothing or judgement. So: **call a plateau from the loss curve, or from four AUC points, or from the `.best.pth` write times** (the cheap check that was available and skipped), never from two. The same series separates the two failure modes: a *converged* loss with both AUC series flat and a steady gap is a bad optimum, while the data-scarcity overfit this repo has seen is a *still-falling* train loss with train AUC climbing away from val (`spacetime_cnn` on FROG, 83.8% / 63.6%, gap +20.2 widening to +32.5).
+**Within a single run, the same caution applies to adjacent epochs -- and the series to read convergence off is the training loss, not the val AUC** (2026-11-01, cost: one wrong reading reported to the owner and withdrawn two hours later). Val wp-AUC swung +-5 pp between neighbouring epochs on the Li2Former DROW leg: 29.2 -> 28.9 -> **24.1** -> 29.7%, where epoch 8's dip sits between two 29s and epochs 4-5 produced an identical two-point dip that was wrongly reported as a ceiling. **Two points cannot establish a plateau on a noisy metric.** The training loss can, because it is monotone and nearly noiseless -- its per-epoch change on the same run went -0.0072 (epoch 2) -> -0.0012 -> -0.0008 -> -0.0006 -> **-0.0002** (epoch 9), which says "optimisation has stopped" without any smoothing or judgement. So: **call a plateau from the loss curve, or from four AUC points, or from the `.best.pth` write times** (the cheap check that was available and skipped), never from two. The same series separates the two failure modes: a *converged* loss with both AUC series flat and a steady gap is a bad optimum, while the data-scarcity overfit this repo has seen is a *still-falling* train loss with train AUC climbing away from val (`spacetime_cnn` on FROG, 83.8% / 63.6%, gap +20.2 widening to +32.5).
 
 
 ## FROG `official`'s validation split does not track its test split — do not read a val difference as a test result
@@ -363,14 +363,14 @@ Val also sits about 3 points *below* test for identical weights (73.88% against 
 
 Two consequences. **Screen and rank on test AP of the val-selected checkpoint, never on val AP itself** — and say which checkpoint a number came from. **Never select on test**, which is why the mis-selection above is recorded rather than corrected: 77.32% stays the reported dropout figure even though 78.16% was available at another epoch.
 
-The cause is most likely the split itself: `official`'s val is the populated-only frames of three recordings, sampled 2,000 frames at a time, while its test is one recording scored on every annotated frame. `balanced`'s val is 121,329 frames including 19.8% empty and is the obvious candidate for a better selector — but only for a model trained on `balanced`, since `balanced`'s val contains 11-36, which is half of `official`'s **train** (`memory/dataset-properties.md`, `TODO.md` A50).
+The cause is most likely the split itself: `official`'s val is the populated-only frames of three recordings, sampled 2,000 frames at a time, while its test is one recording scored on every annotated frame. `balanced`'s val is 121,329 frames including 19.8% empty and is the obvious candidate for a better selector — but only for a model trained on `balanced`, since `balanced`'s val contains 11-36, which is half of `official`'s **train** (`memory/dataset-properties.md`).
 
 ## `--eval-stride` changes which frames were measured, not just how many
 
 FROG's every-frame-annotated-at-40Hz protocol means adjacent frames are highly correlated near-duplicates, so a `--eval-stride 40` number is usually close to the `stride=1` number on FROG specifically — but it is still a different sample, and DROW's already-sparse ~5%-of-scans annotation means this correlation argument does not carry over there.
 Never compare a strided FROG number against an unstrided DROW number and call the gap architectural.
 
-**And a stride does not only move the absolute number -- it can get the size of a *difference* wrong by more than an order of magnitude, which is usually the thing being measured** (2026-11-03, item 64). A 41-frame DROW slice (`--eval-stride 60`) put the whole decode-and-score path at **+1.7 pp**; the full 2,428-frame split put it at **+0.1 pp** -- a factor of 17 in the one quantity the item existed to measure, in the direction that flattered it. The slice gave no hint of this, because its *absolute* cells looked entirely reasonable: 44.2% against the split's 48.1%, a plausible few points low. The arithmetic is the reason to expect it: a difference between two strided numbers carries roughly the noise of each, so a slice small enough to leave a point of noise on one cell cannot resolve a tenth of a point between two cells at all. **So treat a strided run as a smoke test of the plumbing -- every cell reachable, no cell raising -- and never as a preview of the comparison, however sane its absolute values look.** A strided delta that is going to be quoted needs its own error bar, which at this scale would swallow it.
+**And a stride does not only move the absolute number -- it can get the size of a *difference* wrong by more than an order of magnitude, which is usually the thing being measured** (2026-11-03). A 41-frame DROW slice (`--eval-stride 60`) put the whole decode-and-score path at **+1.7 pp**; the full 2,428-frame split put it at **+0.1 pp** -- a factor of 17 in the one quantity the item existed to measure, in the direction that flattered it. The slice gave no hint of this, because its *absolute* cells looked entirely reasonable: 44.2% against the split's 48.1%, a plausible few points low. The arithmetic is the reason to expect it: a difference between two strided numbers carries roughly the noise of each, so a slice small enough to leave a point of noise on one cell cannot resolve a tenth of a point between two cells at all. **So treat a strided run as a smoke test of the plumbing -- every cell reachable, no cell raising -- and never as a preview of the comparison, however sane its absolute values look.** A strided delta that is going to be quoted needs its own error bar, which at this scale would swallow it.
 
 ## `--eval-batch-size` used to change the answer, and the habit it leaves behind
 
@@ -378,7 +378,7 @@ Until 2026-09-10 the full-scan models folded the minibatch into the **beam** axi
 Evaluation batches are consecutive frames in time, so a larger batch leaked more temporal context and scored higher — measured on the real val split at `dtime`=10, beam-level person AUC ran **0.9644 (batch 1), 0.9696 (4), 0.9765 (16), 0.9810 (64)**.
 `evaluate.py` defaults to 16, `train.py` used 4, the robot runs `forward_one()` at batch 1: the deployed model was the 0.9644 one and every published figure was inflated relative to it.
 
-Fixed (`TODO.md` A18), and a regression test now asserts a frame's output is identical alone or inside a batch of 16.
+Fixed, and a regression test now asserts a frame's output is identical alone or inside a batch of 16.
 The habit worth keeping: **when a metric moves with a knob that should not affect the model, that is a bug in the harness, not a property of the model.**
 Batch size, evaluation `dtime`, split membership and checkpoint selection are all knobs of exactly that kind.
 

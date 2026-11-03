@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Is there anything only the object memory can do, and where does the shrinking-gain trend have to stop? (`TODO.md` §A item 23.)
+"""Is there anything only the object memory can do, and where does the shrinking-gain trend have to stop?
 
 The memory's advantage over its own candidates falls as stage 2 improves -- **+5.68 pp** of AP on candidates scoring 77.66%,
 **+3.68** on 82.2%, **+2.76** when stage 2 also carries temporal convolutions. A reader who sees that will extrapolate it to
@@ -7,12 +7,12 @@ zero, and the paper has to say where the extrapolation stops being true rather t
 
 It stops at whatever a single-frame detector cannot do however good it gets. **A person whose returns are blocked is not in the
 scan at all**, so no static detector finds them; a *visible* person our stage 2 misses is a person a better stage 2 would find.
-A61's occlusion strata measure precisely that split, so the memory's recall gain decomposes into
+The occlusion strata measure precisely that split, so the memory's recall gain decomposes into
 
     substitutable   the gain on people who are visible or partly visible -- what a stronger static detector could also take
     irreplaceable   the gain on people who are mostly occluded -- bounded above by that stratum's share of the population
 
-This reads A61's three reports and the nine stage-3 runs; it measures nothing itself and needs no GPU.
+This reads the baselines' three reports and the nine stage-3 runs; it measures nothing itself and needs no GPU.
 
 Usage (from utils/)
 -----
@@ -29,8 +29,8 @@ _HERE = Path(__file__).parent
 CHECKPOINTS = _HERE.parent / "checkpoints_three_horizon"
 ARM = "E13:a60_e13_static_s{seed}"
 SEEDS = (0, 1, 2)
-IRREPLACEABLE = ("occluded",)       # A61's stratum for a person whose own returns are blocked in that frame
-RUNS = (("B0, the no-temporal backbone A51 used", "a51_b0_short_s{seed}"),
+IRREPLACEABLE = ("occluded",)       # the stratum for a person whose own returns are blocked in that frame
+RUNS = (("B0, the no-temporal backbone", "a51_b0_short_s{seed}"),
         ("the adopted recipe", "a60_e13_static_s{seed}"),
         ("the adopted recipe plus stage 2's coarse convolution", "a60_e13_default_s{seed}"))
 
@@ -91,7 +91,7 @@ def gain_trend() -> List[Dict[str, float]]:
 
 
 def pooled_strata() -> Dict[str, Dict[str, float]]:
-    """A61's occlusion strata, pooled over its three seeds: people, the candidates' recall, and the memory's."""
+    """The occlusion strata, pooled over three seeds: people, the candidates' recall, and the memory's."""
     pooled: Dict[str, Dict[str, float]] = {}
     for seed in SEEDS:
         report = json.loads((CHECKPOINTS / "a61" / f"s{seed}" / "report.json").read_text())

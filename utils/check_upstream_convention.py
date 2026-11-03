@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 64: the frame-convention check on **real recorded DROW frames**, which rule 4 demands.
+"""The frame-convention check on **real recorded DROW frames**, which rule 4 demands.
 
 `tests/test_upstream_scoring.py` pins that their offset step and ours are the same formula and that their
 Cartesian frame is ours rotated 90 degrees. Those are unit tests on synthetic scans, and this repository has

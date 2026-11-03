@@ -51,6 +51,16 @@ Both are in [`commands.md`](commands.md), along with the linter for each languag
 
 After every change, scan imports, function parameters and comments for staleness, and grep for symbols you deleted.
 
+**DO prove a repository-wide rewrite on one file before letting it touch the rest.**
+A regex pass over every tracked file is one command and can be wrong in a way no review of the regex catches.
+Two "tidy-ups" inside one such pass on 2026-11-03 each mangled the repository: collapsing runs of two or more
+spaces destroyed the indentation of 152 Python files, and deleting empty parentheses turned every `forward()`
+into `forward` -- in live code, not only in comments. Both were caught by reading `git diff --shortstat` and
+noticing that ~2,600 lines had changed where ~300 were expected; both were undone with `git checkout` because
+nothing was committed. So: **run it on one file, read that diff in full, and only then widen the glob**, and
+check the line count against what the change should plausibly touch before trusting it. A pass that cannot
+explain its own diff size is a pass that did something else as well.
+
 ---
 
 ## Documentation
@@ -113,7 +123,7 @@ A synthetic unit test passing has already been mistaken for "the logic is correc
 A size picked to keep the suite fast can sit on the safe side of a cap, and then the cap is the one thing the suite cannot
 falsify. Every case in `tests/test_li2former_port.py` ran 16 beams; Li2Former's `NUM_CTS` caps the beams at 90 by sizing
 its position encoding, whose `forward` slices rather than raises — so 24 green tests, a `ruff` pass and a clean import all
-held while the real 450-beam DROW scan crashed on the first batch, three launches in a row (2026-11-01, item 31).
+held while the real 450-beam DROW scan crashed on the first batch, three launches in a row (2026-11-01).
 **Ask of every dimension a test fixes: is the real value larger, and is there a configured maximum between them?**
 A cheap standing answer is one case at the real size — the new class runs a whole scan at 450, 541 and 720 beams, the three
 sensors in this repository, and costs about five seconds.
@@ -121,25 +131,25 @@ sensors in this repository, and costs about five seconds.
 **DO smoke-run a long job at `--subsample` before committing hours to it.**
 One epoch on a percent of the data exercises the real loader, the real criterion and a real backward pass, and it reaches
 the first batch in about a minute — against 13 minutes per failed attempt for the full launch, three of which were spent
-discovering a crash that a smoke run would have shown before the watchdog's first check (2026-11-01, item 31).
+discovering a crash that a smoke run would have shown before the watchdog's first check (2026-11-01).
 
 **DO mutation-test a guard whose red phase you never watched.**
 A test that has only ever been seen to pass is a claim, not a check.
 Three behavioural guards in `tests/test_upstream_scoring.py` were written before the implementation but first
 *run* after it existed, so each was verified by breaking the implementation on purpose and re-running: two failed as they
 should, and **one passed with the guard it exists to protect deleted** -- numpy raised `ValueError` from a reshape inside
-the upstream file by itself, so the test had been pinning numpy's accident rather than our behaviour (2026-11-02, item 64).
+the upstream file by itself, so the test had been pinning numpy's accident rather than our behaviour (2026-11-02).
 It asserts the message now.
 Deleting the line under test takes a minute, restoring it takes a `diff -q` against a copy, and it is the only way this
 class of test is ever found.
 
 **DON'T write a test that asserts a property of an untrained network's random draw.**
 It measures the draw, not the behaviour, and the seed decides whether it passes.
-This has happened three times here and cost a test each time: item 40's aggregator test asserted that concatenating a
+This has happened three times here and cost a test each time: the aggregator test asserted that concatenating a
 whole-scan max would change a specific output, which an untrained draw does not guarantee (two versions were written and
-both were wrong, so the test was deleted rather than tuned); item 42's first version asserted that two co-located slots
+both were wrong, so the test was deleted rather than tuned); the Slot-Attention test's first version asserted that two co-located slots
 would *split* a candidate's attention, true only of the particular initialisation.
-**Assert the guarantee instead.** For item 42 that is "waking a second slot takes weight away from the first", which
+**Assert the guarantee instead.** For that one it is "waking a second slot takes weight away from the first", which
 holds for any weights because a softmax's denominator grows — and which is also the property that *discriminates* the
 mechanism, since a candidate-axis softmax would leave the first slot's weight untouched.
 
@@ -147,9 +157,9 @@ mechanism, since a candidate-axis softmax would leave the first slot's weight un
 `manage_slots` writes `-1` for "this slot got no candidate", and `.clamp(min=0)` turns that into a read of **element
 0** -- which `decode_candidates` makes the frame's *strongest* candidate, because it sorts by descending score. So the
 failure mode is not a crash or an obvious garbage value: it is the most plausible-looking wrong answer in the batch,
-which is why item 54 survived from E7 until someone read the code against a diagram.
+which is why the spawn defect survived from E7 until someone read the code against a diagram.
 **The question to ask at every such site is "what discards this?"** -- a `where(mask, …)` around the result, a
-multiplication by the mask, or a filter on `matched` before indexing. Item 54's two sibling lines had one and it did
+multiplication by the mask, or a filter on `matched` before indexing. The spawn defect's two sibling lines had one and it did
 not. A 2026-10-28 audit of all ten sites in the detector found exactly one unguarded, and the list is in
 `CHANGELOG.md` so it does not have to be rebuilt.
 **In NumPy this class is worse than in torch**: `-1` is a legal index that silently wraps to the *last* element, with
@@ -157,7 +167,7 @@ no clamp needed and no error.
 
 **DON'T read "the forward is finite" as evidence that the backward is.**
 They are different properties, and for masked attention the backward is the fragile one.
-Item 42 shipped four degenerate-frame tests -- no live slot, no valid candidate, an empty memory, a twelve-frame run --
+The Slot-Attention arm shipped four degenerate-frame tests -- no live slot, no valid candidate, an empty memory, a twelve-frame run --
 and **all four asserted `isfinite` on the forward only**.
 The arm then died at epoch 20 with finite outputs, finite parameters and NaN gradients in every parameter, which is a
 failure mode none of those four tests could have seen.
@@ -165,12 +175,12 @@ Where a `softmax` over a masked axis, a `clamp`ed denominator or an `amax` can b
 `backward()`, not just on the output.
 
 **DON'T measure a gradient through a head that starts silent.**
-Two of this project's heads are deliberately inert at initialisation — the rescoring gate starts at zero, and item 46's
+Two of this project's heads are deliberately inert at initialisation — the rescoring gate starts at zero, and the refinement head's
 refinement head has a zero-initialised last layer — so `0 * correction` gives every parameter behind them a gradient of
 **exactly zero** and `abs()` has no subgradient at a zero residual.
 A connectivity test written against that passes on a disconnected graph.
 Wake the head first (`rescore_gate.fill_(1.0)`, or a target offset from the prediction), and say in the test why.
-Both mistakes were made and caught here, in items 46 and 42.
+Both mistakes were made and caught here.
 
 **DON'T change a calibrated constant without re-running every table downstream of it.**
 Nothing in this repo notices, and the tables do not say which constant they were measured under.
@@ -188,16 +198,16 @@ This project has produced at least three findings that looked strong or plausibl
 
 **DO replicate on an independent slice** before acting on any per-segment result — and **DO verify the slice is actually independent** before reading anything into the agreement.
 The dtime sweep was trusted for weeks because "train ≈ test ruled out overfitting".
-It did not: `split="test"` was loading the training file, so the two columns were two samples of one dataset, and even the val split was FROG's own per-frame holdout sitting 38 ms from its training neighbours (`data-model.md`, `TODO.md` A11-A12).
+It did not: `split="test"` was loading the training file, so the two columns were two samples of one dataset, and even the val split was FROG's own per-frame holdout sitting 38 ms from its training neighbours (`data-model.md`).
 **Agreement between two slices is evidence of independence failing at least as often as it is evidence of generalization.** Measure the distance between them before quoting the agreement.
 
 **DON'T trust a metric that moves when you change something that cannot affect the model.**
 Batch size, evaluation `dtime`, checkpoint selection and split membership are harness knobs; if the number tracks one of them, the harness is what you are measuring.
-Measured here: wp-AUC rose monotonically with evaluation batch size (beam-AUC 0.9644 at batch 1 to 0.9810 at batch 64) because the minibatch was folded into the beam axis, and fell 2.5pp when the evaluator silently used a different `dtime` than training did (`interpreting-evaluation.md`, `TODO.md` A15/A18).
+Measured here: wp-AUC rose monotonically with evaluation batch size (beam-AUC 0.9644 at batch 1 to 0.9810 at batch 64) because the minibatch was folded into the beam axis, and fell 2.5pp when the evaluator silently used a different `dtime` than training did (`interpreting-evaluation.md`).
 Both looked like properties of the model for months.
 
 **DO check that the reported number and the saved artefact are the same object.**
-`train.py` computed its final AUC *before* reloading the best checkpoint, so for its whole history the printed number described a network that was then discarded — and the file it wrote was stamped with the stopping epoch rather than the epoch whose weights it held (`TODO.md` A16).
+`train.py` computed its final AUC *before* reloading the best checkpoint, so for its whole history the printed number described a network that was then discarded — and the file it wrote was stamped with the stopping epoch rather than the epoch whose weights it held.
 
 **No minimum-sample threshold is set for this project.**
 Treat any DROW-native result as lower-confidence by construction: DROW's train split has ~17.8x fewer total person-annotation instances than FROG's (`interpreting-evaluation.md`), not because of an agreed cutoff below which a result doesn't count.

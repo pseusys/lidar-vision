@@ -271,7 +271,7 @@ class DrSpaamDetector(nn.Module):
 
         `forward` above re-encodes a whole `T`-scan window and initialises the template from its oldest scan, so it answers
         "what would the detector say having seen exactly these `T` scans?" -- which is not what a deployed DR-SPAAM says
-        (`TODO.md` A47). Both evaluate the same recursion, so streaming frames 0..T-1 reproduces `forward` on that window
+. Both evaluate the same recursion, so streaming frames 0..T-1 reproduces `forward` on that window
         exactly; `tests/test_drspaam_streaming.py` pins it per prefix.
         """
         self.eval()

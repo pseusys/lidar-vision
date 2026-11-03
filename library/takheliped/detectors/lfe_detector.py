@@ -152,8 +152,7 @@ def _merge_nearby(
     the default, because every published number in this repository was measured
     under it.
 
-    **Why it exists, and why it is not the default** (`memory/rejected-ideas.md`,
-    TODO.md A38/A40). The hypothesis was that one scalar fails in both
+    **Why it exists, and why it is not the default** (`memory/rejected-ideas.md`). The hypothesis was that one scalar fails in both
     directions at once: too large for adjacent people, too small for duplicates,
     because a detector's localisation error grows with range while the
     separation between two people does not. Swept on both detectors and at both
@@ -227,7 +226,7 @@ class LFEPeaksDetector:
 
                         The old 0.40 (`_PERSON_RADIUS`) was the whole of the
                         "our LFE-Peaks overshoots its paper" discrepancy
-                        (TODO.md A32d).
+.
     """
 
     DEFAULT_WEIGHTS = _LFE_PEAKS_PATH
@@ -422,13 +421,13 @@ class LFEPPNDetector:
         #    the ~61 that genuinely score above 0.3, leaving 182 "detections"
         #    per frame on scenes holding ~3 people;
         #  * inference cost 224 ms/frame, ~200x LFE-Peaks, which is what made
-        #    LFE-PPN look unusable for repeated evaluation (TODO.md A5).
+        #    LFE-PPN look unusable for repeated evaluation.
         #
         # AUC survived it better than the rest, since a sigmoid is monotonic and
         # preserves detection ordering -- which is exactly why the bug hid: an
         # earlier measured 67.7% sat plausibly close to the published 66.5%.
         # Any *threshold* read off that run means nothing, and so does any
-        # false-positive rate at one (TODO.md A31).
+        # false-positive rate at one.
         objectness = out[:, :, 0]                  # (N_sectors, M), already in [0, 1]
         d_offset   = out[:, :, 1]                  # distance offset
         l_offset   = out[:, :, 2]                  # arc offset (normalised)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 31, leg 1 continued: the DROW run the owner paused on 2026-11-01, resumed from its epoch 1.
+"""Leg 1 continued: the DROW run the owner paused on 2026-11-01, resumed from its epoch 1.
 
 Attempt 3 launched 13:18:02 and was stopped at the owner's request at 15:58, 87% through epoch 2's train pass.
 Epoch 1 is on disk and is a **full** resume point, measured rather than assumed
@@ -67,7 +67,7 @@ EPOCHS = "11"
 GATE = Job(name="gate", cli=("-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"), cwd=REPO)
 
 # `--out` is written once, at the end of train_model; `.best.pth` is written whenever val improves, so declaring
-# that one would arm the runner's kill timer mid-run (item 56's defect).
+# that one would arm the runner's kill timer mid-run (its own defect).
 TRAIN = Job(
     name="drow_train_resume", outputs=(CKPT,),
     cli=("train.py", "--detector", "li2former_official", "--dataset", "drow",

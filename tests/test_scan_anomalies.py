@@ -1,4 +1,4 @@
-"""The dataset anomaly checker (`TODO.md` A49, spec approved 2026-09-17).
+"""The dataset anomaly checker (spec approved 2026-09-17).
 
 Its numbers decide which denoising mechanism, if any, a dataset gets (`memory/noise-structure.md`), so every category it counts
 is pinned on a scan built to contain exactly one known anomaly. Pinned in particular:

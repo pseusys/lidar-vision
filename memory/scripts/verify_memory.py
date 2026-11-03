@@ -70,7 +70,7 @@ TABLE_ROW = re_compile(r"^\s*\|")
 SETEXT = re_compile(r"^\s*(=+|-{2,})\s*$")
 INLINE_CODE = re_compile(r"`[^`]*`")
 LEADING_EMPHASIS = re_compile(r"^\s*[*_]{1,2}")
-# A bullet, or an ordinal such as "3.", "2b.", "I1.", "A4." opening a line.
+# A bullet, or an ordinal such as "3.", "2b." or "I1." opening a line.
 ORDINAL = re_compile(r"^\s*(?:[-*+]|[A-Za-z]{0,2}\d+[a-z]?\.|\d+\.)\s+")
 ABBREV = re_compile(r"(?:e\.g|i\.e|etc|vs|cf|approx|al|resp|Dr|Mr|Mrs|Ms|No|Fig|Sec|Ch|St|Inc|Ltd|Jr|Sr|a\.m|p\.m)\.$", IGNORECASE)
 SENTENCE_BREAK = re_compile(r"""[.!?]["')\]]?\s+(?=["'(\[]?[A-Z])""")

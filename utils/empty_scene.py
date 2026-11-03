@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What TAKHeLiPeD does where nobody is: FROG `transferred`'s 72,533 person-free frames (`TODO.md` A50 phase 1 item 7).
+"""What TAKHeLiPeD does where nobody is: FROG `transferred`'s 72,533 person-free frames.
 
 The FROG benchmark holds no person-free frame at all -- every annotated frame has 3-4 people -- so a per-frame false-positive
 count there hides behind a ratio: 1.43 phantoms still reads as 63% precision beside 3.06 real people. `transferred`'s test split
@@ -8,7 +8,7 @@ construction**. wp-AUC is undefined there (no true positives, so no recall denom
 
 The published static detectors emit **1.39** (LFE-Peaks) and **1.94** (LFE-PPN) per frame there, and 88.3% / 77.6% of those
 recur within 0.3 m in the next frame against 99.8% for real people -- they are furniture, and no short-window tracker removes
-them (`memory/performance-log.md`, A41/A44). This is the same measurement for a detector that carries 10 s of memory, where it
+them (`memory/performance-log.md`). This is the same measurement for a detector that carries 10 s of memory, where it
 could go either way: the slots see the same chair for a thousand frames, so they either learn it is furniture or remember it.
 
 **The three recordings interleave populated and person-free frames**, and the memory replays them whole, as a robot would. So a
@@ -77,10 +77,10 @@ def phantom_counts(frames: Frames, index: np.ndarray, threshold: float, radius: 
 
 
 def coasting_share(frames: Frames, candidates_per_frame: np.ndarray, threshold: float) -> Dict[str, float]:
-    """Which of a person-free split's phantoms the memory *rescored* and which it *coasted* (`TODO.md` §A item 27).
+    """Which of a person-free split's phantoms the memory *rescored* and which it *coasted*.
 
     `evaluate` builds each memory frame as the rescored candidates followed by the coasting reports, so the count of the
-    first group is the boundary between them. The distinction decides what items 14, 24, 25 and 26 are about: a rescored
+    first group is the boundary between them. The distinction decides what the person-free work is about: a rescored
     candidate is a scoring question, while a coasting report is the memory reporting a person with nothing under them.
     """
     kept = [(score >= threshold, int(n)) for (score, _), n in zip(frames, candidates_per_frame, strict=True)]
@@ -171,7 +171,7 @@ def main() -> None:
             counts = np.asarray(frames["rescored"])
             result["split"] = [coasting_share(rows, counts, t) for t in THRESHOLDS]
             result["split_beyond_fade"] = [coasting_share(beyond, counts[~stale], t) for t in THRESHOLDS]
-            print("\n  where the memory's phantoms come from (item 27)")
+            print("\n  where the memory's phantoms come from")
             print(f"  {'threshold':>9}  {'rescored':>9}  {'coasted':>9}  {'coasted share':>14}  {'coasted/frame':>14}")
             for row, far in zip(result["split"], result["split_beyond_fade"], strict=True):
                 print(f"  {row['threshold']:>9.2f}  {row['from_candidates']:>9d}  {row['from_coasting']:>9d}  "

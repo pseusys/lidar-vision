@@ -1,6 +1,6 @@
 """
 A frame's prediction must not depend on which other frames share its minibatch
--- TODO.md A18.
+-- one scan, one prediction.
 
 The bug these lock down: `SpaceTimeCNNDetector.forward()` reshaped a
 `(B*N_beams, T, 1)` minibatch into a single `(1, 1, B*N_beams, T)` image, so a

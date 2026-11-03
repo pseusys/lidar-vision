@@ -1,4 +1,4 @@
-"""What the detector does where nobody is: the counting behind `utils/empty_scene.py` (`TODO.md` A50 phase 1 item 7).
+"""What the detector does where nobody is: the counting behind `utils/empty_scene.py`.
 
 On FROG `transferred`'s person-free frames every detection is a false positive by construction, so wp-AUC is undefined and the
 measurement is a count (`memory/interpreting-evaluation.md`). The published static detectors emit 1.39 (LFE-Peaks) and 1.94
@@ -194,12 +194,12 @@ class TestFramePeriod:
 
 
 class TestWhereThePhantomsComeFrom:
-    """Item 27: a memory frame's detections are rescored candidates first, then coasting reports, and the two mean
+    """a memory frame's detections are rescored candidates first, then coasting reports, and the two mean
     different things.
 
-    The memory cuts person-free false positives 72%, and items 24, 25 and 26 all read the survivors as **rescored
+    The memory cuts person-free false positives 72%, and the person-free work all reads the survivors as **rescored
     candidates** -- a scoring question. If they are instead **coasting reports**, the memory is inventing detections with
-    no candidate under them, and the creation-rule work in item 14 is aimed at a population that is not there. Coasting
+    no candidate under them, and the creation-rule work is aimed at a population that is not there. Coasting
     fires ~0.001 times per scored frame on the populated split, which is why that reading is plausible, but it has never
     been measured where nobody is.
     """

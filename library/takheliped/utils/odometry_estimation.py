@@ -6,7 +6,7 @@ per-recording odometry (``frog_<HH-MM>_odom.npz``), all six sessions of it are
 downloaded by ``FROG_Dataset.download()``, and ``_load_odom()`` now *raises*
 rather than falling back if any of it is missing -- a silent zero-odometry
 fallback is indistinguishable from a stationary robot and made every
-ego-motion conclusion unfalsifiable (see frog_dataset.py, TODO.md A14).
+ego-motion conclusion unfalsifiable (see frog_dataset.py).
 This module remains for a dataset that genuinely ships none, and as the
 source of the ``<stem>_odom.npz`` sidecar ``_load_odom()`` reads when no
 per-recording file exists.
@@ -21,7 +21,7 @@ recovered per-frame deltas into a running (x, y, theta) trajectory.
 Only short-horizon relative motion (frame-to-frame, ~25ms at FROG's 40Hz) is
 needed here, not a globally-consistent trajectory -- there's no loop closure
 or drift correction, matching the "short horizon, not SLAM-grade" tractability
-argument in docs/IDEAS_BACKLOG.md item 4. Convention: local Cartesian points
+argument for it. Convention: local Cartesian points
 use FROG's own (forward, left) axes (frog_laser_angles(): angle 0 = forward,
 positive = counterclockwise/left) -- the same axis labels the world-frame
 (x, y, theta) trajectory uses, so a scan's own local frame and the world frame

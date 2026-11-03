@@ -1,6 +1,6 @@
-"""Item 48: a post-hoc temperature and bias on the memory's output logit, so a fixed threshold means something.
+"""a post-hoc temperature and bias on the memory's output logit, so a fixed threshold means something.
 
-**Why calibration and not retraining.** A51 phase 1b measured the rescore head shifting the *whole* score distribution
+**Why calibration and not retraining.** The diagnosis measured the rescore head shifting the *whole* score distribution
 down -- a median -3.292 logits on people it keeps against -1.497 on people it loses -- which leaves rank-based AP
 better while silently decalibrating any fixed threshold. At 0.22 the memory strictly dominates stage 2 (135,520 people
 against 134,196, at 1.767 false positives per frame against 1.910), so the capability is already trained in and only
@@ -8,7 +8,7 @@ the operating point hides it. The repo's own conclusion was "the fix is calibrat
 ever built.
 
 Done post-hoc the transform is **monotone**, and that is the whole safety argument: AP, recall at matched false
-positives and every other rank-based number cannot move, so this cannot disturb the frozen headline (86.29%, item 47).
+positives and every other rank-based number cannot move, so this cannot disturb the frozen headline (86.29%).
 Implemented as a training loss it would change the weights and would have had to precede the freeze.
 
 Three invariants carry the design, and each has a test here that would fail without it:
@@ -20,7 +20,7 @@ Three invariants carry the design, and each has a test here that would fail with
                                     refuse its own weights.
     only the candidate logit        a silent coasting head is pinned at `SILENT_COAST_LOGIT`, not learned. Calibrating
                                     that too would let a bias term **un-silence a head the architecture removed**
-                                    (item 24), inventing reports from slots. So the transform lives in `_rescored`.
+, inventing reports from slots. So the transform lives in `_rescored`.
     ranking is preserved exactly    asserted numerically through `score_detections`, not argued from monotonicity.
 """
 import json
@@ -125,14 +125,14 @@ class TestTheTransform:
 
 class TestOnlyTheCandidateLogit:
     def test_a_silent_coasting_head_stays_exactly_silent(self):
-        """Without this the bias would un-silence a head item 24 removed, inventing slot reports from nothing."""
+        """Without this the bias would un-silence the coasting head that was removed, inventing slot reports from nothing."""
         out = _play(_memory(calibration=(0.25, 6.0)))
         assert torch.equal(out.slot_logit, torch.full_like(out.slot_logit, SILENT_COAST_LOGIT))
         assert not out.coasting.any()
 
 
 class TestRankingSurvivesTheMetric:
-    """The monotonicity argument is what makes item 48 post-hoc-safe, so it is asserted through the metric itself."""
+    """The monotonicity argument is what makes the fit post-hoc-safe, so it is asserted through the metric itself."""
 
     @staticmethod
     def _frames(seed: int = 3, frames: int = 40):
@@ -322,7 +322,7 @@ class TestTheFloat32RoundTripNeverInverts:
 
 class TestApplyingAFittedPair:
     """`--apply` exists because re-running the fit to store two floats costs ~55 min of scoring per seed. It is the
-    irreversible half of item 48, so it re-checks the report's own gates rather than trusting that they were read."""
+    irreversible half of the calibration, so it re-checks the report's own gates rather than trusting that they were read."""
 
     @staticmethod
     def _checkpoint(tmp_path: Path) -> Path:

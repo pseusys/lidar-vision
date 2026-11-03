@@ -1,6 +1,6 @@
-"""`TODO.md` item 31: the Li2Former row is filled by the authors' own network, or not at all.
+"""The Li2Former row is filled by the authors' own network, or not at all.
 
-Item 31 was written believing `Li2FormerDetector` was Li2Former and only its training had failed. It was not. The paper
+The Li2Former port was written believing `Li2FormerDetector` was Li2Former and only its training had failed. It was not. The paper
 builds a cascade of omni-dimension aggregation blocks with a batch-attending auxiliary stream and an adaptive focus
 mechanism in its regression loss; our class had a conv backbone, one temporal encoder layer and no cross-beam path at
 all. Training it would have put a number in the Li2Former row that Li2Former did not produce -- the mislabelling

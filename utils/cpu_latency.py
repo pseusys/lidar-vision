@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Every detector's CPU latency, on one host under one protocol (`TODO.md` §A item 29).
+"""Every detector's CPU latency, on one host under one protocol.
 
 `AGENTS.md` rule 2b makes speed half of every accuracy answer, and `memory/performance-log.md`'s speed table could not honour
 it: its CPU rows were taken around 2026-09-10 by a different script than the one that timed TAKHeLiPeD, at an unstated thread
@@ -15,7 +15,7 @@ is timed is **scan in, detections out**, split into the three phases a deploymen
 
 A detector whose released form does all three inside one call -- the two LFE ONNX graphs, and the C++ `AlgorithmicDetector` --
 is timed as one phase and its row says so. Each row carries the median, the 99th percentile and the share of FROG's **25 ms**
-frame period, which is the real one (item 1; the stamped median said 26.2 Hz and made every budget 1.53x too generous).
+frame period, which is the real one (the stamped median said 26.2 Hz and made every budget 1.53x too generous).
 
 **The total is a per-frame sum, percentiled afterwards**, not the phases' percentiles added: the frame that is slow to
 preprocess is rarely the frame that is slow to decode, so adding each phase's own tail describes a frame that never happened.
@@ -47,7 +47,7 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
-FROG_PERIOD_MS = 25.0           # FROG's real frame period: one scan every 25 ms (item 1, A49)
+FROG_PERIOD_MS = 25.0           # FROG's real frame period: one scan every 25 ms
 WARMUP = 5
 HEATMAP_HEIGHT, HEATMAP_DISTANCE = 0.3, 5      # `evaluate_auc`'s own peak rule for a heatmap head
 V2D = dict(blur_sigma=2.0, blur_win=11, bin_size=0.1, vote_collect_radius=0.5, min_thresh=1e-3)   # its vote-grid settings

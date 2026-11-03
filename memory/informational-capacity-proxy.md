@@ -6,7 +6,7 @@ A no-training method for asking whether a `(time_frame, dtime)` configuration ca
 
 ## Why this exists
 
-A cheap `SpaceTimeCNN` screening run (`--subsample 0.2 --epochs 8`) ranked `dtime=15` below `dtime=1` — but the per-epoch curves showed `dtime=15` still improving faster early on before overfitting the small screening subsample within budget, while `dtime=1` never converged in the same budget at all (`CHANGELOG.md`, `TODO.md` A1).
+A cheap `SpaceTimeCNN` screening run (`--subsample 0.2 --epochs 8`) ranked `dtime=15` below `dtime=1` — but the per-epoch curves showed `dtime=15` still improving faster early on before overfitting the small screening subsample within budget, while `dtime=1` never converged in the same budget at all (`CHANGELOG.md`).
 Training-based screening confounds "this configuration carries less information" with "this run hadn't converged yet," and widening a sweep by adding more `(T, dtime)` points multiplies that confound by however many points are added.
 This method sidesteps training entirely: it asks the input-side question directly, using the exact same `aligned_raw_scan()` window a real detector would train on.
 
@@ -43,7 +43,7 @@ Treat the *direction and shape* of the trend across the `(T, dtime)` grid as the
 
 **It must use FROG's own beam spacing.**
 `aligned_raw_scan()` defaults `beam_spacing` to `laser_increment = radians(0.5)` — DROW's resolution.
-Calling it without the argument on FROG's 0.25 deg/beam data applied **half** the rotation correction training applies through `cfg.laser_inc`, a train/proxy inconsistency on the exact axis the proxy is used to choose (`TODO.md` A19, fixed 2026-09-10).
+Calling it without the argument on FROG's 0.25 deg/beam data applied **half** the rotation correction training applies through `cfg.laser_inc`, a train/proxy inconsistency on the exact axis the proxy is used to choose (fixed 2026-09-10).
 
 ## The grid
 
@@ -73,7 +73,7 @@ Stacking more than ~5 frames buys this proxy nothing once `dtime` hits the right
 Top five points overall: `(T=10, dtime=4)` 0.6816, `(T=5, dtime=9)` 0.6804, `(T=10, dtime=5)` 0.6804, `(T=5, dtime=7)` 0.6802, `(T=5, dtime=8)` 0.6801.
 Both findings and both winning configurations survived the re-run unchanged, which is itself mild evidence the proxy measures the input rather than the harness.
 
-**What it changes about the training sweep** (`TODO.md` A1): concentrate full runs on `T=5, dtime~=9-10`, with `T=10, dtime~=4-5` as the confirmation point.
+**What it changes about the training sweep**: concentrate full runs on `T=5, dtime~=9-10`, with `T=10, dtime~=4-5` as the confirmation point.
 `T=15/20/25` stay low priority — a real gain there would be an architecture-capacity finding, not an information-budget one.
 
 Model accuracy numbers, published and measured, are in [`performance-log.md`](performance-log.md); this doc owns the proxy and nothing else.

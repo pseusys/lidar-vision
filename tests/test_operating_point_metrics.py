@@ -1,6 +1,6 @@
-"""The merge radius scored on what Tier 0 measured, not on AP (TODO.md A40).
+"""The merge radius scored on what Tier 0 measured, not on AP.
 
-A38 swept the merge radius against AP and found AP wanting *more* merging, out
+An earlier sweep tuned the merge radius against AP and found AP wanting *more* merging, out
 to 0.45 m and past the value that reproduces the published number -- while Tier
 0 (`memory/static-detector-diagnosis.md`) measured over-merging costing ~5 pp of
 recall at a fixed operating point. Both are right about their own quantity: a
@@ -58,7 +58,7 @@ class TestTheFourCounts:
         assert _m([[9.0, 9.0]], [[2.0, 0.0]]) == (0, 0, 1, 0)
 
     def test_two_people_one_detection_between_them_is_a_close_pair(self):
-        """The over-merging case A40 exists to measure.
+        """The over-merging case these quantities exist to measure.
 
         One detection, two people 0.4 m apart, both within the 0.5 m gate. The
         assignment can only serve one; the other is missed *with a detection

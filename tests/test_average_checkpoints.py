@@ -1,5 +1,5 @@
 """Weight averaging of one stage-2 run's periodic checkpoints (`utils/average_checkpoints.py`), part of stage 2's recipe since the
-owner's call of 2026-10-06 (`TODO.md` A59): the average of the epochs in a window, the window chosen on val, saved as a checkpoint
+owner's call of 2026-10-06: the average of the epochs in a window, the window chosen on val, saved as a checkpoint
 that loads wherever `step2_calibration.best.pth` does."""
 import sys
 from pathlib import Path
@@ -33,7 +33,7 @@ class TestWindows:
         assert window_members([0.25, 0.5, 0.75, 1.0, 1.25, 2.0], (0.5, 1.0)) == [0.5, 0.75, 1.0]
 
     def test_the_windows_are_the_ones_the_recipe_was_measured_with(self):
-        # the six windows that chose 82.20% (TODO.md A59); changing them changes the recipe
+        # the six windows that chose 82.20%; changing them changes the recipe
         assert WINDOWS == ((0.5, 1.0), (0.75, 1.25), (0.5, 1.5), (1.0, 2.0), (0.5, 2.0), (0.25, 2.25))
 
 

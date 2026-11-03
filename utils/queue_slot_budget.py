@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 50: confirm 128 slots with a trained arm. The last unpriced number in the design.
+"""Confirm 128 slots with a trained arm. The last unpriced number in the design.
 
 **What the replay said** (2026-10-28, `results/item50_slots.json`, `a71_dim64_s0` played at other capacities with its
 weights untouched):
@@ -28,12 +28,12 @@ out of the CPU budget after `--dim 64`'s 28%, since both of stage 3's costly ter
 `manage_slots`' distance matrix -- are O(K). A loss keeps 256 and closes the question for good.
 
 **After this chain, both replays must be re-pointed at `a74_fixed256_s0`.** The capacity replay and the odometry
-replay were both run against `a71_dim64_s0`, which carries the item 54 spawn defect, so re-running either on that
+replay were both run against `a71_dim64_s0`, which carries the spawn defect, so re-running either on that
 checkpoint would re-measure a known-buggy model. The capacity replay also becomes a useful cross-check once
 `slots128` exists: a trained 128-slot arm and a replayed one should agree in direction, and a disagreement would say
 the replay understates capacity in the way its own docstring warns about.
 
-    python queue_item50.py --list
+    python queue_slot_budget.py --list
 """
 
 from run_queue import CHECKPOINTS, REPO, Job, main
@@ -41,7 +41,7 @@ from run_queue import CHECKPOINTS, REPO, Job, main
 AVERAGED = "step2_calibration.averaged.pth"
 #: `a71_dim64_s0`'s own stage 2 -- hard labels -- so capacity is the only thing that differs from the control.
 STAGE2 = CHECKPOINTS / "a69_no_aggregator_s0" / AVERAGED
-#: The adopted stage-3 recipe at the time the control was trained. `--dim 64` is now a CLI default (item 52) but is
+#: The adopted stage-3 recipe at the time the control was trained. `--dim 64` is now a CLI default but is
 #: passed explicitly here, because a queue module should say what it ran rather than depend on a default that moves.
 ADOPTED = ("--no-exchange", "--no-learned-match", "--no-coast", "--recurrence", "mingru", "--chunk-s", "10",
            "--dim", "64")
@@ -51,7 +51,7 @@ CONTROL = CHECKPOINTS / "a74_fixed256_s0"
 OUT = CHECKPOINTS / "a74_slots128_s0"
 
 JOBS = [
-    # **The control, and it has to be re-trained because of item 54.** `a71_dim64_s0` (86.12%) was the control until
+    # **The control, and it has to be re-trained because of the spawn defect.** `a71_dim64_s0` (86.12%) was the control until
     # 2026-10-28, when the spawn defect was fixed: a slot spawned in a frame took candidate 0's encoding -- the
     # frame's strongest -- into its first update instead of its own. Every stage-3 checkpoint on the adopted recipe
     # carries it, so comparing a fixed-code arm against `a71_dim64_s0` would be two variables.
@@ -63,7 +63,7 @@ JOBS = [
         cli=("train_takheliped.py", "step3a", "--stage2", str(STAGE2), *ADOPTED, "--slots", "256",
              "--seed", "0", "--out-dir", str(CONTROL), "--resume")),
 
-    # Item 50 proper: the same thing at 128 slots. One variable against the arm above.
+    # The slot-budget arm proper: the same thing at 128 slots. One variable against the arm above.
     Job(name="slots128", outputs=(OUT / "step3a_results.json",), needs=("fixed256",),
         cli=("train_takheliped.py", "step3a", "--stage2", str(STAGE2), *ADOPTED, "--slots", "128",
              "--seed", "0", "--out-dir", str(OUT), "--resume")),

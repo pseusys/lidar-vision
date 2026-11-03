@@ -1,4 +1,4 @@
-"""The FROG loader's missing-return clamp is opt-in (`TODO.md` A49, owner's call 2026-09-17).
+"""The FROG loader's missing-return clamp is opt-in (owner's call, 2026-09-17).
 
 The three-horizon detector reads raw scans and sanitises them itself (`three_horizon.sanitize_ranges`); the baselines keep the
 legacy clamp they were always run with. Pinned: the default still clamps, so no baseline number moves; `None` passes every

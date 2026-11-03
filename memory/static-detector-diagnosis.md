@@ -67,7 +67,7 @@ Two limits, both real:
 
 ### Cartesian input: can it replace DROW's preprocessing?
 
-Owner's proposal (A42), and the answer is a qualified yes. Instead of a 1D range
+Owner's proposal, and the answer is a qualified yes. Instead of a 1D range
 tunnel, express each window's beams as **metric offsets from the window's own
 centre point, rotated into that centre beam's frame** -- Cartesian coordinates
 from the start. Same beams, same 1-NN, 24 points x 2 channels = **48 dims**,
@@ -104,7 +104,7 @@ supply.
 
 **Verdict: take the coordinates, keep the range conditioning.** For an
 architecture of ours that means Cartesian input *plus* a range-conditioned
-receptive field (A39), not Cartesian instead of it.
+receptive field, not Cartesian instead of it.
 
 **Prediction and outcome, recorded** (`dos-and-donts.md`): predicted that
 `fixed/cartesian` would beat `fixed/centred` -- it does, 13.39% against 13.56%,
@@ -116,7 +116,7 @@ The first run of this comparison gave Cartesian **14.88%** and would have said
 "clearly worse". It was unfair: the `fixed` cutout row uses a **41-beam**
 half-width resampled to 48 points, while the Cartesian row was taking **+-12 raw
 neighbouring beams** -- a third of the context. Extent and dimensionality were
-the same knob. Separating them changed the verdict from "worse" to "ties". A38's
+the same knob. Separating them changed the verdict from "worse" to "ties". The range-aware radius's
 confound was an under-explored grid; this was an unmatched control. Both were
 caught by noticing an asymmetry rather than by any check that runs on its own.
 
@@ -129,7 +129,7 @@ polar while 3D LiDAR went to bird's-eye view with ~100k points per sweep.
 Coordinate conversion costs two multiplies per beam against a precomputed
 sin/cos table and has no such problem. The rasterised form is a separate
 question -- a substrate on which roles A, B and C could share one coordinate
-system -- and is deferred to `TODO.md` A43.
+system -- and is deferred to the three-memory design.
 
 ## Where the recall actually goes
 
@@ -192,7 +192,7 @@ Two distinct failures, and they do not live at the same range:
 - **Two thirds of misses are representation failures** — the map says ~0, the nearest detection is metres away, and the median case is a 10-beam return at 6-8 m. Nothing downstream can recover these.
 - **The other third is crowding.** Above a map value of 0.1, **60-84% of missed people had a detection within 0.5 m, median 0.16-0.28 m** — closer than `merge_radius` (0.30 m). These sit at 4-6 m with 11-15 beams on target: *well-observed people, standing near another person, whose detection was merged into their neighbour's.*
 
-  > **Corrected 2026-09-11 — this class is ~1.1% of people, not the ~5 pp an earlier draft of this file claimed.** The `nn` column above is the distance to the nearest detection **at any score**, because `range_probe.py` computes it before thresholding. Many of those neighbours are sub-threshold detections that would never be reported, so the figure bounds a larger set than the operating point contains. Measured at the operating point itself (`nms_sweep.py --score-by operating-point`, A40), close-pair misses are **0.033 per frame — 331 of 30,737 people, 1.1%** — and they move only between 0.028 and 0.062 per frame across merge radii from 0.20 m to 0.50 m. **The merge radius is not where 5 pp of recall is hiding.** What it does control is *duplicates*, which fall 18-fold over that same range.
+  > **Corrected 2026-09-11 — this class is ~1.1% of people, not the ~5 pp an earlier draft of this file claimed.** The `nn` column above is the distance to the nearest detection **at any score**, because `range_probe.py` computes it before thresholding. Many of those neighbours are sub-threshold detections that would never be reported, so the figure bounds a larger set than the operating point contains. Measured at the operating point itself (`nms_sweep.py --score-by operating-point`), close-pair misses are **0.033 per frame — 331 of 30,737 people, 1.1%** — and they move only between 0.028 and 0.062 per frame across merge radii from 0.20 m to 0.50 m. **The merge radius is not where 5 pp of recall is hiding.** What it does control is *duplicates*, which fall 18-fold over that same range.
 
 That is a post-processing problem, and it is the concrete mechanism behind the merge-radius sensitivity already recorded in `LFEPeaksDetector`'s docstring (0.25 m costs 1.9 pp, 0.80 m costs 6.3 pp).
 **Caveat:** "a detection within 0.5 m" is the crowding signature, not proof of error — in a genuine crowd the Hungarian assignment may be giving that detection to its rightful owner. What it establishes is that these misses are *resolution between adjacent people*, not blindness.
@@ -222,11 +222,11 @@ Read it as corroboration only.
 - **A new top candidate, cheaper than the one it displaces:** give the full-scan FCN a locally range-centred input channel (`r_i` minus a windowed median, the high-pass equivalent of the cutout's `- z`) alongside `1 - r/10`. An input transform plus one training run, against a build plus a run for range-conditioned dilation.
 - **Range-conditioned dilation stays, demoted to second**, and now has a measured size: ~2.5 pp of 1-NN error overall, up to 6.4 pp at 8-10 m.
 - **The head swap gets a sharper motive.** It is no longer "why does PPN beat Peaks by 3.6 pp" but "PPN's metric decode is worth +10.2 pp at 8-10 m and -4.1 pp at 0-1 m — what happens if the Peaks head decodes metrically too?"
-- ~~**A Tier 1 item that needs no network at all:** ~5 pp of recall sits in close-pair over-merging.~~ **Withdrawn 2026-09-11**, by the measurement that was supposed to confirm it. Recall moves only **1.8 pp** across the entire merge-radius range 0.20-0.50 m (79.5% to 77.7%), while duplicates fall from 0.636 to 0.035 per frame. The radius governs duplicates, not close pairs, and there is no cheap recall here. See `rejected-ideas.md` and `TODO.md` A40.
+- ~~**A Tier 1 item that needs no network at all:** ~5 pp of recall sits in close-pair over-merging.~~ **Withdrawn 2026-09-11**, by the measurement that was supposed to confirm it. Recall moves only **1.8 pp** across the entire merge-radius range 0.20-0.50 m (79.5% to 77.7%), while duplicates fall from 0.636 to 0.035 per frame. The radius governs duplicates, not close pairs, and there is no cheap recall here. See `rejected-ideas.md`.
 
 ## TAKHeLiPeD's stage 2 against LFE: where a single frame reaches 77-80%
 
-`utils/stage2_probe.py` (`TODO.md` A59) runs one stage-2 network and decodes the *same* per-beam probabilities and votes several ways, then scores recall by range and by crowding at LFE's own false positives per frame.
+`utils/stage2_probe.py` runs one stage-2 network and decodes the *same* per-beam probabilities and votes several ways, then scores recall by range and by crowding at LFE's own false positives per frame.
 FROG `official` test, every 5th annotated frame, three no-temporal and three default checkpoints; people are counted once per frame in the breakdowns, the AP columns use the official labels.
 
 ### The decoder is not the advantage -- ours is a handicap
@@ -248,12 +248,12 @@ The centre vote is worth ~3 pp over a surface point (peaks at the vote against p
 **The gap to LFE-Peaks, decomposed on fixed weights:** LFE-Peaks 65.11% -> our network through LFE-Peaks' own decoder 71.26 (+6.15, the network and its training) -> peaks at the vote 74.10 (+2.84, centre regression) -> the vote grid 77.27 (+3.17, aggregation over beams) -> NMS 79.88 (+2.61).
 About half of the lead is the output head and half the network; the network's +6.15 is a lower bound, since our probability map was trained for votes, not for peaks.
 
-**What this bounds for `TODO.md` item 44** (read 2026-10-25, and it changed that row's premise). The row called the vote
+**What this bounds for the target-and-decoder pair** (read 2026-10-25, and it changed that row's premise). The row called the vote
 head "the least tested component"; it is not -- the *decoder* half is measured right here, on fixed weights, and the peak
 decoder loses **8.62 pp** overall and **50.3% against 81.6%** at 8-10 m at a tight operating point. Of that 8.62, the
 **-2.84 for centre regression is structurally unavailable** to a head that emits no vote. So the open question is not
 the parameterisation but the **objective**, which is exactly what the lower-bound caveat above says: nobody has trained
-this network *for* peaks. Item 44 is therefore split -- (a) the Gaussian heatmap objective with the vote head and
+this network *for* peaks. The target-and-decoder pair is therefore split -- (a) the Gaussian heatmap objective with the vote head and
 `nms-mean` kept, which isolates the untested variable, then (b) the full LFE head as a confirmation. A fixed-weight
 decomposition can bound a decoder swap; it cannot bound a training objective, and the two should not be conflated.
 
@@ -276,10 +276,10 @@ Recall at LFE's own false positives per frame at its published 0.3 threshold, no
 The far-range gain matches Tier 0's reading -- the representation handles scale, and LFE's does not.
 Only 1.2% of test people have a neighbour under 0.3 m, so the close pairs are real people side by side, not one person annotated twice; test holds them at almost twice train's rate (9.3% against 4.9%).
 
-### One network, four decoders, at matched false positives -- what a different head could buy (item 13)
+### One network, four decoders, at matched false positives -- what a different head could buy
 
 **Measured 2026-10-12, no training run** (`stage2_probe.py --split test --stride 5`, the adopted recipe's three seeds,
-`results/item13_decoder_ceiling.json`). Item 13 proposes LFE-PPN's **depth anchors** to recover far people. The decodable
+`results/item13_decoder_ceiling.json`). The decoder-geometry question proposes LFE-PPN's **depth anchors** to recover far people. The decodable
 half of that question is answerable from checkpoints already on disk: take one network's per-beam probabilities and votes and
 run every decoder in the repo over them, scored at each published detector's own false-positive rate.
 
@@ -305,30 +305,30 @@ meant to fix.
 **Consistency check**: this run puts `nms-mean` at AP **82.22%** against the published stage-2 figure of 82.20%, and the vote
 grid 2.1 pp behind it, both as recorded.
 
-**What is left of item 13**: a range-dependent *decoder* -- the vote grid far away, `nms-mean` in crowds -- worth at most the
-3.7 pp above and only on the far 13% of people. `TODO.md` A38 is the standing warning on that shape: a range-dependent merge
+**What is left of the decoder-geometry question**: a range-dependent *decoder* -- the vote grid far away, `nms-mean` in crowds -- worth at most the
+3.7 pp above and only on the far 13% of people. The range-aware radius is the standing warning on that shape: a range-dependent merge
 radius lost to a well-chosen constant, and its +1.9 pp headline survived only until a control separated "range-aware helps"
 from "bigger helps".
 
 **A label rule that was first read as the close-pair cause, and is not.** `make_targets` lets the last-listed person within 0.6 m overwrite a beam's label and vote.
 On FROG train 6.9% of positive beams sit inside two people's radius and 3.3% vote for someone other than their nearest; the official DR-SPAAM code assigns each beam to the nearest person within 0.35 m (0.6 m is its wheelchair radius), where the share is 0.4%.
-`step2 --label-assign nearest` is still tested (A59 L1/L2), but the close-pair loss itself is the vote grid's.
+`step2 --label-assign nearest` is still tested (ladder arms L1/L2), but the close-pair loss itself is the vote grid's.
 
 ### What the input features can and cannot explain
 
 Eight of the ten `beam_features` -- each neighbour's endpoint along and across the beam -- are fixed linear combinations of the five ranges `r[i-2..i+2]`, because the angular steps are constant.
 So for a network whose stem is a learned linear map, they carry no information a 5-tap convolution on raw range lacks; the 1-NN advantage of Cartesian offsets above is an advantage for a *fixed* metric and does not transfer to a learned one.
 The one feature LFE's `1 - r/10` input cannot reproduce linearly is `r - median` over 11 deg, a depth-centring filter.
-**It does not matter measurably** (A59 arm F1, 2026-10-09, below): with LFE's input as the only channel the network scores 81.47% as selected and 82.34% averaged, against 81.95 / 82.20% with all ten.
+**It does not matter measurably** (arm F1, 2026-10-09, below): with LFE's input as the only channel the network scores 81.47% as selected and 82.34% averaged, against 81.95 / 82.20% with all ten.
 
 **It goes blind up close.** The 11 deg window is sized for a person at 4 m, so nearer people fill it: a person's own beams read `r - median` ~0 for 98% of people at 0-1 m and 41% at 1-2 m, and only -0.19 m at 2-3 m (FROG test, every 50th frame).
 Over 33 deg the same beams read -1.2 m at 1-2 m and -2.5 m at 2-3 m.
-Its cost is unmeasured -- the 1-4 m deficit it was first blamed for is the vote grid's -- and a second, wider channel is A59's arm F3.
+Its cost is unmeasured -- the 1-4 m deficit it was first blamed for is the vote grid's -- and a second, wider channel is arm F3.
 
 ### What it is not
 
 - **Not capacity against the cutouts:** 976,707 parameters against DROW3's 1,518,918 and DR-SPAAM's 1,978,054 (this project's ports).
-  **Nor against LFE** (53,258 / 170,903): at LFE's widths (A59 arm W, 63,891 parameters) the network keeps 80.7%, losing ~1.4 pp, all of it on far people (below).
+  **Nor against LFE** (53,258 / 170,903): at LFE's widths (arm W, 63,891 parameters) the network keeps 80.7%, losing ~1.4 pp, all of it on far people (below).
 - **Not training compute:** the selected checkpoint has seen ~108k scans, against DR-SPAAM's 541k and LFE's up to 100 epochs.
 
 ### Training duration moves it more than any architecture arm
@@ -337,9 +337,9 @@ Test AP of the no-temporal seed 0 by epoch, every annotated frame (`checkpoints_
 The network memorises the two training recordings, and only validation on *other* recordings sees it.
 The published recipes cannot: DR-SPAAM trains a fixed 5 epochs, and LFE early-stops on loss over `split == 1` frames interleaved with its own training frames, for up to 100 epochs (`robotics-upo/2DLaserPeopleBenchmark`).
 LFE's segmentation trainer also never shuffles: `SegDataGenerator.__call__` shuffles a copy and iterates the original.
-**It explains ~1.8 pp of the gap to the baselines, not the gap** (A59 arm R, 2026-10-09, below): our network on DR-SPAAM's protocol -- 5 epochs at batch 8, the rate decaying to 1e-6, last weights -- still scores 80.1%, and its own best-on-val checkpoint 81.35%.
+**It explains ~1.8 pp of the gap to the baselines, not the gap** (arm R, 2026-10-09, below): our network on DR-SPAAM's protocol -- 5 epochs at batch 8, the rate decaying to 1e-6, last weights -- still scores 80.1%, and its own best-on-val checkpoint 81.35%.
 
-### What lifts it (`TODO.md` A59 phase 2)
+### What lifts it
 
 Three seeds per arm, every 5th annotated test frame, through `nms-mean` against a control at 79.75%: **mirror augmentation 81.49%** (+1.74, every seed above every control seed; it selects later checkpoints, epochs 2.25-2.75 against 0.75-2.0, and gains most at 8-10 m), nearest-person labels 80.89% (+1.14), dropout 0.1 80.45% (+0.71), a second median channel over 33 deg 80.23% (+0.48).
 Only mirror clears the three-seed bar; the others are leads.
@@ -348,7 +348,7 @@ The blind spot of the 11 deg window costs little once the decoder is right: the 
 
 Averaging the weights of a run's checkpoints helps on the same curve: epochs 0.5-1.5, chosen on val, score 78.53% against the selected checkpoint's 77.58% on seed 0; over eighteen runs it gains in fifteen, +0.66 pp on average, and most reliably with dropout (every seed).
 
-### The attribution ladder: what the lead is not (`TODO.md` A59, 2026-10-09)
+### The attribution ladder: what the lead is not (2026-10-09)
 
 Each arm moves one thing in today's stage 2 (C1) toward LFE's or DR-SPAAM's setting; three seeds, `nms-mean`, every 5th annotated test frame (`results/stage2_probe_a59_ladder.json`); recall at LFE-Peaks' 1.78 FP/frame.
 
@@ -364,7 +364,7 @@ Each arm moves one thing in today's stage 2 (C1) toward LFE's or DR-SPAAM's sett
 - **The input features are worth nothing measurable** once weights are averaged, as the linear-stem argument above predicts; as selected they are worth ~0.5 pp, partly far away.
 - **Width is worth ~1.4 pp, and it is far range**: 8-10 m -4.8, 6-8 m -2.2, while close pairs *gain* 2.4. A 64k-parameter network of this form still scores 80.7% -- **and runs no faster**: 11.14 ms per scan on 4 CPU threads against C1's 11.46, 9.04 against 8.80 on the GPU (`results/a59_w_latency.json`), because at one scan per call the time is fixed overhead, not width.
 - **DR-SPAAM's protocol costs 1.84 pp**: 1.24 from taking the last weights rather than the best on val (precision up, recall down: 1.98 FP and 0.38 FN per frame at 0.3 against 3.11 and 0.20), 0.60 from batch 8, the decaying rate and no weight decay.
-- **Every arm still beats every baseline.** With the head's share from the decomposition above (about half the lead over LFE-Peaks), what is left is the network's form -- a ConvNeXt U-Net -- and the training recipe, not its input, size or compute. **And as of 2026-10-25 that half has no identified owner.** Every *nameable* piece of the form has now been varied and tied: the block type and the widths (items 19a, 19b), the depth, kernel size and expansion ratio (item 45), and the whole-scan aggregator itself (item 40, since removed). So the residue is either the recipe or the form in some way none of these knobs isolate -- not a component that can be pointed at. Separating LFE's architecture from LFE's training needs LFE retrained with its own code, shuffling fixed (A59 phase 3b).
+- **Every arm still beats every baseline.** With the head's share from the decomposition above (about half the lead over LFE-Peaks), what is left is the network's form -- a ConvNeXt U-Net -- and the training recipe, not its input, size or compute. **And as of 2026-10-25 that half has no identified owner.** Every *nameable* piece of the form has now been varied and tied: the block type and the widths (19b), the depth, kernel size and expansion ratio, and the whole-scan aggregator itself (since removed). So the residue is either the recipe or the form in some way none of these knobs isolate -- not a component that can be pointed at. Separating LFE's architecture from LFE's training needs LFE retrained with its own code, shuffling fixed.
 
 ## Caveats that apply to every number here
 

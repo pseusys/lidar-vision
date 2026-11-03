@@ -13,7 +13,7 @@ generate that curve in the first place:
 
   (A third model used to be swept here: FullScanTCN, over
   `votes_to_detections()`'s `vote_collect_radius` and `min_thresh`. Its arm
-  went with the detector in TODO.md item 32; for any future vote-based model
+  went with the detector when it was retired; for any future vote-based model
   the same sweep is `eval_nn_model(..., v2d_conf=...)`.)
 
   LFE-PPN: its own constructor already exposes `score_thresh` (minimum
@@ -28,8 +28,7 @@ cheaper than N separate `evaluate.py` invocations for a small sweep.
   (`--skip lfe_ppn` to run only this). Tier 0 measured the single
   scalar failing in both directions at 0.30 m -- ~5 pp of LFE-Peaks' recall
   spent merging adjacent people into one detection, while LFE-PPN emits 1.609
-  duplicates per frame at the same value (`memory/static-detector-diagnosis.md`,
-  TODO.md A38). This section sweeps `(a, b)` and scores every cell at **both**
+  duplicates per frame at the same value (`memory/static-detector-diagnosis.md`). This section sweeps `(a, b)` and scores every cell at **both**
   association distances the FROG benchmark reports, because a 0.5 m gate cannot
   resolve a change of this size -- the mistake the arc-offset calibration
   already made once (`CHANGELOG.md`, 2026-09-10).
@@ -48,7 +47,7 @@ cheaper than N separate `evaluate.py` invocations for a small sweep.
 Usage
 -----
   python nms_sweep.py --dataset frog --eval-stride 40
-  python nms_sweep.py --skip lfe_ppn --eval-stride 5    # just A38
+  python nms_sweep.py --skip lfe_ppn --eval-stride 5    # just the radius grid
 """
 
 import argparse
@@ -96,10 +95,10 @@ def main():
                    choices=["LFE-Peaks", "LFE-PPN"],
                    help="which detectors the range-aware section runs on")
     p.add_argument("--score-by", choices=["ap", "operating-point"], default="ap",
-                   help="`ap` sweeps against average precision (A38). "
+                   help="`ap` sweeps against average precision. "
                         "`operating-point` sweeps against what Tier 0 measured "
                         "-- recall, duplicates, phantoms and close-pair misses "
-                        "at a fixed threshold (A40). The two disagree about the "
+                        "at a fixed threshold. The two disagree about the "
                         "direction of this parameter, which is the point")
     p.add_argument("--op-thresh", type=float, default=0.3,
                    help="the fixed operating point for --score-by operating-point")
@@ -267,14 +266,14 @@ def _gt_by_frame(dataset):
 
 
 def _operating_point_sweep(args, dataset, cfg, models):
-    """A38's grid, scored on Tier 0's quantities instead of AP (A40).
+    """The radius grid, scored on Tier 0's quantities instead of AP.
 
-    A38 found AP wanting *more* merging, out to 0.45 m and past the value that
+    Scored on AP it wanted *more* merging, out to 0.45 m and past the value that
     reproduces the published number, while Tier 0 measured over-merging costing
     ~5 pp of recall. Both are right about their own quantity: a duplicate is a
     full false positive, a close-pair miss is only one missed GT, because the
     surviving merged detection still matches one of the two people. So AP
-    under-charges exactly the error Tier 0 found, and A38's verdict is a verdict
+    under-charges exactly the error Tier 0 found, and that verdict is a verdict
     about AP. This asks the other question.
     """
     gt_by_frame = _gt_by_frame(dataset)

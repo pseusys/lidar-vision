@@ -1,4 +1,4 @@
-"""Value-ranked slot memory, rule-based stand-in (TODO.md A43, PROPOSAL.md §6.3).
+"""Value-ranked slot memory, rule-based stand-in (PROPOSAL.md §6.3).
 
 Owner's rule, 2026-09-14: every slot carries one *value* -- its accumulated
 certainty -- and a new candidate may take a slot from the weakest one if it is

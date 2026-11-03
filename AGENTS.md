@@ -151,7 +151,7 @@ Report `ms/frame` alongside it whenever both exist for the row being discussed; 
 **And the `ms/frame` that counts is on the CPU** (owner's call, 2026-10-19).
 DROW and LFE were built for cheap, CPU-only robots, and this project has no reason to assume a different target — so **an architecture that wins on accuracy and loses on CPU has not won**, and a GPU number does not stand in for a CPU one.
 That applies to the project's own ablation arms as much as to the cross-detector table: `step3a_results.json`'s `memory_ms_per_frame` is timed on **whatever device trained the arm**, which is the GPU here, so it does not answer the question.
-The protocol is item 29's — `tracking_baselines.py latency --device cpu --threads 4`, 2,000 consecutive scans, batch 1, against FROG's 25 ms period (`memory/performance-log.md`).
+The protocol is one matched, interleaved sweep on an idle host — `tracking_baselines.py latency --device cpu --threads 4`, 2,000 consecutive scans, batch 1, against FROG's 25 ms period (`memory/performance-log.md`).
 
 **3. Ask early rather than guessing** when an answer would change what you build.
 Do not let that suppress your own proposals — suggest freely, and say which option you would pick.
@@ -165,8 +165,14 @@ Add the item the moment it is agreed, with What / How / Why filled in.
 second copy that ages out of agreement with the first.
 Before deleting, check the entry really carries the finding: if the row holds something the entry does not, move it where it
 belongs (`memory/`, or `docs/RESEARCH.md` for anything describing an architecture) and delete it after.
-**Never renumber.** `item 29` has to mean the same item in every commit message, `memory/` page and `docs/` reference, so the
-gaps this leaves are deliberate and the table says so at the top.
+**Never renumber, and never let a number out of these three files.** `item 29` has to mean the same item in every
+commit message and in both `TODO.md` and `CHANGELOG.md`, so the gaps deleting a row leaves are deliberate and the
+table says so at the top. But the numbering is **operational notation**: it is how a row, an entry and a commit refer
+to each other, and it means nothing to anyone reading the repository. So **code, `docs/` and `memory/` name the thing
+instead** -- "the global-state ablation", not "item 36"; "the adopted recipe", not "A59's C1" -- and a page stays
+readable without the queue open beside it (2026-11-03, owner's call). The one exception is a `*keywords:*` line, where
+the number is kept deliberately so that a commit saying "item 36 closed" can still be grepped to the page explaining
+it. A file name never carries one.
 
 **5. Update the docs in the same step as the change**, not later.
 [`TODO.md`](TODO.md) and [`CHANGELOG.md`](CHANGELOG.md) always, plus whichever of `memory/` the change touches, plus [`memory/keywords.md`](memory/keywords.md) if you added or removed a doc.
@@ -199,4 +205,4 @@ Check whether CUDA/ROCm is available first; if only DirectML is, and it crashes 
 
 **I5. Use `.venv/Scripts/python.exe` directly (or activate `.venv`) — do not run bare `python3` or `make venv`/`make test` and assume they work.**
 *Because:* on this machine `python3` resolves to the Windows Store's install stub, not a real interpreter, so `make venv`'s `python3 -m venv venv` does not create a usable environment — the actual working interpreter was created by hand as `.venv` (Python 3.12, required for ABI compatibility with the prebuilt C++ extension, see `memory/gotchas.md`).
-Fixing the Makefile itself is `TODO.md`'s item A6; until then, the manual venv is the source of truth.
+Fixing the Makefile itself is queued in `TODO.md`; until then, the manual venv is the source of truth.

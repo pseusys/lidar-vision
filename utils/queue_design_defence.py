@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""The design choices the write-up has to defend, on the adopted recipe (`TODO.md` §A items 8 and 28).
+"""The design choices the write-up has to defend, on the adopted recipe.
 
 Both jobs ablate or re-measure the *adopted* configuration -- E13, which is the memory without the slot-to-slot exchange and
 without learned matching -- rather than the superseded B0 backbone the original screens used.
 
     d4_learn_value   `step3a --learn-value` makes the value rule's two hand-set constants trainable (`gain`, `fade_time_s`),
-                     leaving every discrete decision under `no_grad`. It is the one choice in A51 phase 3b with no measurement,
+                     leaving every discrete decision under `no_grad`. It is the one choice in the design with no measurement,
                      and it is two parameters: either the learned values land on the hand-set ones, which defends them, or they
                      move and the model improves.
-    e1_horizon       E1's reset sweep, which `TODO.md` item 5 leans on: A35's "strictly benefits from ordered time" criterion
+    e1_horizon       E1's reset sweep, which the "strictly benefits from ordered time" criterion leans on
                      rests on 4.47 pp lost when the memory is emptied every 0.5 s, measured on B0 where the memory was worth
                      +6.22 pp. On the adopted recipe it is worth +3.68, and the sweep has never been re-run there.
 
@@ -26,7 +26,7 @@ HORIZON = RESULTS / "a51_horizon_adopted.json"
 GATE = Job(name="gate", cli=("-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"), cwd=REPO)
 
 JOBS = [
-    # The cheap one first: it needs no training and it closes item 5's open caveat.
+    # The cheap one first: it needs no training and it closes that criterion's open caveat.
     Job(name="e1_horizon", outputs=(HORIZON,),
         cli=("slot_experiments.py", "horizon", "--stage2", str(STAGE2), "--memory", str(MEMORY), "--out", str(HORIZON))),
     # E13's own settings plus the one flag, so the only difference from the adopted model is what this measures.

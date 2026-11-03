@@ -1,4 +1,4 @@
-"""`TODO.md` item 64's chain: the 2x2 at both of their published radii, over epoch 8's weights.
+"""The upstream-grid chain: the 2x2 at both of their published radii, over epoch 8's weights.
 
 Two jobs, not eight. Each pass runs inference once and scores it four ways, so a radius costs one pass rather
 than four, and the baseline cell of each is the number `drow_eval` already reported at that radius -- 48.1% at
@@ -50,7 +50,7 @@ class TestBothPublishedRadiiAreCovered:
 
 class TestTheRunnerCannotKillThesePassesEarly:
     def test_no_job_declares_an_output_because_evaluate_py_prints(self):
-        """A declared output arms a 600 s kill timer the moment it exists -- item 56's defect."""
+        """A declared output arms a 600 s kill timer the moment it exists -- the runner's own defect."""
         for job in item.JOBS:
             assert job.outputs == (), job.name
 

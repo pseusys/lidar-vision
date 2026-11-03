@@ -323,7 +323,7 @@ def eval_nn_model(det_name: str, weights_path: Path,
     """Load checkpoint and compute AUC on CPU.
 
     `upstream_grid` additionally scores the same inference pass three more ways -- Li2Former's own suppression
-    and their own `calPrecisionRecall`, in both combinations with ours (`TODO.md` item 64). It is one pass, not
+    and their own `calPrecisionRecall`, in both combinations with ours. It is one pass, not
     four: the extra cells re-decode the per-beam outputs this one already produced, which is what makes the
     baseline cell this function's own number rather than a re-implementation of it.
     """
@@ -347,7 +347,7 @@ def eval_nn_model(det_name: str, weights_path: Path,
         net.load_state_dict(raw_ckpt["model"])
         if dtime is None:
             # The stride the weights were trained at, not evaluate_auc's old
-            # hardcoded 1 -- see --eval-dtime's help and TODO.md A15.
+            # hardcoded 1 -- see --eval-dtime's help.
             dtime = int(raw_ckpt.get("dtime", 1))
         print(f"  Loaded checkpoint from {weights_path}  (epoch {raw_ckpt.get('epoch', 0)}, "
               f"dtime {raw_ckpt.get('dtime', 'unset -> 1')}, "
@@ -387,7 +387,7 @@ def _print_upstream_grid(aucs: dict, eval_r: float, v2d_conf: Optional[dict]) ->
         return
 
     grid = us.score_grid(aucs["raw"], eval_r=eval_r, v2d_conf=v2d_conf)
-    print(f"=== Li2Former's decoder and metric, d={eval_r} (TODO.md item 64) ===")
+    print(f"=== Li2Former's decoder and metric, d={eval_r} ===")
     print(f"  {'cell':<16}{'our wp-AUC':>12}{'their AP':>10}{'peak F1':>10}{'EER':>8}{'dets':>10}")
     print(f"  {'-' * 66}")
     for cell in us.GRID:
@@ -511,7 +511,7 @@ class _EgoMotion:
     FROG odometry is **not** zero, whatever `tracking.py`'s docstring used to
     say: 1.88 cm of translation and up to 0.4 deg of rotation per frame on the
     test recording. That claim dates from when `_load_or_fake_odom()`
-    substituted all-zero odometry on any failure (TODO.md A14) -- it described
+    substituted all-zero odometry on any failure -- it described
     the bug, not the robot. Over a track's ~6-frame lifetime 0.4 deg/frame is
     2.4 deg, which at 8 m range is 33 cm: most of the tracker's 0.5 m gate.
     """
@@ -650,7 +650,7 @@ def eval_lfe_model(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 3b. False-positive rate on a person-free split  (TODO.md A31)
+# 3b. False-positive rate on a person-free split
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _frame_period_s(dataset) -> Optional[float]:
@@ -970,7 +970,7 @@ _NN_MODELS = {
     "drow":               "drow",
     "drspaam":            "drspaam",
     "li2former":          "li2former",
-    # The authors' own network (TODO.md item 31). `--li2former` is this project's reading of their
+    # The authors' own network. `--li2former` is this project's reading of their
     # paper's prose and is a different architecture, so the two are not each other's numbers.
     "li2former-official": "li2former_official",
     "spacetime-cnn":      "spacetime_cnn",
@@ -991,7 +991,7 @@ def _resolve_frog_mode(weight_paths) -> str:
     number -- it is a different experiment. `balanced`'s val even contains
     recordings `official` trains on, so the wrong default here would silently
     score a model on its own training data, which is the exact class of bug
-    TODO.md A11 records.
+    the split tests record.
 
     Two checkpoints trained under different partitions cannot share one
     evaluation pass, so that is an error rather than a guess. Checkpoints saved
@@ -1070,7 +1070,7 @@ def main():
     parser.add_argument("--frog-mode",
                         choices=["official", "transferred", "balanced"],
                         default=None,
-                        help="FROG partition (TODO.md A30). Defaults to the one "
+                        help="FROG partition. Defaults to the one "
                              "stored in the checkpoint(s) being evaluated, i.e. the "
                              "partition the weights were actually trained under; "
                              "'official' for checkpoints saved before that field "
@@ -1101,7 +1101,7 @@ def main():
                         help="Detection radius for AUC / precision-recall (default: 0.5 m)")
     parser.add_argument("--upstream-grid", action="store_true",
                         help="Also score the same pass with Li2Former's own suppression and their own "
-                             "calPrecisionRecall, as a 2x2 over the two halves (TODO.md item 64). One "
+                             "calPrecisionRecall, as a 2x2 over the two halves. One "
                              "inference pass; the extra cells re-decode outputs already computed. Needs "
                              "the GPL-3.0 upstream tree in takheliped/include/li2former_upstream.")
     parser.add_argument("--eval-stride", type=int, default=1,
@@ -1127,7 +1127,7 @@ def main():
                              "distribution. Scoring a dtime=10 model at dtime=1 "
                              "silently cost 2.5pp wp-AUC (76.3%% vs 78.8%%) before "
                              "the default stopped being a hardcoded 1 (TODO.md "
-                             "A15). Checkpoints saved before that carry no dtime "
+                             "Checkpoints saved before that carry no dtime "
                              "and fall back to 1. Applies to --spacetime-cnn/"
                              "--drow/--drspaam/--li2former.")
     parser.add_argument("--eval-history-mode", default="full",
@@ -1145,7 +1145,7 @@ def main():
                              "measured 42.0%% against 67.1%% full on the test "
                              "recording, 23pp below a genuinely single-frame "
                              "detector, which is how you can tell. See "
-                             "TODO.md A21.")
+                             "the shuffled and zeroed history ablations.")
     parser.add_argument("--eval-time-frame", type=int, default=5,
                         help="Number of scans in the temporal window the dataset "
                              "builds via get_scan() (default: 5, matching every "
@@ -1296,7 +1296,7 @@ def main():
         # precision-recall metric at all: no true positives means precision 0 at
         # every threshold and recall with no denominator. So the metric switches
         # with the data rather than with a flag nobody remembers to pass, and
-        # every detection is counted as what it provably is (TODO.md A31).
+        # every detection is counted as what it provably is.
         person_free = not _split_has_ground_truth(dataset)
         if person_free:
             print("=== Person-free split: reporting false-positive rate, "

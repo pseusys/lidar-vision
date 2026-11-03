@@ -91,7 +91,7 @@ _H5_FILES: Dict[str, str] = {
 
 # --- Loading modes -----------------------------------------------------------
 #
-# One dataset, three partitions (TODO.md A30). A mode decides, for each split,
+# One dataset, three partitions. A mode decides, for each split,
 # *which recordings* it reads and *which of their frames* get scored -- and it
 # is the only thing that decides either, so a partition is one table entry
 # rather than a scatter of conditionals.
@@ -101,7 +101,7 @@ _H5_FILES: Dict[str, str] = {
 # `split="test"` returned all 120,396 frames of
 # frog_11-36_12-43_train_val.h5, because frog_16-41_test.h5 was never on disk
 # and the glob simply picked up whatever was. Every FROG "test" number measured
-# before 2026-09-10 is train-set accuracy as a result (TODO.md A11,
+# before 2026-09-10 is train-set accuracy as a result (
 # CHANGELOG.md). The symmetric half of the same bug is why an exclusion list
 # would not do: the test file carries no `split` field, so a glob-based
 # `split="train"` would pull all of it into training through the "no split
@@ -121,7 +121,7 @@ _H5_FILES: Dict[str, str] = {
 #                  training set exactly (108,356 frames). Their `split == 1`
 #                  half is a per-frame random holdout sitting ~38 ms from
 #                  training frames -- useless as a holdout and not theirs to
-#                  train on, so it is dropped (TODO.md A12).
+#                  train on, so it is dropped.
 #   "populated"    frames carrying at least one annotated person. The
 #                  composition both official files already have (train_val and
 #                  test are 100% populated), so a no-op there and a protocol
@@ -130,7 +130,7 @@ _H5_FILES: Dict[str, str] = {
 #                  train probe of 85.7% -- a +35pp gap that was pure
 #                  composition artifact.
 #   "empty"        frames carrying none. Every detection is a false positive by
-#                  construction, which is exactly the point (TODO.md A31).
+#                  construction, which is exactly the point.
 #   "all"          every frame, in the proportion the sensor produced them.
 _RecordingSpec = Tuple[Tuple[str, Optional[int]], ...]
 
@@ -146,7 +146,7 @@ _MODES: Dict[str, Dict[str, Tuple[_RecordingSpec, str]]] = {
     # Same model, different question. `train` and `val` are *identical* to
     # official's, deliberately: a transferred number has to be the official
     # checkpoint measured somewhere else, not a different experiment run under
-    # a different name (TODO.md A32b). Only `test` moves.
+    # a different name. Only `test` moves.
     #
     # Its test frames come from the same three recordings official uses for
     # `val`, disjointly -- populated frames there, person-free frames here.
@@ -185,7 +185,7 @@ DEFAULT_MODE = "official"
 # dealing them round-robin would let every split see all six environments,
 # which is more diversity -- but adjacent blocks of one recording share venue,
 # lighting and the same people in the same clothes, so it trades the property
-# this project spent a session buying back (TODO.md A11-A14) for a diversity
+# this project spent a session buying back, four bugs deep, for a diversity
 # gain it cannot verify. Cross-recording splits also measure the kind of
 # generalization that actually matters here.
 #
@@ -202,7 +202,7 @@ DEFAULT_MODE = "official"
 #  1. The published static baselines (LFE-Peaks, LFE-PPN, DROW) were trained by
 #     their authors on FROG's official train set, i.e. on 11-36 and 12-43.
 #     Neither appears here, so `balanced`'s test is genuinely held out for them
-#     and A32's numbers are honest. `balanced`'s **val** does contain 11-36 --
+#     and the mode comparison is honest. `balanced`'s **val** does contain 11-36 --
 #     so never report a published baseline's number on it.
 #  2. It contains frog_16-41 whole, so the official test recording stays
 #     extractable as a subset of the same evaluation pass. One run yields both
@@ -233,7 +233,7 @@ RUNUP_SCANS = 40
 # Test keeps them. The FROG paper scores every populated scan, so trimming
 # 3.75% of the test frames would break comparability with every published
 # number in order to fix a smaller contaminant. Report the clean subset
-# separately when the temporal analysis needs it (TODO.md A21).
+# separately when the temporal analysis needs it.
 #
 # `balanced`'s test inherits the 0 for the same reason: it contains frog_16-41
 # whole so that the official-test subset stays extractable from the same pass,
@@ -276,7 +276,7 @@ def _split_at_gaps(timestamps: np.ndarray, gap_s: float) -> List[Tuple[int, int]
       recording -- 60 of them across the two training recordings, up to 74.3 s
       long, together 15-20% of each recording's wall time. Sessions are the
       unit ``get_scan()`` windows are clamped to, so a nominal 0.38 s window
-      can no longer silently span 74 seconds of a coffee break (TODO.md A13).
+      can no longer silently span 74 seconds of a coffee break.
     """
     if len(timestamps) == 0:
         return []
@@ -599,7 +599,7 @@ class FROG_Dataset(Logging):
         dtime=10 windows did (scaling linearly with dtime, so it biased the
         sweep against exactly the wide windows it was measuring). Sequences are
         the unit ``get_scan()`` clamps to, so a session boundary is a hard wall
-        (TODO.md A13).
+.
 
         **Splits** own whole recordings, and ``recordings_wanted`` is how: a
         recording this split does not own is skipped entirely rather than
@@ -654,7 +654,7 @@ class FROG_Dataset(Logging):
         elif frame_rule == "empty":
             # The complement, and the whole point of `transferred`: every
             # detection here is a false positive by construction, so wp-AUC is
-            # undefined and the metric is a false-positive rate (TODO.md A31).
+            # undefined and the metric is a false-positive rate.
             det_mask = circle_num == 0
         elif frame_rule == "all":
             det_mask = np.ones(N, dtype=bool)
@@ -767,7 +767,7 @@ class FROG_Dataset(Logging):
         so that fallback turned "ego-motion compensation is broken" into
         "ego-motion compensation looks like a no-op", and no downstream number
         preserves the difference. Every conclusion about ``--align-scans`` and
-        about ``dtime`` rests on the odometry being real (TODO.md A14).
+        about ``dtime`` rests on the odometry being real.
         """
         if not odom_path.exists():
             raise FileNotFoundError(
@@ -818,13 +818,13 @@ class FROG_Dataset(Logging):
         Defaults to ``"all"`` because the missing test file is exactly how
         every FROG "test" number ended up being measured on the training data:
         the loader globbed whatever happened to be on disk, and only
-        frog_11-36_12-43_train_val.h5 ever was (TODO.md A11). Auto-download
+        frog_11-36_12-43_train_val.h5 ever was. Auto-download
         from the constructor still asks for only the split it needs, so a
         training run does not silently pull ~1.4 GB it will not open.
 
         Odometry is no longer best-effort. ``_load_odom()`` raises without it,
         so a failure here has to be loud rather than quietly degrading every
-        downstream ego-motion result (TODO.md A14).
+        downstream ego-motion result.
 
         Example
         -------

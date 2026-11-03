@@ -1,19 +1,19 @@
-"""Item 42: Slot Attention's own update (Locatello et al., NeurIPS 2020) in place of the hand-coded state update.
+"""Slot Attention's own update (Locatello et al., NeurIPS 2020) in place of the hand-coded state update.
 
 `docs/RESEARCH.md` credits Slot Attention for the **abstraction** -- a scene as a set of addressable object states -- and
-explicitly not the mechanism, because the association here is a hand-coded one-to-one metric match. Item 36 then proved
-the abstraction is what carries the gain, and item 38 established that a citable cell beats a re-implemented one. This is
+explicitly not the mechanism, because the association here is a hand-coded one-to-one metric match. The global-state ablation then proved
+the abstraction is what carries the gain, and a citable cell was preferred to a re-implemented one. This is
 the conclusion of that logic: if the published update also works, the architecture becomes "Slot Attention over LiDAR
 candidates", which is a far easier claim to defend than a bespoke pipeline.
 
 **What it replaces, exactly, because the row could be read more broadly.** `manage_slots` still runs. It has to: it is
-what gives a slot its room-frame position, and the room frame is the choice the whole design rests on (`TODO.md` item 36,
+what gives a slot its room-frame position, and the room frame is the choice the whole design rests on (
 `docs/RESEARCH.md` 5.3). What the iterated attention replaces is the association's role in the **state update** -- the
 `match_index` gather, or `self.match` where that is on -- and the separate `recall` attention, because Slot Attention's
 own attention matrix is already a distribution over slots per candidate and so is the recall.
 
 **The proximity bias stays, and that is a deliberate deviation from the paper.** Published Slot Attention has no spatial
-prior; here `_proximity` biases every candidate-slot pair by `-|dx|^2 / 2 sigma^2`. Item 39 measured that bias as
+prior; here `_proximity` biases every candidate-slot pair by `-|dx|^2 / 2 sigma^2`. The width sweep measured that bias as
 load-bearing with a dose-response curve over `sigma_m`, so dropping it would change two things at once and make a
 negative result uninterpretable. The arm asks "does the published *update rule* work here?", not "does the spatial prior
 matter?" -- that question already has an answer.
@@ -280,7 +280,7 @@ class TestTheReadout:
         assert not torch.allclose(a, b, atol=1e-4)
 
     def test_the_rescoring_head_still_starts_silent(self):
-        """Item 46's lesson: an arm whose head is not silent at initialisation measures its own random draw."""
+        """The lesson: an arm whose head is not silent at initialisation measures its own random draw."""
         model = _memory(2)
         xy, score, valid, pose = _inputs()
 
@@ -328,19 +328,19 @@ def _logit_of(score: torch.Tensor) -> torch.Tensor:
 
 
 class TestTheBackwardSurvivesAnEmptyAttentionRow:
-    """Backward-direction invariants for a degenerate attention row. **These are NOT a regression test for item 53.**
+    """Backward-direction invariants for a degenerate attention row. **These are NOT a regression test for the gradient clip.**
 
     They were written as one and they do not qualify: they pass *before* the fix, because in these synthetic cases the
     weight rows sum to exactly 0 and the gradient through the update is exactly 0 rather than NaN -- even with the
     upstream gradient scaled to 1e12. The real failure needed the magnitudes of a 399-frame chunk with 256 slots and
-    64 candidates, which a one-frame unit test does not produce. Item 53's reproduction is the trainer's own saved
+    64 candidates, which a one-frame unit test does not produce. The gradient clip's reproduction is the trainer's own saved
     batch replayed under `set_detect_anomaly`, and that is what verifies the fix.
 
-    They are kept because they close the gap that let item 53 through in the first place: the four degenerate-frame
+    They are kept because they close the gap that let that bug through in the first place: the four degenerate-frame
     tests above assert `isfinite` on the **forward** only, and `memory/dos-and-donts.md` now has a rule about exactly
     that. These two assert on `.grad` after a `backward()`.
 
-    What item 53 turned out to be, for the record:
+    What the bug turned out to be, for the record:
 
         RuntimeError: Function 'MulBackward0' returned nan values in its 0th output
           takheliped.py  weights = attention[..., :-1] * valid[..., None]
@@ -382,11 +382,11 @@ class TestTheBackwardSurvivesAnEmptyAttentionRow:
         update, attention = model.attend(state, items, _proximity(cand_xy, slot_xy, model.sigma_m), valid, alive)
         model.attend.read(attention, update).abs().sum().backward()
 
-        assert torch.isfinite(items.grad).all(), "item 53: NaN in the items gradient"
-        assert torch.isfinite(state.grad).all(), "item 53: NaN in the state gradient"
+        assert torch.isfinite(items.grad).all(), "NaN in the items gradient"
+        assert torch.isfinite(state.grad).all(), "NaN in the state gradient"
         for name, p in model.attend.named_parameters():
             if p.grad is not None:
-                assert torch.isfinite(p.grad).all(), f"item 53: NaN in {name}"
+                assert torch.isfinite(p.grad).all(), f"NaN in {name}"
 
     def test_an_all_invalid_frame_also_has_a_finite_backward(self):
         """The limit case: every candidate masked out, so every weight row sums to zero."""

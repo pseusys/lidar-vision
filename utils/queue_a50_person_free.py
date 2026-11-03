@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""A50 phase 1 item 7's last measurement: the whole detector on FROG `transferred`'s person-free frames, at three seeds.
+"""The last person-free measurement: the whole detector on FROG `transferred`'s person-free frames, at three seeds.
 
-One job per seed of the adopted recipe -- C1's averaged stage 2 and the E13 memory trained on its candidates (A59, A60, A61) --
+One job per seed of the adopted recipe -- C1's averaged stage 2 and the E13 memory trained on its candidates --
 each writing `results/empty_scene_s<seed>.json`. The first job of a seed pays about 28 minutes to build that stage 2's candidate
 cache over all 195,058 frames of the three raw recordings (~1 GB each), then about 17 minutes to replay the memory over them.
 

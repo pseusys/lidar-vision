@@ -1,4 +1,4 @@
-"""The interpolation bound replayed on our own detector (TODO.md A50 phase 1, item 1).
+"""The interpolation bound replayed on our own detector.
 
 `takheliped_oracle.bounds` answers two questions at once over trajectories
 whose points carry which of two detectors covered them:

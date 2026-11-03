@@ -1,4 +1,4 @@
-"""Item 31's resume leg: continue the paused DROW run without destroying what it already earned.
+"""The resume leg: continue the paused DROW run without destroying what it already earned.
 
 The run was paused by the owner on 2026-11-01 one epoch in, at 31.3% val wp-AUC, and
 `checkpoints_drow/li2former_official_parallel.best.pth` is a full resume point -- weights, Adam's two moments
@@ -11,7 +11,7 @@ Two ways to lose it, both pinned here:
   `.best.pth` as soon as its own first epoch beat `-inf`. The resume leg therefore writes a *different* `--out`, and
   its `.best.pth` is a different file from the one it resumes from.
 * **Declaring `.best.pth`.** `spawn_process` arms a 600 s kill timer the moment every declared output exists, and
-  `.best.pth` appears at the first improving epoch -- hours before the run ends. That is item 56's defect, and
+  `.best.pth` appears at the first improving epoch -- hours before the run ends. That is the runner's kill-timer defect, and
   `test_queue_declarations.py` pins it for that chain; this file pins it for this one.
 
 `--lr 1e-4` is pinned because the `1e-3` default killed their regression head in two epochs on attempt 1, and a

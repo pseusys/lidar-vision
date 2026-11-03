@@ -3,7 +3,7 @@
 *keywords:* slots, object memory, stage 3, design decisions, ablation, D1, D2, D3, D4, room coordinates, value rule, decay, association gate, fade time, rescoring, coasting, defensible, novelty
 
 Stage 3 (`ObjectMemory`) is the part of this project with no direct precedent, so each of its choices has to be stated with the
-measurement that supports it -- or stated as unsupported. This is that list. Build status and open work are in `TODO.md` A51;
+measurement that supports it -- or stated as unsupported. This is that list. Build status and open work are in `TODO.md`;
 history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/PROPOSAL.md` §5.5.
 
 ## How to read the numbers here
@@ -24,7 +24,7 @@ history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/
   so read these as order-of-magnitude bars, not decision rules. Coasting precision is the noisiest metric by far, which is why
   the coasting gains reported for T1 and T2 do not survive it.
 
-- **The bars moved when the backbone did, and one of them disappeared** (2026-10-09, from A61's three E13 runs on A59's adopted
+- **The bars moved when the backbone did, and one of them disappeared** (2026-10-09, from the three E13 runs on the adopted
   recipe, `a60_e13_static_s{0,1,2}`). Judge anything trained on the current stage 2 against these, not against B0's:
 
   | metric | seeds | mean | sd | 3 sd | B0's bar |
@@ -46,7 +46,7 @@ history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/
 | claim | evidence |
 | --- | --- |
 | The memory earns its place | **+5.68 pp of AP over its own candidates** (83.34% mean against 77.66%), and **+3.7 pp of recall at the candidates' own false-positive rate** (92.5% against 88.8%), 3 seeds |
-| It is not just temporal filtering | **On the adopted recipe (A61, 2026-10-09)** SORT ties the candidates (+0.13) and ByteTrack as published loses (-1.02); ByteTrack with CBMOT's track confidence, tuned on val, reaches 83.51% (+1.32); the memory (E13) is **+2.36 above it**, every seed's interval above zero, though at one matched false-positive rate the two find the same people. On the old recipe: SORT lost at every setting (77.40 / 76.67% against 77.66%), the tuned tracker reached 80.96% (+3.30) and E13 was +2.90 above it's 95% block-bootstrap interval above zero (A56, `experiments/2026-09-tracking-claims.md`) |
+| It is not just temporal filtering | **On the adopted recipe (2026-10-09)** SORT ties the candidates (+0.13) and ByteTrack as published loses (-1.02); ByteTrack with CBMOT's track confidence, tuned on val, reaches 83.51% (+1.32); the memory (E13) is **+2.36 above it**, every seed's interval above zero, though at one matched false-positive rate the two find the same people. On the old recipe: SORT lost at every setting (77.40 / 76.67% against 77.66%), the tuned tracker reached 80.96% (+3.30) and E13 was +2.90 above it's 95% block-bootstrap interval above zero (`experiments/2026-09-tracking-claims.md`) |
 | Memory belongs inside the model, not behind it | every place-keyed variant failed first: persistence map 0.57 false positives removed per false negative added, background subtraction 1.90, acausal trail oracles 2.54 and 4.20, against the merge radius's 21.9 (`rejected-ideas.md`) |
 | It costs little | **4.4-4.6 ms per frame**, one stream, beside stage 2's 6.5 ms, inside FROG's 25 ms budget |
 | Its cost does not grow with the horizon | the memory is carried as state, so per-frame work is **constant in elapsed time**; window methods (DR-SPAAM, Li2Former) re-encode `T` scans every frame, so their cost scales with the horizon they want. This is the efficiency claim the design is built on (owner, 2026-09-25): linear-time memory for an embedded platform |
@@ -60,26 +60,26 @@ history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/
 | **Mutual-nearest association within a 0.6 m gate**, and a **10 s fade** | S1, a rule-only replay over 3 gates x 3 fades: people with a live slot within 0.5 m move 99.0-99.3%, and with a *matched* slot 96.9-97.0%, across the whole grid | **settled, and the rules are not the limit**: every remaining loss is downstream, in the learned head. This is why a learned association (S4) was dropped without a training run |
 | **Accumulated value** holds a slot, not the latest score | D2, latest score instead: **83.94%, +0.60 pp**; recall 92.7%, B0's best | **not supported**. The ablation does not lose. Either the learned slot state already covers a briefly hidden person, or FROG does not test the case. Do not claim this rule without more seeds. **And it is not ours:** the update is CBMOT's score update `1 - (1-c)(1-s)` with a gain (Benbarka et al., IROS 2021), and D2 is its count-based ablation, which lost there by up to 1.83 AMOTA on nuScenes (`../docs/RESEARCH.md` §7.4.1) |
 | **Learned, input-dependent decay** per slot (1-60 s) | D3, one fixed 8 s decay: **82.44%, -0.90 pp**; recall 92.1%, below every B0 seed; 17,536 parameters cheaper | **weakly supported**: right direction, inside the threshold, one seed |
-| **A slot is created by any candidate above 0.01** | replay: 0.11-0.25 spawns per frame at any setting, and capacity is never reached | **settled as safe**, though confirmation-before-creation has not been tried (A51 S3) |
+| **A slot is created by any candidate above 0.01** | replay: 0.11-0.25 spawns per frame at any setting, and capacity is never reached | **settled as safe**, though confirmation-before-creation has not been tried |
 | **Rescoring starts silent** | T1, zero-initialised head instead of a scalar gate: AP +1.05 (inside the threshold), recall at matched FP **93.4%** and coasting precision **32.2%**, both above every B0 seed | **the mechanism is confirmed, the parameterisation is not**: with a scalar gate at zero the head's own gradient is scaled by zero, which a test pins directly |
-| **Slots report people no candidate covers** (coasting) | trained: 0.08-0.29 reports per frame at **22-32% precision**; at one epoch it is 0.002 at 0% | **works, and is undertuned**: it needs training time before it does anything, and its precision is the open item (A51 O2) |
+| **Slots report people no candidate covers** (coasting) | trained: 0.08-0.29 reports per frame at **22-32% precision**; at one epoch it is 0.002 at 0% | **works, and is undertuned**: it needs training time before it does anything, and its precision is the open item |
 | **The bookkeeping is a fixed rule, not learned** | S1 (the rules do not bind) and D2 (the value rule earns nothing) both say there is little to learn; the spawn and eviction decisions are `argmin`/`argsort` and have no gradient without a relaxation | **defensible, and D4 tests the cheap part** -- learning the value rule's `gain` and `fade_time_s` -- but D2's null makes a null there likely |
 
 ## Every design arm on the adopted recipe, at one seed each (step 1, 2026-10-18)
 
-The six A51 arms plus items 15 and 24, each E13's configuration plus one flag, against the adopted control's three seeds.
+The six design arms plus the gather and coasting ablations, each E13's configuration plus one flag, against the adopted control's three seeds.
 
 | arm | what it changes | AP | FP/frame | recall | reading |
 | --- | --- | ---: | ---: | ---: | --- |
 | **adopted control**, 3 seeds | -- | **85.49-86.35%** | 0.849-1.239 | 81.17-87.76% | the range everything is read against |
 | `t1_no_rescore_gate` (T1) | zero-initialised head instead of a scalar gate | 86.20% | 0.690 | 80.20% | inside |
-| `no_coast` (item 24) | the coasting head removed | 86.08% | 0.885 | 82.63% | inside |
+| `no_coast` | the coasting head removed | 86.08% | 0.885 | 82.63% | inside |
 | `o2_coast_weight` (O2) | coasting loss weighted 3x | 85.84% | 1.161 | 86.72% | inside |
 | `d2_latest_value` (D2) | latest score holds a slot, not accumulated value | 85.76% | 1.052 | 85.57% | inside |
 | `t2_plateau` (T2) | plateau schedule instead of cosine | 85.72% | 1.118 | 86.01% | inside |
-| `item15_gather` (item 15) | first layer reads 1.66 m of arc, not 7 beams | 85.28% | 1.068 | 85.23% | **0.21 pp below the floor** |
+| `item15_gather` | first layer reads 1.66 m of arc, not 7 beams | 85.28% | 1.068 | 85.23% | **0.21 pp below the floor** |
 | `d3_fixed_decay` (D3) | one decay time for every slot | 84.45% | 0.774 | 80.40% | **1.04 pp below the floor** |
-| `o1_rescore_limit` (O1 / item 25) | rescoring bounded to +-4 logits | 82.22% | 3.045 | 93.37% | **4.13 pp below; the head is silent** |
+| `o1_rescore_limit` (O1) | rescoring bounded to +-4 logits | 82.22% | 3.045 | 93.37% | **4.13 pp below; the head is silent** |
 
 **Two choices are load-bearing and the rest are not.** The decay must be **learned** (D3 costs 1.04 pp) and the rescoring
 must be **unbounded** (O1's +-4 logit bound silences the head: its AP is exactly its candidates'). Everything else -- what
@@ -87,7 +87,7 @@ holds a slot, how the rescoring is gated, the schedule, coasting's weight, coast
 control's own seed spread. **Single seed against three, so "inside the range" is "no evidence of a difference", not
 equivalence.**
 
-## The recurrence family: minGRU buys nothing and costs twice the training time (item 16, 2026-10-19)
+## The recurrence family: minGRU buys nothing and costs twice the training time (2026-10-19)
 
 **The question is a reviewer's, not an optimisation's**: "why a bespoke selective diagonal recurrence and not a GRU?" D3
 makes it sharper rather than softer -- fixing the decay rate costs 1.04 pp, so the learned, input-dependent rate is
@@ -97,7 +97,7 @@ load-bearing -- so the defence has to be against the obvious alternatives.
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
 | **adopted control**, 3 seeds | -- | **85.49-86.35%** | 0.849-1.239 | 81.17-87.76% | -- | -- | -- |
 | `selective` (matched seed) | the adopted rule | 86.08% | 0.885 | 82.63% | 65 | **5.06 h** | epoch 16 |
-| `mingru` (item 16) | Feng et al. 2024: no reset gate, no hidden-state dependence, **no `dt`** | 86.40% | 0.911 | 84.33% | 64 | **10.06 h** | epoch 45 |
+| `mingru` | Feng et al. 2024: no reset gate, no hidden-state dependence, **no `dt`** | 86.40% | 0.911 | 84.33% | 64 | **10.06 h** | epoch 45 |
 
 **No accuracy difference** -- every column inside the control's own three-seed range, against E13's 1.32 pp three-sigma AP
 bar, one seed against three. **But minGRU exists because it is cheaper, and here it is not**: the same epoch budget took
@@ -110,7 +110,7 @@ between arms that stopped at different points in the curriculum.
 whether the model can see time at all -- the slot statistics fed to every recurrence include age, time since match and the
 hit rate, which move with `dt` whatever the rule does with them.
 
-**On the CPU the two cost the same** (measured 2026-10-20, item 29's protocol: `--device cpu --threads 4`, 2,000
+**On the CPU the two cost the same** (measured 2026-10-20 under the one CPU protocol: `--device cpu --threads 4`, 2,000
 consecutive scans, batch 1; three readings per arm, interleaved, same session):
 
 | phase | `selective` | `mingru` | difference |
@@ -143,9 +143,9 @@ across the three rows. That is the one resolvable difference in the whole item.
 property that distinguishes it -- reading real elapsed time, `exp(-dt * rate)` -- **does not show up in AP at all**, which
 is the finding to carry into the write-up rather than bury. D3 stands but varies the rate *within* the dt-aware family, so
 it cannot support the claim either. FROG runs at a near-constant 40.01 Hz, so this dataset may never exercise the
-mechanism; `TODO.md` item 37 tests it under induced frame drops, which is the only way to find out from the data we have.
+mechanism; the flaky-stream sweep tests it under induced frame drops, which is the only way to find out from the data we have.
 
-## Per-object addressing is the mechanism: one global state captures 5% of it (item 36, 2026-10-22)
+## Per-object addressing is the mechanism: one global state captures 5% of it (2026-10-22)
 
 **The strongest attack on this project's contribution, and it holds.** The 2x2 had one cell unmeasured: slots with
 recurrence is the adopted model, slots without is `--no-recurrent` (E10, costs a lot), and **recurrence without slots**
@@ -168,8 +168,8 @@ rescore gate corroborates it: the slot arms drove theirs to +0.047 and +0.052, t
 because there was no useful correction available from one scene-level summary.
 
 **This is the sentence the write-up has been missing.** Everything else about stage 3 has turned out interchangeable --
-the recurrence rule (item 16), the slot-to-slot exchange and the learned matching (E13), the coasting head (item 24),
-the association width (item 20), the block and the widths in stage 2 (item 19). What is *not* interchangeable is that the
+the recurrence rule, the slot-to-slot exchange and the learned matching (E13), the coasting head,
+the association width, the block and the widths in stage 2. What is *not* interchangeable is that the
 scene is held as a set of **addressable per-object states**. That is the contribution, and it is now measured rather
 than assumed.
 
@@ -178,9 +178,9 @@ goes 9.10 -> 2.32 ms without them) and buy 3.9 pp. Both fit FROG's 25 ms budget.
 
 **Caveats.** One seed, val-chosen weights, uninterrupted run (not a resumed draw).
 
-## Addressability has a dose-response curve, not just an on/off contrast (item 39, 2026-10-23)
+## Addressability has a dose-response curve, not just an on/off contrast (2026-10-23)
 
-Item 36 showed that replacing 256 addressable slots with one global state captures 5% of the memory's gain. Item 39
+The global-state ablation showed that replacing 256 addressable slots with one global state captures 5% of the memory's gain. The width sweep
 fills in between the two, by replaying the adopted memory at other values of `sigma_m` -- the width of the **recall
 attention's** distance bias, i.e. how sharply a candidate attends to nearby slots. Weights untouched, ten minutes.
 
@@ -191,29 +191,29 @@ attention's** distance bias, i.e. how sharply a candidate attends to nearby slot
 | 0.90 m | +3.91 |
 | 1.50 m | +3.32 |
 | blurred, 3.00 m | **+2.24** |
-| **none at all** (item 36's global state) | **+0.22** |
+| **none at all** (one global state) | **+0.22** |
 
 **Monotone across a 6.7x range of the width and then down to nothing.** For a write-up this is materially better than
-item 36's binary ablation: the mechanism does not merely stop working when removed, it degrades smoothly as the
+The binary ablation: the mechanism does not merely stop working when removed, it degrades smoothly as the
 addressing is widened towards "every slot is equally near", which is what the global-state arm is in the limit.
 
 **The adopted 0.60 m needs no tuning**: 0.45 m is +0.08 pp, far inside the 1.32 pp bar, so there is no hidden gem in the
 parameter itself. And `sigma_m` had never been varied before this -- S4's sweep was of `gate_m`, the association gate
-inside `manage_slots`, a different parameter in a different component, which is why item 20 was closed and item 39
+inside `manage_slots`, a different parameter in a different component, which is why the learned-width question was closed and the width sweep
 replaced it.
 
 **Read the flat region weakly.** This is a replay, so the weights adapted to 0.6 m; local insensitivity around the
 trained value is expected and the falling tail is the real signal. Training at another width would only sharpen it.
 
-## Dropped frames: the dt-aware rule is the most fragile arm, not the most robust (item 37, 2026-10-22)
+## Dropped frames: the dt-aware rule is the most fragile arm, not the most robust (2026-10-22)
 
 **The premise, and it should be quoted whenever the mechanism is described.** `frame_periods` feeds stage 3 an
 exponential running average of the stamped intervals (rate `1/32`, clipped to `[1 ms, 1 s]`), which is correct -- FROG's
-stamps arrive in bunches and dividing by one of them once sent slot velocities to several m/s (A51 item 0a). Measured
+stamps arrive in bunches and dividing by one of them once sent slot velocities to several m/s. Measured
 over the whole test split: the **stamped** intervals have median 38.13 ms and a 5-95% range of 0.03-40.06 ms with
 **20.2% under 1 ms**, while what the model is **actually fed** has median 24.98 ms and a 5-95% range of
 **24.50-25.53 ms**. A 1% spread, so `exp(-dt * rate)` has been a fixed per-slot decay factor for this model's whole
-life. Item 16's three-way tie is arithmetic, not mystery.
+life. The recurrence comparison's three-way tie is arithmetic, not mystery.
 
 **Evaluation only, no retraining**, on a stream with frames deliberately dropped. Metric: each arm's gain over **its own
 candidates on the same decimated stream**, because dropping frames moves the population's difficulty for everyone and
@@ -245,9 +245,9 @@ only between-arm at one fixed mode isolates the recurrence. Quote the between-ar
 **Declined: drop-augmented retraining.** `decimate` would serve training unchanged, but the adopted rule needs +1.07 pp
 just to match minGRU at the harshest setting while the dt-blind arms were equally untrained and degraded less than half
 as much. The mechanism's remaining defence is **cross-rate transfer** (DROW's 12.5 Hz against FROG's 40.01 Hz), which
-needs no new training and is now A63 step 2.
+needs no new training and is now the DROW step.
 
-## The coasting head, ablated: nothing measurable is lost (item 24, 2026-10-15)
+## The coasting head, ablated: nothing measurable is lost (2026-10-15)
 `--no-coast` removes the head's parameters and its reports; on the adopted recipe
 it scores **AP 86.08%** against the matched seed's 86.35% and the three-seed control range 85.49-86.35, with FP/frame 0.885
 inside the control's own 0.849-1.239 and recall 82.63% inside 81.17-87.76. **Nothing measurable is lost.** The head is 137
@@ -280,7 +280,7 @@ is reported at its own operating point.
 
 **The rescoring head is not selective.** Candidates covering a person are pushed down by a median **-3.526 logits** (97.3% of
 them), candidates covering nobody by **-0.729** (69.6%). It suppresses the right things more weakly than the wrong ones, which is
-what A51's O1 targets.
+what the bounded-rescore arm targets.
 
 **The headroom above stage 3 is large and mostly untaken.** Counting only stage-2 misses whose own trajectory was detected before
 and after the gap:
@@ -331,7 +331,7 @@ or a reader will object:
 - **What the design avoids** is re-encoding a window every frame. Per-frame work is constant in elapsed time: attention runs over
   `K` slots and `P` candidates, never over history.
 - **The one super-linear term is the slot-to-slot exchange**, O(K^2) per frame -- about 65k pairs at 256 slots. It is constant in
-  time but quadratic in slot count. A51 E4 measures the cost curve against slot count and E6 ablates the exchange; if E6 is a null,
+  time but quadratic in slot count. E4 measures the cost curve against slot count and E6 ablates the exchange; if E6 is a null,
   the design loses its only quadratic term and the claim becomes cost **linear in slot count and constant per frame**.
 
 ## Phase 5: the mechanism, not the choices inside it (2026-09-27)
@@ -549,7 +549,7 @@ take any crossover from within a single sweep**. And `slot_experiments.py odomet
 **overwrote E2's `a51_odometry.json`** -- E2's numbers survive only in `results/a51_odometry.log`, and the script should take an
 output path.
 
-## The ladder against the tracking literature (A56, 2026-10-03)
+## The ladder against the tracking literature (2026-10-03)
 
 The question every tracking reviewer asks -- is the memory more than a tracker with a confidence rule? -- answered on identical
 candidates, every classical setting tuned on val and scored on test once. Full tables, intervals and the scored predictions are in
@@ -564,7 +564,7 @@ candidates, every classical setting tuned on val and scored on test once. Full t
 | a learned scorer on the bookkeeping, no state (E10, 2 seeds) | 81.94 | 90.88 |
 | learned state, no attention (E13, 3 seeds) | **83.86** | **93.16** |
 
-**On the adopted recipe (A61, 2026-10-09; `experiments/2026-09-tracking-claims.md` has the table):** candidates 82.19%, E14 83.51%, E13 85.87%, recall at matched FP 94.13 / 95.56 / 95.47%. The rule now recovers about a third of the memory's gain (+1.32 of +3.68), the learned state the rest (+2.36, every seed above zero); the edge over the rule is still occluded people (+3.4), a trajectory's first 0.5 s (+3.4) and people beyond 8 m (+3.2), but it is paid for with visible and standing ones, so at one false-positive rate the two tie. The paragraphs below are the old recipe's.
+**On the adopted recipe (2026-10-09; `experiments/2026-09-tracking-claims.md` has the table):** candidates 82.19%, E14 83.51%, E13 85.87%, recall at matched FP 94.13 / 95.56 / 95.47%. The rule now recovers about a third of the memory's gain (+1.32 of +3.68), the learned state the rest (+2.36, every seed above zero); the edge over the rule is still occluded people (+3.4), a trajectory's first 0.5 s (+3.4) and people beyond 8 m (+3.2), but it is paid for with visible and standing ones, so at one false-positive rate the two tie. The paragraphs below are the old recipe's.
 
 **What it settles.** A rule that raises a detection's score from its track's confidence recovers about half the memory's gain
 (+3.30 of +6.20 pp) -- but only with a confidence decay, without which persistent phantoms saturate exactly as people do. The
@@ -581,7 +581,7 @@ learned head reads it as an input rather than reporting it.
 0.5 m of 12-15% of people, B0 8-12%, E10 5%, against the candidates' 1.7%. FROG's 2,254 duplicate test labels reward exactly that
 (`data-model.md`), which is why the memory "found" 39% of them; without the copies E13's margin over E14 is +2.71 rather than +2.90,
 still above zero at every seed. Everywhere else a double report is a false positive, and stage 3 has no merge step. **It needs
-none** (A58, same day): the two detections sit a median 0.32 m apart, mostly a candidate with a coasting slot beside it, so a merge
+none** (same day): the two detections sit a median 0.32 m apart, mostly a candidate with a coasting slot beside it, so a merge
 radius large enough to catch them removes close neighbours too, and val picks no radius or a negligible one. They rank low enough
 that even an oracle removing every redundant detection buys only +0.4-0.55 pp, about what it buys the tuned tracker
 (`rejected-ideas.md`).
@@ -603,14 +603,14 @@ they were set by hand. **That is the answer the write-up needs.** Asked "why 0.1
 those constants from those values moves them by about a tenth and buys nothing outside the noise bar -- the hand-setting is
 defended by measurement rather than by assertion. Two parameters, 3.97 ms per frame, unchanged.
 
-**It is also the only A51 arm whose deltas are positive on all three bars at once**, so if the +0.86 is ever to be claimed it
+**It is also the only arm whose deltas are positive on all three bars at once**, so if the +0.86 is ever to be claimed it
 needs a second and third seed; one seed inside the bar is not a result, and this one is reported as a null with a direction.
 
 **Three independent measurements now agree on the memory's horizon.** The learned fade time lands at **8.94 s**; D3's fixed
 decay was tried at **8 s** and cost only 0.90 pp; and E1's reset sweep puts 94% of the memory's gain inside **10 s**. The 10 s
 in `SlotRules` is not a tuned number and never was, which is why their agreement is worth stating.
 
-**E1's reset sweep, re-run on the adopted recipe (item 28, 2026-10-11).** Item 5's "strictly benefits from ordered time"
+**E1's reset sweep, re-run on the adopted recipe (2026-10-11).** The "strictly benefits from ordered time"
 criterion had borrowed its evidence from B0's superseded backbone, where the memory was worth +6.22 pp. On the adopted recipe:
 
 | memory emptied every | 0.5 s | 1 s | 2 s | 5 s | 10 s | 30 s | never |
@@ -619,30 +619,30 @@ criterion had borrowed its evidence from B0's superseded backbone, where the mem
 | recall at matched false positives | 94.02 | 94.48 | 94.93 | 95.35 | 95.71 | 95.93 | **96.00** |
 
 Candidates score 82.22, so the memory is worth +4.13 pp and **+3.19 of that needs history older than half a second** -- 77% of
-the gain. 83% of it is reached by 5 s and 94% by 10 s, the same shape B0 showed. **A35's criterion passes by about six times**
+the gain. 83% of it is reached by 5 s and 94% by 10 s, the same shape B0 showed. **The criterion passes by about six times**
 `SpaceTimeCNN`'s 0.5 pp shuffle penalty, where B0's backbone gave nine; the margin narrowed with the better stage 2, as
 everything about the memory has, and the claim stands on the model being proposed rather than on a superseded one.
 
 ## What only the memory can do, and where the shrinking gain has to stop
 
-**Measured 2026-10-11 from runs already on disk (`utils/memory_headroom.py`, item 23). This is the design's biggest exposure
+**Measured 2026-10-11 from runs already on disk (`utils/memory_headroom.py`). This is the design's biggest exposure
 and it needed a number rather than a hope.**
 
 **The gain falls as stage 2 improves, and a straight line puts zero at 90.6%.**
 
 | stage 3 trained on | candidates | memory | gain |
 | --- | --- | --- | --- |
-| B0, the no-temporal backbone A51 used (3 seeds) | 77.66 | 83.34 | **+5.68** |
+| B0, the no-temporal backbone (3 seeds) | 77.66 | 83.34 | **+5.68** |
 | the adopted recipe (3 seeds) | 82.19 | 85.87 | **+3.69** |
 | the adopted recipe *plus* stage 2's coarse convolution (3 seeds) | 82.25 | 85.01 | **+2.76** |
 
 Two readings, and the second is the one that matters. The first: 2 pp of gain per 4.5 pp of stage-2 improvement, reaching zero
 at candidates of **90.6% AP** -- which is not far away. The second: the third row has the *same* candidate quality as the second
 and a gain **0.93 pp lower**, because that stage 2 reads time itself. **The memory is partly redundant with any temporal
-mechanism, not only with a better spatial one**, which is A60's conclusion arrived at from a different direction.
+mechanism, not only with a better spatial one**, which is the coarse convolution's conclusion arrived at from a different direction.
 
 **A flawless single-frame detector would reach 99.04% recall.** A person whose own returns are blocked is not in the scan, so
-no static detector can find them however good it gets; everyone else is in principle available. A61's occlusion strata measure
+no static detector can find them however good it gets; everyone else is in principle available. The occlusion strata measure
 the split, pooled over three seeds, at each model's own matched false-positive rate:
 
 | stratum | people | share | candidates | memory | gain | contributes to the total |
@@ -677,13 +677,13 @@ is worth **+0.11 pp**. The whole occlusion-only prize -- recovering *every* most
   attention mechanisms (E13, three seeds) -- but the smaller internal choices are single-seed screening and must be reported as
   that, not as results. **D3 matters most of the six**: a fixed 8 s decay costs 0.90 pp, inside its bar, so "the per-slot decay
   is learned" is currently unsupported even though E10 proves the state as a whole is load-bearing.
-- **The occlusion gain is measured, but no input that knows about occlusion has helped yet**: A56 E20 puts the memory's largest
-  gain, and its largest edge over a tuned tracker, on occluded people, while A51 S2's free-space input improved coasting's ranking
+- **The occlusion gain is measured, but no input that knows about occlusion has helped yet**: E20 puts the memory's largest
+  gain, and its largest edge over a tuned tracker, on occluded people, while the free-space input improved coasting's ranking
   and nothing end to end.
 - ~~**The calibration metrics have no noise estimate**~~ -- **superseded by E9, 2026-09-25**: recall at matched false positives
   has sd 0.29 (bar 0.86) and coasting precision sd 2.73 (bar 8.19) over B0's three seeds. Re-judged against those, T1's recall
   gain (+0.88) clears and its coasting gain (+6.72) does not.
 - **Coarse convolutions were excluded throughout**, so nothing here says how the slots interact with a temporal stage 2; that is
-  `TODO.md` A60's question, answered 2026-10-08: on the new recipe the memory adds +3.3 to +4.1 pp over a no-temporal stage 2 and +2.4 to +3.0 over a coarse one, ending 85.87% against 85.01%, so the convolution is dropped.
-- **Only FROG.** DROW and JRDB are A49.
+  The coarse convolution's question, answered 2026-10-08: on the new recipe the memory adds +3.3 to +4.1 pp over a no-temporal stage 2 and +2.4 to +3.0 over a coarse one, ending 85.87% against 85.01%, so the convolution is dropped.
+- **Only FROG.** DROW and JRDB are still to come.
 - **The oracle bound is an interpolation bound, not an achievable target**: it assumes a perfect decision about when to bridge a gap, which is exactly what stage 3 has to learn.

@@ -59,7 +59,7 @@ ruff check --config memory/scripts/ruff.toml memory/scripts/
 | [`scripts/ruff.toml`](scripts/ruff.toml) | Not a script: the lint config for this directory. |
 
 **The one that lives outside this directory**, because it imports the project's own modules rather than only the standard
-library's: [`../utils/run_queue.py`](../utils/run_queue.py) runs a session's long jobs as one queue (`TODO.md` A57). It is the
+library's: [`../utils/run_queue.py`](../utils/run_queue.py) runs a session's long jobs as one queue. It is the
 worked example of this file's rule -- the PowerShell launcher it replaced was copied by hand eight times, and **every** incident
 in that session traced to a copy rather than to the research: a step that trained ahead of a failed test gate, a 6.8 h run that
 died with its parent session, a `` that became a carriage return twice, a completion marker typed differently in each copy,

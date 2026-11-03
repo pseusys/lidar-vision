@@ -1,4 +1,4 @@
-"""The statistics behind `utils/cpu_latency.py` (`TODO.md` §A item 29).
+"""The statistics behind `utils/cpu_latency.py`.
 
 `AGENTS.md` rule 2b makes speed half of every accuracy answer, and the speed table in `memory/performance-log.md` could not
 honour it: its CPU rows were taken around 2026-09-10 by a different script than the one that timed this detector, at an unstated
@@ -64,7 +64,7 @@ class TestSummarise:
 
 class TestTheBudgetItself:
     def test_the_period_is_frogs_real_one_not_the_stamped_median(self):
-        """40 Hz, settled in item 1: the median stamped interval said 26.2 Hz and made every budget 1.53x too generous."""
+        """40 Hz, settled by measurement: the median stamped interval said 26.2 Hz and made every budget 1.53x too generous."""
         assert FROG_PERIOD_MS == pytest.approx(25.0, abs=0.1)
 
 
@@ -139,7 +139,7 @@ class TestAMeasuredTotalIsNotRecomputed:
 
 
 class TestTheMarkdownTable:
-    """The table goes into `memory/performance-log.md` and will be regenerated after the thread sweep (item 30).
+    """The table goes into `memory/performance-log.md` and will be regenerated after the thread sweep.
 
     Transcribing seventy cells by hand once is tedious; twice is how a digit changes without anyone deciding it should.
     """

@@ -2,7 +2,7 @@
 """Score a saved stage-3 checkpoint on the FROG `official` test split, without retraining it.
 
 A run that is interrupted after its best checkpoint was written still has a usable model; its `step3a_results.json` is what is
-missing. This produces the same test block a finished run prints (`TODO.md` A51), so an interrupted arm still yields a number.
+missing. This produces the same test block a finished run prints, so an interrupted arm still yields a number.
 
     python score_memory.py --memory <checkpoint> --stage2 <stage 2 checkpoint> --out <json>
 """

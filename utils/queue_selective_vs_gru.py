@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Item 16: why a bespoke selective recurrence and not a GRU? -- answered on **both** axes (`TODO.md` §A).
+"""why a bespoke selective recurrence and not a GRU? -- answered on **both** axes (`TODO.md` §A).
 
-This is the question a reviewer asks about the paper's central mechanism, and A51's D3 made it sharper rather than softer:
+This is the question a reviewer asks about the paper's central mechanism, and the fixed-decay arm made it sharper rather than softer:
 fixing the decay rate costs **1.04 pp**, so the learned, input-dependent rate is load-bearing. The defence has to be
 against the obvious alternatives.
 
@@ -18,12 +18,12 @@ robot's frames are not uniformly spaced. Bolting `dt` onto a GRU would measure s
 CPU-only robots and this project has no reason to assume otherwise, so an architecture that wins on AP and loses on CPU
 has not won. The per-arm `memory_ms_per_frame` already in `step3a_results.json` is measured on **whatever device trained
 the arm** -- the GPU here -- so it does not answer the question; each arm therefore gets a `tracking_baselines.py latency
---device cpu --threads 4` job of its own, which is the same protocol as item 29's table (`memory/performance-log.md`).
+--device cpu --threads 4` job of its own, which is the same protocol as the speed table's (`memory/performance-log.md`).
 
 That matters most for exactly this item: **minGRU exists because it is cheaper**. If it matches on AP and costs less on
 the CPU, that is the result; if the GRU matches on AP and costs more, that is also the result.
 
-    python queue_item16.py --list
+    python queue_selective_vs_gru.py --list
 """
 
 from run_queue import CHECKPOINTS, REPO, Job, main

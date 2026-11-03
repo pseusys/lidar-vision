@@ -4,14 +4,14 @@
 **The architecture was frozen on 2026-10-18**, after step 1 ran eight arms and found nothing better than the adopted
 choice. What it is, exactly:
 
-    stage 2   the A59 C1 recipe -- dropout 0.1, nearest-person labels at 0.6 m, mirror augmentation, plateau schedule,
+    stage 2   the adopted recipe -- dropout 0.1, nearest-person labels at 0.6 m, mirror augmentation, plateau schedule,
               weight averaging over the val-chosen window -- over a **fixed-beam** ConvNeXt U-Net. No metric gather:
-              item 15 cost 1.42 pp at stage 2 and 0.21 pp below the control's floor end to end.
+              the gather arm cost 1.42 pp at stage 2 and 0.21 pp below the control's floor end to end.
     stage 3   E13's memory: 256 slots in room coordinates, **accumulated** value (not the latest score, D2),
               **learned input-dependent** decay (not one fixed time constant, D3 costs 1.04 pp), no slot-to-slot
               exchange, no learned matching, a scalar rescore gate (T1 is interchangeable), **unbounded** rescoring
               (O1's +-4 logit bound silences the head), a cosine schedule (T2 is interchangeable), and **no coasting
-              head** (item 24: removing it costs nothing measurable and it fired essentially never).
+              head** (removing it costs nothing measurable and it fired essentially never).
 
 **Why only two jobs.** Stage 2 is unchanged by the freeze, so the three adopted stage-2 checkpoints stand. Seed 0 of the
 frozen memory is already trained as `a64_no_coast_s0` (2026-10-16) with byte-identical flags -- `coast=False`,

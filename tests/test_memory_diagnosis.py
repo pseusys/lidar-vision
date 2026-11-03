@@ -1,4 +1,4 @@
-"""Pairing candidates to annotated people (`TODO.md` A50 phase 1b).
+"""Pairing candidates to annotated people.
 
 `memory_diagnosis.pairs` is the step the whole "what did stage 3 do to each person" decomposition rests on: it says which
 candidate covers which person, one to one and inside the match radius. The two properties worth pinning are the ones the
@@ -22,7 +22,7 @@ from memory_diagnosis import covered_people, label_coasting_reports, logit, pair
 
 
 class TestLabelCoastingReports:
-    """Which coasting reports would recover a person stage 2 missed, and which would only add a false positive (`TODO.md` A51 O2).
+    """Which coasting reports would recover a person stage 2 missed, and which would only add a false positive.
     Splitting them by score is what turns the coasting head's threshold into a curve instead of a guess."""
 
     def test_a_report_on_a_missed_person_is_a_hit_and_a_second_one_is_not(self):
@@ -44,7 +44,7 @@ class TestLabelCoastingReports:
 
 class TestCoveredPeople:
     """How many annotated people have a live slot standing on them: the upper bound on what the memory could recall, whatever the
-    learned head then does with it (`TODO.md` A51 S1)."""
+    learned head then does with it."""
 
     def test_a_person_with_a_live_slot_within_the_radius_is_covered(self):
         slots = np.array([[0.0, 1.0], [9.0, 9.0]])
@@ -65,7 +65,7 @@ class TestCoveredPeople:
 
 class TestRetirementGap:
     """When a slot is lost and something reappears in the same place, how long was the gap: what state would have to survive for a
-    returning person to keep it (`TODO.md` A51 S2)."""
+    returning person to keep it."""
 
     def test_a_respawn_near_a_lost_slot_reports_its_gap(self):
         gap = retirement_gap(np.array([1.0, 1.0]), np.array([[1.1, 1.0], [8.0, 8.0]]), np.array([100.0, 100.0]), 112.0, 0.5, 60.0)
@@ -86,7 +86,7 @@ def _xy(points):
 
 
 class TestWindowedSpeed:
-    """The reference slot speed for the `dt` check (`TODO.md` A51 0a): displacement over at least `window_s`, never a division by
+    """The reference slot speed for the `dt` check: displacement over at least `window_s`, never a division by
     one stamped interval, restarted whenever a slot is refilled with a different object."""
 
     @staticmethod

@@ -1,4 +1,4 @@
-"""What only the memory can do, and where the shrinking-gain trend has to stop (`TODO.md` §A item 23).
+"""What only the memory can do, and where the shrinking-gain trend has to stop.
 
 The memory's advantage falls as stage 2 improves: +5.68 pp of AP over candidates scoring 77.66%, +3.68 over 82.2%. Extrapolated
 it reaches zero, and a reader is entitled to ask where that stops being true. It stops at whatever a single-frame detector
@@ -7,7 +7,7 @@ the scan, so no static detector finds them, while a visible person missed by our
 find.
 
 So the memory's recall gain splits into a substitutable part and an irreplaceable one, and the weights are the strata's shares
-of the population. That arithmetic is what is pinned here; the measurements it runs on come from A61's reports.
+of the population. That arithmetic is what is pinned here; the measurements it runs on come from the baselines' reports.
 """
 import sys
 from pathlib import Path

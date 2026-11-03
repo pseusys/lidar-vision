@@ -37,8 +37,8 @@ Checked against the paper (arXiv:2306.08531) rather than inferred, because the s
 
 So the two training sessions were chosen to **maximize person annotations** — and they are indeed the top two by that measure, by a wide margin.
 That is a defensible choice for a detection benchmark and an explicit trade of *environment diversity* for *annotation density*.
-It is not a claim that this split trains the best-generalizing model, and it should not be treated as one: this project's own A1 run overfits those two sessions hard (best epoch 1, gap +33.8pp).
-Matching the split is required to compare against published numbers; it is not required to do good research (`TODO.md` A25).
+It is not a claim that this split trains the best-generalizing model, and it should not be treated as one: this project's own early run overfits those two sessions hard (best epoch 1, gap +33.8pp).
+Matching the split is required to compare against published numbers; it is not required to do good research.
 
 The "randomly split in 90:10 proportion" confirms directly what this project found empirically: the val half is a **per-frame random holdout**, which is why its frames sit ~38 ms from training frames.
 
@@ -52,7 +52,7 @@ and
 
 Both matter.
 The first means this project's `circle_num > 0` filter on held-out splits **is the official protocol**, not an interpretation of it.
-The second means the extras' un-populated frames are **verified empty**, not un-annotated — so they are valid data for measuring false positives on person-free scenes (`TODO.md` A20).
+The second means the extras' un-populated frames are **verified empty**, not un-annotated — so they are valid data for measuring false positives on person-free scenes.
 
 **The file layout follows from those two sentences, and the arithmetic checks exactly:**
 
@@ -79,7 +79,7 @@ Recordings, not files, are the unit: `frog_11-36_12-43_train_val.h5` bundles two
 | `transferred` | **identical to official** | **identical to official** | the three extras' **person-free** frames, 72,533 | what a detector does when nobody is there |
 | `balanced` | 12-43 + 14-57, 133,367 | 11-36 + 10-31, 121,329 | 16-41 + 15-53, 110,846 | the realistic mix — every split ~19-21% empty |
 
-`transferred` shares official's train and val *deliberately*, so one checkpoint serves both and a transferred number is the official model measured elsewhere rather than a separate experiment (`TODO.md` A32b).
+`transferred` shares official's train and val *deliberately*, so one checkpoint serves both and a transferred number is the official model measured elsewhere rather than a separate experiment.
 
 **`balanced` is our partition, not the paper's**, so it ignores the paper's per-frame `split` field entirely and uses whole recordings.
 Its pairing was chosen from the six possible populated-only/raw matchings to minimise the spread of empty frames — 20.6 / 19.8 / 19.1 % — and its residual prior shift (3.70 people per populated frame in train against 3.20 in test) is *smaller* than `official`'s own (3.93 -> 3.07).
@@ -178,7 +178,7 @@ Per-scan interval *jitter* within a session is left alone as noise — there is 
 
 ### Duplicate labels: some circles are copied, bit for bit
 
-Some frames list one person twice: two rows of `circles` equal in all six columns, position, radius and polar form alike (found 2026-10-05, closing A56).
+Some frames list one person twice: two rows of `circles` equal in all six columns, position, radius and polar form alike (found 2026-10-05).
 Counted in the raw files, independent of every loader:
 
 | file | circles | exact duplicate pairs | share | near pairs under 5 cm |
@@ -197,7 +197,7 @@ In the test file they run over consecutive annotated frames (54 runs, median 16,
 - **At evaluation**, a copy is a person nobody can find with one detection, because matching is one to one, so it scores only for a method that puts a second detection beside the original. It costs every method 0.7-1.05 pp of test AP.
 - **In training**, a copy looks to `coast_targets` like an annotated person no candidate covers, so it teaches a coasting slot to report beside a covered person.
   That is negligible on `train_val` (285) and not on the extras (up to 1.55%): de-duplicate before training on them.
-- **Any lookup by position** (nearest annotation to a trajectory point, a rounded-position dictionary) silently drops the copy, which is what the A56 report's "unlinked annotations" and `dataset-properties.md`'s round-trip shortfall turned out to be.
+- **Any lookup by position** (nearest annotation to a trajectory point, a rounded-position dictionary) silently drops the copy, which is what the baseline report's "unlinked annotations" and `dataset-properties.md`'s round-trip shortfall turned out to be.
 
 De-duplicating is one line per frame: keep row `j` unless it equals an earlier row (`np.all(gt[:j] == gt[j], axis=1).any()`).
 The counts and scripts are in `checkpoints_three_horizon/a56/duplicates/`.

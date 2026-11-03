@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A59's attribution ladder has one unmeasured cell: F1 and W together (`TODO.md` §A item 12).
+"""The attribution ladder has one unmeasured cell: F1 and W together.
 
 The ladder asked what our stage 2's lead over LFE is *not* made of, one ingredient at a time, against the adopted recipe C1:
 

@@ -1,11 +1,11 @@
-"""Background model from raw scan returns (TODO.md A44).
+"""Background model from raw scan returns.
 
-A41 counted *detections* per world cell and failed: people revisit locations, so
+The first attempt counted *detections* per world cell and failed: people revisit locations, so
 detection frequency conflates queues and doorways with furniture (0.57 FP per
-FN). A45 then showed that filtering *trails* has a low ceiling too, and that the
+FN). The displacement bound then showed that filtering *trails* has a low ceiling too, and that the
 ceiling is association-limited.
 
-A44 uses neither. It accumulates **raw scan returns**, because a chair reflects
+This map uses neither. It accumulates **raw scan returns**, because a chair reflects
 a beam whether or not anything detects it, and asks a different question: *is
 this detection standing on a surface that was already here?*
 
@@ -18,7 +18,7 @@ the frames spanning a cell's life actually returned from it:
 
 so background is `rate >= min_rate AND span >= min_span`, and each of the three
 cases above is excluded by a different one of those two conditions. A count
-alone cannot separate them, which is exactly how A41 failed.
+alone cannot separate them, which is exactly how the detection map failed.
 """
 import sys
 from pathlib import Path
@@ -50,7 +50,7 @@ class TestTheThreeCasesItMustSeparate:
 
     def test_a_busy_corridor_cell_is_not(self):
         """Span is long -- identical to the chair -- and only the rate
-        separates them. This is the case A41 got wrong."""
+        separates them. This is the case the detection map got wrong."""
         m = BackgroundMap(cell=0.25)
         for f in range(2000):
             if f % 40 < 2:                        # brief visits, many people

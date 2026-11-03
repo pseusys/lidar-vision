@@ -1,4 +1,4 @@
-"""Item 44(a): a soft Gaussian beam target in place of the hard per-beam label, with the vote head kept.
+"""a soft Gaussian beam target in place of the hard per-beam label, with the vote head kept.
 
 **Why this half and not the published head.** `memory/static-detector-diagnosis.md`'s decomposition already measured the
 *decoder* on fixed weights: our own network read through LFE-Peaks' own decoder scores **71.26% against `nms-mean`'s
@@ -163,7 +163,7 @@ class TestTheLossReadsIt:
         roughly 50:1 a hard 1 inside the footprint is *closer* to the weighted optimum than the Gaussian is. The first
         version of this test asserted the opposite and failed on exactly that. The claim is therefore made where it
         holds -- balanced classes, `pos_weight` 1 -- and the imbalance's effect on the optimum is left as what it is: a
-        real property of the objective that item 44(a)'s arm will train under, not a bug.
+        real property of the objective the soft-target arm will train under, not a bug.
         """
         labels = torch.tensor([0, 0, 0, 0, 3, 3, 3, 3])
         heat = torch.tensor([0.0, 0.0, 0.0, 0.0, 1.0, 0.9, 0.6, 0.3])

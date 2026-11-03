@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 31, leg 1: Li2Former's **own** network trained on DROW, the dataset it published on.
+"""Leg 1: Li2Former's **own** network trained on DROW, the dataset it published on.
 
-Item 31 wanted a measured FROG row for Li2Former. It cannot come from `Li2FormerDetector`: that class was written from the
+The Li2Former port wanted a measured FROG row for Li2Former. It cannot come from `Li2FormerDetector`: that class was written from the
 paper's prose and is a conv backbone with one temporal encoder layer and no cross-beam path, where the paper cascades
 omni-dimension aggregation blocks with a batch-attending auxiliary stream and an adaptive focus mechanism in its regression
 loss. Training it would have filled the Li2Former row with a number Li2Former did not produce. The authors publish code
@@ -12,7 +12,7 @@ loss. Training it would have filled the Li2Former row with a number Li2Former di
 (Li2Former-A, `T=5`; 74.8% without the AFM, 72.5% at `d=0.3`). Nothing else can tell a correct port from a broken one:
 their repository ships **no weights** -- no releases, nothing in the tree, no link in the README, confirmed from both ends on
 2026-11-01 -- so there is no output to match numerically, and no training code either, so the optimiser, schedule and epoch
-count below are this project's. A FROG number from an unvalidated port would be exactly the mislabelled row item 31 exists to
+count below are this project's. A FROG number from an unvalidated port would be exactly the mislabelled row this work exists to
 avoid, one dataset further from anything that could catch it.
 
 **This is attempt 2, and attempt 1's configuration is the reason.** The first run (2026-11-01 00:51 to 11:30, abandoned at
@@ -78,7 +78,7 @@ EPOCHS = "12"
 GATE = Job(name="gate", cli=("-m", "pytest", "tests", "-q", "-p", "no:cacheprovider"), cwd=REPO)
 
 # `--out` is written once, at the end of train_model; `.best.pth` is written whenever val improves,
-# so declaring that one would arm the runner's kill timer mid-run (item 56's defect).
+# so declaring that one would arm the runner's kill timer mid-run (its own defect).
 TRAIN = Job(
     name="drow_train", outputs=(CKPT,),
     cli=("train.py", "--detector", "li2former_official", "--dataset", "drow",

@@ -85,7 +85,7 @@ def _eval_worker(det, ckpt_path, dataset, train_split, test_split,
         load_checkpoint(ckpt_path, net)
         # dtime comes from the checkpoint, never from evaluate_auc's default of
         # 1: scoring a dtime=10 model at dtime=1 silently cost 2.5pp wp-AUC
-        # (TODO.md A15).
+        #.
         dtime = int(torch.load(ckpt_path, map_location="cpu").get("dtime", 1))
         aucs = evaluate_auc(net, test_ds, cfg, device=dev, batch_size=batch_size,
                             dtime=dtime)
@@ -129,7 +129,7 @@ def _eval_in_process(det, ckpt_path, dataset, train_split, test_split,
         load_checkpoint(ckpt_path, net)
         # dtime comes from the checkpoint, never from evaluate_auc's default of
         # 1: scoring a dtime=10 model at dtime=1 silently cost 2.5pp wp-AUC
-        # (TODO.md A15).
+        #.
         dtime = int(torch.load(ckpt_path, map_location="cpu").get("dtime", 1))
         aucs = evaluate_auc(net, test_ds, cfg, device=dev, batch_size=batch_size,
                             dtime=dtime)

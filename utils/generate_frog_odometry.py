@@ -5,7 +5,7 @@ FROG_Dataset._load_odom() already knows how to pick up automatically
 
 **Rarely needed now.** FROG does publish real per-recording odometry, all of
 it is downloaded by ``FROG_Dataset.download()``, and ``_load_odom()`` prefers
-it and raises rather than silently faking when it is absent (TODO.md A14).
+it and raises rather than silently faking when it is absent.
 This script is the fallback for a recording that genuinely has none.
 -- no changes to frog_dataset.py are needed; this script only needs to
 produce that file. See library/takheliped/utils/odometry_estimation.py

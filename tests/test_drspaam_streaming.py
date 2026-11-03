@@ -1,4 +1,4 @@
-"""DR-SPAAM in the streaming form its authors published (`TODO.md` A47, §A item 6).
+"""DR-SPAAM in the streaming form its authors published.
 
 The official detector is **stateful**: `_SpatialAttentionMemory` keeps its template between calls and `reset()` clears it, so
 what it reports on a frame depends on every earlier frame of the sequence. Ours re-encodes a `T`-scan window from scratch on

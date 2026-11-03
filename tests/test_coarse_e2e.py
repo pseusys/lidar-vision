@@ -1,9 +1,9 @@
-"""`utils/coarse_e2e.py`, the scoring of `TODO.md` A60: does stage 2's coarse convolution earn anything end to end?
+"""`utils/coarse_e2e.py`: does stage 2's coarse convolution earn anything end to end?
 
 Pinned here: a person-observation's age is the time since its trajectory's first annotation, linked in world coordinates with no
 identities; FROG's copied labels (`memory/data-model.md`) are left out of the per-person measures, since a copy would start a
 trajectory of its own every frame and could only be matched by a double report; first-second recall counts exactly the observations
-under one second old; and the decision rule is the one A60 wrote down before the runs.
+under one second old; and the decision rule is the one written down before the runs.
 """
 import sys
 from pathlib import Path
@@ -53,7 +53,7 @@ class TestFirstSecondRecall:
 
 
 class TestVerdict:
-    """A60: drop if the default's mean AP is not above the no-temporal mean by more than 1.5 pp and its first-second recall not
+    """Drop if the default's mean AP is not above the no-temporal mean by more than 1.5 pp and its first-second recall not
     above by more than 2 pp; keep otherwise."""
 
     def test_within_both_bars_drops_the_convolution(self):

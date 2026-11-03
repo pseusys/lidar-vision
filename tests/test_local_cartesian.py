@@ -1,4 +1,4 @@
-"""Local-Cartesian window extraction (TODO.md A42).
+"""Local-Cartesian window extraction.
 
 DROW's cutout normalises distance on two axes: a range-adaptive angular
 half-width, and a depth tunnel `clip(w, z +- 1) - z`. Tier 0 measured the depth
@@ -126,7 +126,7 @@ class TestScale:
     def test_adaptive_width_restores_it_on_the_object(self):
         """Scaling the window by range makes the same object give the same
         features -- the angular normalisation, priced at 2.5 pp by Tier 0, and
-        the thing A42 asks whether we can do without.
+        the thing this representation asks whether we can do without.
 
         Compared on the object only (the central half of the window). An
         *angular* window has constant metric width at exactly one depth -- its

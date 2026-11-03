@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""`TODO.md` item 64: score Li2Former with their own suppression and their own metric, at both their radii.
+"""Score Li2Former with their own suppression and their own metric, at both their radii.
 
 **Why this is two jobs and not eight.** `evaluate.py --upstream-grid` runs inference once and scores that one
 pass four ways -- our decoder and theirs, crossed with our wp-AUC and their `calPrecisionRecall`. A radius
@@ -23,7 +23,7 @@ fix their code; a cell dying there is itself the answer, since its AP would be 0
 
 Launch detached through the Task Scheduler, as `memory/long-running-tasks.md` shows. CPU only, so no ROCm
 kernel compilation and no teardown hang: these exit normally. Both jobs **declare no outputs, because
-`evaluate.py` prints**, which also means no kill timer is ever armed (item 56's defect).
+`evaluate.py` prints**, which also means no kill timer is ever armed (the runner's own defect).
 """
 
 from run_queue import REPO, Job, main

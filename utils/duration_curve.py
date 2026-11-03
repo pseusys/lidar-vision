@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test AP against training duration, from a run's periodic checkpoints (`TODO.md` A50 phase 1 item 4).
+"""Test AP against training duration, from a run's periodic checkpoints.
 
 Stage 2's validation AP peaks around epoch 1 and falls for every epoch after, which was read as overfitting -- but until
 `step2 --checkpoint-every` existed, no checkpoint survived past the best one, so nobody had checked whether **test** AP falls
@@ -25,7 +25,7 @@ Usage
     python duration_curve.py --dir ../checkpoints_three_horizon/step2_control --epochs          # every one kept
     python duration_curve.py --dir <runs> --split val --epochs -1 --include-best                # each run's selected weights, on another split
 
-`--split` exists for a specific question (`TODO.md` A50 phase 2): FROG `official`'s val ranks the temporal ablations in almost
+`--split` exists for a specific question: FROG `official`'s val ranks the temporal ablations in almost
 the reverse order to its test, and val is three recordings sampled 2,000 frames at a time while test is one recording scored on
 every annotated frame. Scoring the same weights on every annotated *val* frame separates "the temporal path does not generalise"
 from "the single test recording is the outlier". `--epochs -1` matches no periodic checkpoint, so with `--include-best` it
