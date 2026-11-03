@@ -168,6 +168,30 @@ Platform and environment traps that have cost real debugging time.
   Check such a path has actually left its initialisation before reading any result as evidence for or against feedback.
 - **A NaN detection passes every distance gate, and can be scored as a true positive.**
   NumPy comparisons with NaN are False, so `cost > radius` rejects nothing and `_prec_rec_2d`'s `radius < distance` calls it in range. DROW's vote grid made such detections from tied maxima until 2026-09-15 (fixed in `votes_to_detections`, `tests/test_vote_decoding.py`); `SimpleTracker` filters them too. Anything new that matches detections should reject non-finite coordinates rather than trust the gate.
+- **A ROCm run's first optimizer step can take 230-370 s with no output at all, and it looks exactly like a hang.**
+  2026-11-01, Li2Former on ROCm: a `train.py` probe sat at `train: 0%| 0/27` for over ten minutes before the cause was
+  found, and the process was burning **0.98 cores of a single thread** the whole time -- kernel compilation, not a stall.
+  The cost is per **process** and per **batch shape**: batch 1 took 370 s and batch 2 another ~400 s in the same process.
+  So a shape change mid-run is another silent multi-minute gap, and anything judging liveness on a clock will call it dead.
+  Judge by the output file, and when in doubt measure the process's CPU rate -- a compiling process is pinned to ~1 core,
+  a hung one is at 0. PyTorch also prints `Flash/Mem Efficient attention on Current AMD GPU is still experimental`
+  (`TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` enables them), so attention runs the math path here: Li2Former's measured
+  **259 ms/frame at batch 1 and 285 at batch 2** is ~2% of this card's fp32 peak, and batching does not help it.
+- **tqdm's progress bar never reaches a redirected log unless Python is unbuffered.**
+  Python's stderr is line-buffered, and tqdm writes `\r` without a newline, so a bar redirected to a file stays in the
+  buffer: `2>&1 > log` gives a log frozen at `0%` while the job runs normally. Cost ten minutes of misdiagnosis on
+  2026-11-01, on top of the compile above. Pass **`-u`** (as `run_queue.spawn_process` already does) and read the log with
+  `tr '\r' '\n'`. A log without `-u` is not evidence of anything.
+- **PyPI's `torchvision` installs against this torch and then cannot load.**
+  `torchvision==0.24.1` from PyPI pairs with torch 2.9.1 by version but its compiled extension is built for CUDA, so the
+  import dies with `RuntimeError: operator torchvision::nms does not exist` -- after installing cleanly. AMD ships a
+  matching build at the same index as the torch wheel
+  (`repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl`), and that one
+  works. Install either with **`--no-deps`**, or pip may resolve torch itself and replace the ROCm build.
+  It is needed because Li2Former's own `matcher.py` imports `box_area` at module scope (item 31), not by anything of ours.
+- **`ruff check library/` never sees `takheliped/include/`, because ruff honours `.gitignore`.**
+  That is why the downloaded GPL-3.0 Li2Former sources lint clean in CI and report 7 findings when pointed at directly.
+  Convenient here -- those files must not be edited -- but it means a gitignored directory is unlinted, silently.
 - **`.venv` has no DirectML, on purpose.**
   `torch-directml==0.2.5.dev240914` pins torch 2.4.1 and cannot share a venv with AMD's ROCm build (torch 2.9.1), so the one environment carries ROCm and its GPU appears as `torch.cuda`; `detect_device()` picks it up as CUDA/ROCm.
   Its CPU path is ~10x slower than torch 2.4.1's on stage 3's small per-step operations (`CHANGELOG.md` 2026-09-14), so CPU is no fallback for recurrent training.

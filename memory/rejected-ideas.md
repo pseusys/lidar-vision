@@ -657,3 +657,29 @@ Rejected on design grounds, confirmed by measurement: a GRU or global self-atten
 
 **What would reopen it.**
 It would not reopen under the current research question; a project whose scope explicitly permitted recurrent or attention-based full-scan designs would need to restate the comparison from scratch, not resurrect these two classes as-is — both were deleted from `full_scan.py`.
+
+## Timing the authors' own Li2Former network under this project's CPU protocol
+
+*keywords: item 65, CPU latency, ms/frame, OfficialLi2FormerDetector, cpu_latency.py, speed table, 1675.24, parameter count*
+
+**Idea.** Time `OfficialLi2FormerDetector` the way every other detector is timed -- 2,000 consecutive scans, batch 1, four
+threads, against FROG's 25 ms period -- so the speed table's `Li2Former` row describes the published architecture instead of
+this project's smaller class. Filed 2026-11-03 as the last unmeasured cell for this detector, and dropped the same day unrun.
+
+**Why rejected (owner's call, 2026-11-03).** Not for the obvious reason, which does not hold on its own: latency is a
+property of the graph and the input shape, not of the weights, so the 28.3 pp accuracy gap does not by itself make a timing
+meaningless -- the reproduction items put that gap in the training, and measured the decode-and-score path at +0.1 pp. What
+does hold is that **there is no single "their time" to measure.** Their code builds **16.85 M parameters in the `PARALLEL`
+mode trained here and 29.47 M as their `__init__` builds it**, and reaching the paper's model at all took three stated
+departures from their `ros_li2former.yaml` (`MODE`, `add_bf=False`, `NUM_CTS: 720`), one of which switches off a stream they
+hardcode on. A CPU number would be the cost of *that* configuration, and the paper publishes no CPU figure to compare it
+against -- their 14.95 / 17.54 ms are GPU.
+
+**And the question it was filed to answer is already answered in prose.** `performance-log.md`'s speed table states that the
+`Li2FormerDetector` row is this project's class and that the published model is **slower than that row, not equal to it**,
+with training putting the authors' network at **~3.5x** our class's CPU cost per frame. The ordering is fixed; an hour of CPU
+would refine a number no decision depends on, for a detector that is not a deployment candidate.
+
+**What would reopen it.** A published CPU figure from the authors to compare against, or a decision that puts Li2Former on a
+robot. Either way, time it with **`cpu_latency.py --detectors`**, which is what times a detector; `tracking_baselines.py
+latency` takes a `--memory` checkpoint and times TAKHeLiPeD's three stages, and the dropped item named it by mistake.

@@ -33,7 +33,23 @@ python train_all.py --dataset frog --out-dir ../checkpoints                     
 python train.py --detector spacetime_cnn --dataset frog --resume ../checkpoints/spacetime_cnn.best.pth --epochs 40   # resume: runs 40 MORE epochs, not "up to 40 total"
 python train.py --detector spacetime_cnn --dataset frog --init-weights ../checkpoints/spacetime_cnn.best.pth --lr 1e-4   # fine-tune from another checkpoint's weights only (fresh optimiser/epoch count, unlike --resume)
 
+# Li2Former's OWN network (item 31). `--lr 1e-4` is required: the 1e-3 default kills their regression head in two epochs.
+# Batch 1 was forced by their BatchFormer attending across B x N_beams tokens; with it off (the omni-dimension modes cannot
+# run it) that constraint is gone and a larger batch may fit -- unmeasured, so batch 1 is kept for comparability.
+python train.py --detector li2former_official --dataset drow --batch-size 1 --epochs 12 --patience 15 --lr 1e-4 --no-frame-cache --out ../checkpoints_drow/li2former_official_parallel.pth
+python queue_li2former_drow.py --list                                                    # the DROW validation leg as a chain
+python queue_li2former_drow_resume.py --list                                            # the 12-epoch resume leg at lr 1e-4, arm A
+python queue_upstream_grid.py --list                                                    # their decoder and their metric, one pass per radius
+
+# Is their vote head alive? 8 beams, CPU, no dataset -- safe to run beside a training job.
+# Their terminal ReLU dies within two epochs; this is what proves it, and what arm B has to disprove.
+.venv/Scripts/python.exe -I utils/diagnose_vote_head.py                                   # fresh weights
+.venv/Scripts/python.exe -I utils/diagnose_vote_head.py checkpoints_drow/li2former_official.best.pth
 ```
+
+**The first optimizer step of any ROCm run takes 230-370 s of kernel compilation and prints nothing** -- per process and per
+batch shape, so a shape change is another silent gap. Read a training log with `tr '\r' '\n'`, and only `-u` runs put tqdm's
+bar in a redirected log at all (`gotchas.md`).
 
 **TAKHeLiPeD**, the three-horizon detector (`TODO.md` A43, A51), trains with its own script, because it streams recordings rather than sampling frames:
 
@@ -210,7 +226,21 @@ which is how item 16's wrong `gru_cpu` row (23.87 ms against a true 20.57) was p
 It is **stored in the checkpoint**, so `evaluate.py` defaults to the partition the weights were trained under and refuses to score two differently-partitioned checkpoints in one pass.
 `transferred` shares `official`'s train and val exactly, so one checkpoint serves both; `balanced` does not, and its val contains a recording the published baselines trained on.
 
-`--detector` choices: `algorithmic` (eval only, not trainable), `spacetime_cnn`, `li2former`.
+`--detector` choices: `algorithmic` (eval only, not trainable), `spacetime_cnn`, `li2former`, `li2former_official`.
+**`li2former` and `li2former_official` are different architectures, and only the second one's numbers may go in a Li2Former
+row**: the first is this project's reading of the paper's prose (4.70 M parameters), the second wraps the authors' released
+network (16.85 M as trained here, 29.47 M as their `__init__` builds it), downloaded into the gitignored `include/` tree by
+`library/setup.py` and never vendored because it is GPL-3.0 (`detector-architectures.md`, `TODO.md` item 31).
+`li2former_official` takes no `--dropout` or `--time-frame`: it is built from their configuration, with **three stated
+departures from their `ros_li2former.yaml`, all required to reach the paper's model** -- `MODE: PARALLEL` instead of their
+deployment setting `TEMPORAL` (which never calls the spatial encoder, leaving 22.07 M parameters without a gradient),
+`add_bf=False`, because their `SERIAL`/`PARALLEL` branches cannot run the auxiliary stream they hardcode on, and
+**`NUM_CTS: 720` instead of their robot's 90**, which is the cap on their position encoding and so on the number of beams
+a scan may have: DROW has 450, JRDB 541, FROG 720, and under 90 the omni-dimension modes die on the first batch with
+`The size of tensor a (450) must match the size of tensor b (90)`. It changes no parameter -- the encoding is a buffer,
+closed-form in the position -- and `ConvBackbone` ignores the value entirely.
+**It needs `--lr 1e-4`**, not `train.py`'s `1e-3` default: that default is tuned for this repo's small CNNs and killed the
+regression head in two epochs on a 29.5 M pre-LN transformer.
 (`fullscan_tcn` and `temporal_unet` were retired on 2026-10-31, `TODO.md` item 32; their code last existed at commit `98b0716`.)
 `--dataset {drow,frog,jrdb}`, `--dtime N` (temporal stride — **also stored in the checkpoint**, so `evaluate.py` picks it up automatically), `--no-align-scans` (disable odometry-based rotation correction), `--no-frame-cache` (trade time for ~2.6 GB less RAM on FROG's full train split).
 
@@ -230,12 +260,14 @@ python evaluate.py --dataset frog --lfe-peaks --lfe-ppn                         
 python evaluate.py --dataset frog --split test --spacetime-cnn ../checkpoints/spacetime_cnn.best.pth --bench   # --eval-dtime now defaults to the checkpoint's own value
 python evaluate.py --dataset drow --verify --no-bench                                # dataset FoV/annotation sanity stats only, no models
 python evaluate.py --bench --no-eval --n-beams 720 --time-frame 5                     # synthetic-data speed benchmark, no dataset needed
+python evaluate.py --dataset drow --split test --eval-r 0.5 --upstream-grid --no-bench --li2former-official ../checkpoints_drow/li2former_official_parallel_resumed.best.pth
 ```
 
 `--eval-zero-history` blanks every frame of the temporal window but the current one, at eval time only — the one-pass measurement of whether a trained model actually uses its history (`TODO.md` A21). `train.py --zero-history` is the matching train-time ablation.
 
 `--eval-batch-size N` (verified numerically equivalent to `batch_size=1`, much faster) and `--eval-stride N` (systematic frame subsample — see `interpreting-evaluation.md` before trusting a strided FROG number) both cut a full-test-split run from hours to minutes.
-`evaluate.py` flags mirror the detector registry: `--drow [WEIGHTS]`, `--drspaam [WEIGHTS]`, `--spacetime-cnn WEIGHTS`, `--fullscan-tcn WEIGHTS`, `--temporal-unet WEIGHTS`, `--li2former WEIGHTS`, `--lfe-peaks [WEIGHTS]`, `--lfe-ppn [WEIGHTS]` (omit `WEIGHTS` to use bundled/published weights where available).
+`evaluate.py` flags mirror the detector registry: `--drow [WEIGHTS]`, `--drspaam [WEIGHTS]`, `--spacetime-cnn WEIGHTS`, `--fullscan-tcn WEIGHTS`, `--temporal-unet WEIGHTS`, `--li2former WEIGHTS`, `--li2former-official WEIGHTS`, `--lfe-peaks [WEIGHTS]`, `--lfe-ppn [WEIGHTS]` (omit `WEIGHTS` to use bundled/published weights where available).
+`--upstream-grid` runs inference **once** and scores that one pass four ways -- our decoder and Li2Former's, crossed with our wp-AUC and their `calPrecisionRecall` AP -- so a difference between the cells lands on a named half of the measurement rather than on "the harness". It needs the upstream tree in `include/`, costs one CPU pass per radius (~2 h on DROW test), and its baseline cell reproduces `--eval-r`'s own number to 1e-9. The 2026-11-03 answer: the whole decode-and-score path is worth **+0.1 pp at `d = 0.5` and +0.5 pp at `d = 0.3`** (`performance-log.md`).
 Run `python evaluate.py --help` for the full, current flag list.
 
 ## Rendering
@@ -303,10 +335,11 @@ Methodology, citations and the current grid: `informational-capacity-proxy.md`.
 ## Checks
 
 ```bash
-.venv/Scripts/python.exe -m pytest tests -q               # 533 tests, ~60s, CPU-only, no GPU or dataset needed — run after every edit
+.venv/Scripts/python.exe -m pytest tests -q               # 1,218 tests, ~105 s, CPU-only, no GPU or dataset needed — run after every edit
 python memory/scripts/machine_is_free.py && python -m pytest tests -q   # the guard first: the suite has killed two live training runs
 python memory/scripts/verify_memory.py                    # docs: links, indexes, markdown rules
 python memory/scripts/verify_memory.py --strict            # same, but style warnings fail the run too
+.venv/Scripts/python.exe -I utils/check_upstream_convention.py   # their decoder against real DROW frames and oracle votes, not synthetic ones (rule 4)
 ```
 
 There is no typecheck/parse step faster than the test suite itself — a minute already is the cheap check here.

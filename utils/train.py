@@ -208,7 +208,7 @@ def _make_optimizer(params, lr: float, weight_decay: float,
 from takheliped.detectors import (
     DrowDetector, DrSpaamDetector,
     SpaceTimeCNNDetector,
-    Li2FormerDetector,
+    Li2FormerDetector, OfficialLi2FormerDetector,
 )
 from takheliped.utils.drow_utils import (
     laser_angles, laser_minimum, laser_maximum, laser_increment,
@@ -307,6 +307,10 @@ def _build_model(args):
         return DrSpaamDetector(dropout=dr, num_scans=tf)
     if det == "li2former":
         return Li2FormerDetector(dropout=dr, num_scans=tf)
+    if det == "li2former_official":
+        # No hyperparameters: it is built from the authors' published configuration verbatim, and
+        # --dropout/--time-frame would silently make it a different model (TODO.md item 31).
+        return OfficialLi2FormerDetector()
     hd  = getattr(args, "head", "drow")
     if det == "spacetime_cnn":
         return SpaceTimeCNNDetector(n_time=tf, channels=ch,
@@ -512,6 +516,28 @@ def compute_heatmap_loss(heatmap_pred: torch.Tensor,
         heatmap_pred, heatmap_target,
         pos_weight=torch.tensor([pw.item()], device=heatmap_pred.device),
     )
+
+
+def build_cutout(input_mode: str, scans_hist, odoms_hist, n_beams: int, angles,
+                 nsamp: int = DrowDetector.N_SAMP, win_sz: float = 1.66,
+                 thresh_dist: float = 1, laser_inc: float = laser_increment):
+    """The cutout the detector asked for, by input mode.
+
+    Two windows exist in this repository and they are not interchangeable: DROW's `cutout()`
+    (1.66 m wide, 1.0 m deep, odometry-rotation corrected, linear interpolation) and **Li2Former's
+    own** `scans2cutout` (1.0 m / 0.5 m, area-sampled when the window holds more beams than
+    samples, no odometry at all). Feeding either network the other's window measures neither model,
+    which is why the port carries their preprocessing too -- `TODO.md` item 31.
+
+    Their package is imported here rather than at module scope because `library/setup.py` downloads
+    it into the gitignored `include/` tree instead of vendoring it (it is GPL-3.0, this is MIT).
+    """
+    if input_mode == "cutout_li2former":
+        from takheliped.detectors.li2former_official import LI2FORMER_CUTOUT_KWARGS
+        from takheliped.include.li2former_upstream.utils.scan_utils import scans2cutout
+        return scans2cutout(scans_hist, angles, **LI2FORMER_CUTOUT_KWARGS)
+    return cutout(scans_hist, odoms_hist, n_beams, win_sz=win_sz,
+                  thresh_dist=thresh_dist, nsamp=nsamp, laserIncrement=laser_inc)
 
 
 def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
@@ -725,9 +751,9 @@ def _extract_input(net, scan, scans_hist, odoms_hist, angles, cfg, device,
         nsamp       = getattr(net, "N_SAMP", DrowDetector.N_SAMP)
         win_sz      = getattr(net, "WIN_SZ", 1.66)
         thresh_dist = getattr(net, "THRESH_DIST", 1)
-        cut = cutout(scans_hist, odoms_hist, len(scan),
-                     win_sz=win_sz, thresh_dist=thresh_dist,
-                     nsamp=nsamp, laserIncrement=cfg.laser_inc)
+        cut = build_cutout(getattr(net, "INPUT_MODE", "cutout"), scans_hist, odoms_hist,
+                           len(scan), angles, nsamp=nsamp, win_sz=win_sz,
+                           thresh_dist=thresh_dist, laser_inc=cfg.laser_inc)
         return torch.from_numpy(cut).to(device)                   # (N_beams, T, N_SAMP)
 
 
@@ -898,9 +924,9 @@ class LidarFrameDataset(Dataset):
             x = torch.from_numpy(
                 np.asarray(arr, dtype=np.float32).transpose(1, 0, 2))  # (N,T,1)
         else:
-            arr = cutout(scans_hist, odoms_hist, len(scan),
-                         nsamp=self._nsamp,
-                         laserIncrement=self._cfg.laser_inc)
+            arr = build_cutout(self._input_mode, scans_hist, odoms_hist, len(scan),
+                               self._angles, nsamp=self._nsamp,
+                               laser_inc=self._cfg.laser_inc)
             x = torch.from_numpy(np.asarray(arr, dtype=np.float32))    # (N,T,S)
         result = (x, torch.from_numpy(labels), torch.from_numpy(vote_targets))
         if self._head == "heatmap":
@@ -968,10 +994,14 @@ def train_epoch(net, frame_ds: LidarFrameDataset, optimizer,
             loss       = compute_heatmap_loss(heatmap.squeeze(-1), hm_flat)
             lc, lv     = loss.item(), 0.0
         else:
-            l_flat         = labels.reshape(B * N).to(device)
-            v_flat         = votes.reshape(B * N, 2).to(device)
             logits, vpred  = net(x_in)
-            loss, lc, lv   = compute_loss(logits, vpred, l_flat, v_flat, vote_weight)
+            if getattr(net, "criterion", None) is not None:
+                loss, lc, lv = upstream_criterion_loss(
+                    net, logits, vpred, labels.to(device), votes.to(device))
+            else:
+                l_flat       = labels.reshape(B * N).to(device)
+                v_flat       = votes.reshape(B * N, 2).to(device)
+                loss, lc, lv = compute_loss(logits, vpred, l_flat, v_flat, vote_weight)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
@@ -988,6 +1018,34 @@ def train_epoch(net, frame_ds: LidarFrameDataset, optimizer,
 # ---------------------------------------------------------------------------
 # Evaluation
 # ---------------------------------------------------------------------------
+
+def upstream_criterion_loss(net, logits: torch.Tensor, votes: torch.Tensor,
+                            labels: torch.Tensor, vote_targets: torch.Tensor):
+    """Li2Former's own loss, for the detector that brings one.
+
+    Kept rather than replaced by `compute_loss` because the **adaptive focus mechanism** in their
+    regression term is the difference between the paper's 76.4% and its 74.8%, so scoring their
+    network under our loss would not reproduce their result.
+
+    `labels` is (B, N) in this repository's 0=bg / 1=wc / 2=wa / 3=wp coding and `vote_targets` is
+    (B, N, 2); their criterion wants a binary (B, N) target, and the detector says which class counts
+    -- `POSITIVE_CLASS`, the person class, because the published DROW figures in this lineage come
+    from `pedestrian_only=True` weights. That is *not* `compute_loss`'s binary rule, which counts any
+    non-background beam; the two differ on DROW's wheelchairs and walkers and agree on FROG. While
+    training, their BatchFormer concatenates a batch-attended copy of the encoder output, so the
+    batch doubles and the targets have to be duplicated to match -- their own `run()` does this.
+    """
+    target_cls, target_reg = (labels == net.POSITIVE_CLASS).float(), vote_targets
+    if net.duplicates_targets_in_training and net.training:
+        target_cls = torch.cat([target_cls, target_cls], dim=0)
+        target_reg = torch.cat([target_reg, target_reg], dim=0)
+
+    losses = net.criterion({"pred_cls": logits, "pred_reg": votes},
+                           {"target_cls": target_cls, "target_reg": target_reg})
+    weights = net.criterion.loss_weight
+    total = sum(losses[name] * weights[name] for name in losses if name in weights)
+    return total, float(losses["loss_labels"]), float(losses["loss_reg"])
+
 
 def _bounded(frame_ds, max_frames: int):
     """An evenly-strided view of at most *max_frames* frames, or the dataset
@@ -1033,10 +1091,14 @@ def evaluate_loss(net, frame_ds: LidarFrameDataset, vote_weight: float,
                 loss       = compute_heatmap_loss(heatmap.squeeze(-1), hm_flat)
                 lc, lv     = loss.item(), 0.0
             else:
-                l_flat         = labels.reshape(B * N).to(device)
-                v_flat         = votes.reshape(B * N, 2).to(device)
                 logits, vpred  = net(x_in)
-                loss, lc, lv   = compute_loss(logits, vpred, l_flat, v_flat, vote_weight)
+                if getattr(net, "criterion", None) is not None:
+                    loss, lc, lv = upstream_criterion_loss(
+                        net, logits, vpred, labels.to(device), votes.to(device))
+                else:
+                    l_flat       = labels.reshape(B * N).to(device)
+                    v_flat       = votes.reshape(B * N, 2).to(device)
+                    loss, lc, lv = compute_loss(logits, vpred, l_flat, v_flat, vote_weight)
             total_loss += loss.item()
             class_loss += lc
             vote_loss  += lv
@@ -1071,6 +1133,7 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
                  local_normalize_window: int = 0,
                  return_curves: bool = False, tracker_kwargs: dict = None,
                  max_frames: int = 0, return_detections: bool = False,
+                 return_raw: bool = False,
                  stream: bool = False):
     """
     Run full inference on every annotated frame and compute per-class AUC.
@@ -1092,6 +1155,12 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
     evaluated. It exists so the false-positive rate on a person-free split
     (TODO.md A31) counts exactly the detections this function would have
     scored, rather than a second decoder written for that metric alone.
+
+    `return_raw` additionally returns the per-beam confidences, votes and scans this function decoded, with
+    the ground truth and frame pairs beside them, so a *different* decoder or metric can be run over exactly
+    the outputs this one scored. That is what makes `TODO.md` item 64's 2x2 readable: its baseline cell has to
+    be this function's own answer, not a re-implementation that might differ by a rounding step. It is `None`
+    for a heatmap head, which has no votes to hand over.
 
     `stream` plays every scan of each sequence in order through the detector's
     own `stream()` method, carrying its state and dropping it at sequence
@@ -1243,6 +1312,7 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
     # ------------------------------------------------------------------ #
     # Decode raw model outputs -> (det_x, det_y, det_p, det_f)            #
     # ------------------------------------------------------------------ #
+    raw_bundle = None
     if _head_type == "heatmap":
         from scipy.signal import find_peaks
         det_x_l, det_y_l, det_p_l, det_f_l = [], [], [], []
@@ -1266,6 +1336,17 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
             det_p[:, 3] = det_p_l
         del det_x_l, det_y_l, det_p_l, det_f_l
     else:
+        if return_raw:
+            # Captured before the del below, which exists to keep peak memory down. Holding these costs
+            # ~30 MB on DROW test and is only paid when a caller asks (TODO.md item 64).
+            raw_bundle = {
+                "scans":  [np.asarray(s, dtype=np.float32) for s in all_scans_for_pr],
+                "votes":  [np.asarray(v, dtype=np.float32) for v in all_votes_raw],
+                "confs":  [np.asarray(c, dtype=np.float32) for c in all_confs],
+                "angles": np.asarray(_angles, dtype=np.float32),
+                "wcs": list(all_wcs), "was": list(all_was), "wps": list(all_wps),
+                "pairs": list(all_pairs),
+            }
         all_x_votes, all_y_votes = [], []
         for scan, vots in zip(all_scans_for_pr, all_votes_raw):
             r_new, phi_new = _win2global(
@@ -1350,6 +1431,8 @@ def evaluate_auc(net, dataset, cfg, eval_r: float = 0.5,
             "n_frames": len(all_pairs),
             "pairs":    list(all_pairs),
         }
+    if return_raw:
+        result["raw"] = raw_bundle
     return result
 
 
@@ -1968,6 +2051,7 @@ def main():
     _TRAINABLE = [
         "algorithmic",
         "li2former",
+        "li2former_official",
         "spacetime_cnn",
     ]
     parser.add_argument(

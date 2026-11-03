@@ -34,7 +34,7 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 | LFE-PPN | published | gap¹ | 69.2% *(ours 69.6%)* | gap¹ |
 | DROW3 | published | 61.9% | 73.9% | 82.9% *(official repo README, merged 1091-point 360° scans)* |
 | DR-SPAAM | published | 69.6% *(RA-L'22: 72%+)* | **75.6%** *(`T=5`)* / 73.7% *(`T=1`)* | 84.9% *(official repo README, merged 1091-point 360° scans)* |
-| Li2Former | published | 76.4% | gap² | 81.4% |
+| Li2Former | published | 76.4% *(Li2Former-A, `T=5`; 74.8% without the AFM; 72.5% at `d=0.3`)* | gap² | 81.4% |
 | **SpaceTimeCNN** | ours, superseded | not measured | **63.0%**³ | n/a |
 | **FullScanTCN**, **TemporalUNet** | ours, **retired 2026-10-31** | not measured | not measured | n/a |
 | **TAKHeLiPeD, stages 1-2** (calibration network) | ours, novel | gap | **82.8%**¹² *(superseded recipe 82.2%⁹; old recipe 77.7%⁴)* | n/a |
@@ -95,7 +95,7 @@ It is a classical reference point, not a baseline taken from any of the papers c
 ¹ The LFE paper only ever evaluates on FROG's 720-beam scans.
 This project *has* run LFE cross-dataset by zero-padding shorter scans to 720 (DROW: 24.0% / 11.7%), but that padding is our own invention, is not described in the paper, and does not resample to FROG's 0.25°/beam angular resolution — beam index stops meaning the same physical angle.
 Degraded by construction, so it is recorded here as a footnote rather than reported as a result.
-² Li2Former was never evaluated on FROG by its authors, and training it here has never completed (DirectML crashes, impractical CPU-only speed — `gotchas.md` I4).
+² Li2Former was never evaluated on FROG by its authors. **The rest of this footnote was wrong and is corrected (2026-11-01, item 31).** Training does complete here: `AGENTS.md` I4's DirectML premise predates this host having ROCm, and on ROCm it trains at 2.09 GiB and 259 ms/frame. What blocks the cell is not the hardware but the model -- `Li2FormerDetector` is **this project's reading of the paper's prose, not the paper's architecture**, so a number from it would not be Li2Former's. The authors do publish code (`ai-winter/Li2Former-v1`, GPL-3.0, **no weights and no training recipe**), and `OfficialLi2FormerDetector` now wraps it; the cell stays `gap` until that port reproduces their DROW figure, which is the only check available without weights to match. **It does not reproduce it, and that is now measured (2026-11-03, items 31 and 64): 48.1% on DROW test at `d = 0.5` and 40.5% at `d = 0.3`, against their 76.4% and 72.5%** -- see the reproduction section below for the four-cell check that rules the harness out of the gap. So the FROG cell stays `gap`, now for a stated reason rather than a pending one: a FROG number from a port that misses their own DROW figure by 28 pp would not be Li2Former's either, and filling the cell would need a recipe that reproduces DROW first.
 ³ **63.0%** single-frame, the figure A35's acceptance criteria were written against and `docs/PAPER.md` argues from (2026-09-10's history ablation). These three are the project's own first line of work, superseded by TAKHeLiPeD and trained on nothing since 2026-09; `TODO.md` item 32 keeps `SpaceTimeCNN` so the decisions made on it stay reproducible and removes the other two. The `T=5, dtime=10` re-measurement this footnote used to promise was never run and is not planned: a temporal window is not what the project proposes any more.
 ⁴ `TODO.md` A51's backbone, measured 2026-09-19 over the whole FROG `official` test split: **77.66%**, the no-temporal stage 2 (seed 0) whose decoded candidates the object memory in the row below rescores, at 2.620 false positives per frame and 88.8% recall at the 0.3 operating point.
 That backbone's own three-seed mean is **77.23%**; the default architecture, which kept the coarse temporal convolution (removed 2026-10-08, `TODO.md` A60), means **77.92%** over three seeds. The pooled per-run spread across five three-seed arms is ~0.95 pp (`interpreting-evaluation.md`), so those two are a tie, not a ranking.
@@ -176,6 +176,57 @@ Against the correct `d = 0.5 m` column, on the genuine `frog_16-41` test recordi
 That signature is **mislocalisation**: the detections land near enough to pass a 0.5 m gate and too far to pass a 0.3 m one.
 It points at the anchor-decode geometry calibrated on 2026-09-10, whose angular convention was explicitly recorded as weakly identified *because AP@0.5 could not distinguish it*. AP@0.3 can, and does.
 **Use `--eval-r 0.3` as the discriminator when calibrating anything positional.**
+
+### Li2Former on DROW: the one reproduction that did not land, and what it is not caused by
+
+**2026-11-03, `TODO.md` items 31 and 64.** Their own network, trained here because no weights exist to score, against
+their published pair:
+
+| matching radius | their network, trained here | theirs, published | delta |
+| --- | --- | --- | --- |
+| `d = 0.5` | **48.1%** wp-AUC | 76.4% AP | **-28.3 pp** |
+| `d = 0.3` | **40.5%** | 72.5% | **-32.0 pp** |
+
+It is an undershoot, so the overshoot rule above does not fire -- but 28 pp is far outside anything a wrapper detail
+explains, so the harness was tested instead of assumed innocent. **Item 64 crossed their decoder and their metric with
+ours, all four combinations over one inference pass** (`evaluate.py --upstream-grid`, whole DROW test split, 2,428 frames,
+epoch 8's checkpoint; the baseline cell equals `evaluate_auc`'s own answer to 1e-9 by construction, and matched the
+`Person (wp)` line of its own run exactly in both passes):
+
+| decoder / metric | `d = 0.5` | `d = 0.3` |
+| --- | --- | --- |
+| ours / ours (the rows above) | **48.1%** | **40.5%** |
+| theirs / ours | 48.2% | 41.0% |
+| ours / theirs | 48.1% | 40.5% |
+| theirs / theirs (their protocol end to end) | **48.2%** | **41.0%** |
+
+**The whole decode-and-score path is worth +0.1 pp at `d = 0.5` and +0.5 pp at `d = 0.3`** -- 0.4% and 1.6% of the
+respective gaps. Their metric is worth 0.0 pp at either radius; their decoder is worth all of the difference, and more at
+the tighter one, which is what per-beam placement should buy over a blurred vote grid. **So the undershoot is in the
+weights and the training, not in the measurement**, and adopting their decoder and metric wholesale -- proposed 2026-11-01,
+~4 h, CPU-only -- is a protocol-comparability decision rather than an accuracy one.
+
+**Why the training stopped where it did.** Twelve epochs at batch 1 and `lr 1e-4`; **epoch 8 is the best checkpoint, at
+32.9% val wp-AUC**, and epochs 10-12 scored 0.0% because their regression objective has an **escape basin** past 0.70 m of
+vote error, where its gradient reverses sign (the mechanism is in [`../docs/RESEARCH.md`](../docs/RESEARCH.md) section
+3.3.1). So this row is the arm at its best rather than a collapsed head -- and it is **one arm of one recipe**, not a
+demonstration that their figure is unreachable. Their code was left exactly as released.
+
+Three by-products worth keeping:
+
+- **Their AP and this project's `wp-AUC` agree to within 0.1 pp at split scale** on identical detections. That is the
+  strongest check this file has that the two are the same quantity -- stronger than the DR-SPAAM source comparison above,
+  because it is measured rather than read off the source. The quirks in their implementation are real and small: their AP
+  has no anchor at recall 0, so `n` perfect detections score `1 - 1/n`, and it is blind to false positives arriving after
+  recall saturates. Both matter on a handful of frames and not on a split.
+- **The `d = 0.5` to `d = 0.3` drop is 7.6 pp, -15.8% relative, against their published pair's -5.1%.** Our localisation
+  degrades about three times faster than theirs, which is the one shape in this comparison that is not explained by the
+  training budget.
+- **The val-test split gap is 15.2 pp** (32.9% val against 48.1% test), larger than any epoch-to-epoch move in the whole
+  run -- DROW's val split is harder than its test split, so a val-side conclusion must not be quoted as a test-side one.
+
+Their metric also reports **peak F1 52.5% and EER 52.3%** at `d = 0.5` (48.9% and 48.5% at `d = 0.3`), which are the first
+such figures for any detector in this project and have no published counterpart: their paper quotes AP alone.
 
 ## Why stage 2 beats LFE and DR-SPAAM: what it is *not*
 
@@ -495,9 +546,14 @@ still has both the better median and the better tail.
 
 **The cutout detectors are 13x to 70x over budget, and that is structural rather than an implementation failing.** They run one
 forward pass **per beam**: at FROG's 720 beams that is **3,600 cutouts per frame** for DROW3 at its `T=5`, **7,200** for
-DR-SPAAM at the `T=10` its released config specifies, and 3,600 for Li2Former. The formulation is what costs, not the code —
-and comparing DROW3 with Li2Former isolates it, since both encode the same 3,600 cutouts and Li2Former is **5.2x** slower for
-putting a transformer behind them. **Building the cutouts is itself 17-22x the cost of building a raw scan** (2.25-2.86 ms
+DR-SPAAM at the `T=10` its released config specifies, and 3,600 for `Li2FormerDetector`. The formulation is what costs, not the code —
+and comparing DROW3 with it isolates that, since both encode the same 3,600 cutouts and the transformer behind them costs
+**5.2x**. **Read that row as this project's class and not as Li2Former** (2026-11-01, item 31): `Li2FormerDetector` has one
+temporal encoder layer and no cross-beam path, where the paper cascades omni-dimension aggregation blocks, so the published
+model is **slower than this row, not equal to it**. The authors' own network is `OfficialLi2FormerDetector` and **will not be
+timed here**: their code builds 16.85 M parameters in the mode trained here and 29.47 M as their `__init__` builds it, so there
+is no single "their time" to measure (dropped 2026-11-03, `rejected-ideas.md`). At batch 1 in training it is ~3.5x our class's
+CPU cost per frame, which fixes the ordering without a number. **Building the cutouts is itself 17-22x the cost of building a raw scan** (2.25-2.86 ms
 against 0.13), before a single multiply of the network. This is the table's most important lesson and the reason this project's
 detector reads whole scans.
 

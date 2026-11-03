@@ -38,6 +38,326 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 64 closed: their decoder and their metric are worth 0.1-0.5 pp, so the gap is the training (2026-11-03)
+
+*keywords: item 64, item 31, lidar_item64, queue_upstream_grid.py, grid_r05, grid_r03, upstream_scoring.py, score_grid, decode_ours, decode_theirs, --upstream-grid, _print_upstream_grid, return_raw, nms_detections, upstream_ap, calPrecisionRecall, peak F1, EER, 48.1%, 48.2%, 40.5%, 41.0%, 76.4%, 72.5%, 28.3 pp, +0.1 pp, +0.5 pp, strided slice wrong by 17x, eval-stride 60, harness self-test, escape basin, epoch 8, li2former_official_parallel_resumed.best.pth, 1218 tests, RESEARCH.md 3.3.1*
+
+**The 2x2 ran at full resolution on both of their published radii, and the whole decode-and-score path is worth
++0.1 pp.** Chain `lidar_item64` (gate 23:04:03-23:05:41, `grid_r05` 23:05:41-01:02:39, `grid_r03`
+01:02:39-03:00:13, all exit 0), one inference pass per radius over the whole DROW test split (2,428 frames) with
+epoch 8's checkpoint, scored four ways:
+
+| decoder / metric | `d = 0.5` | `d = 0.3` | detections |
+| --- | --- | --- | --- |
+| ours / ours -- what `drow_eval` reported | **48.1%** wp-AUC | **40.5%** | 48,549 |
+| theirs / ours | 48.2% | 41.0% | 96,456 |
+| ours / theirs | 48.1% AP | 40.5% | 48,549 |
+| theirs / theirs -- their protocol end to end | **48.2%** AP | **41.0%** | 96,456 |
+
+Their published pair is **76.4% AP@0.5 and 72.5% AP@0.3**, so the gaps are **28.3 pp** and **32.0 pp** and the
+measurement explains **0.4%** and **1.6%** of them. Their metric is worth 0.0 pp at either radius; their decoder
+is worth all of the difference and more at the tighter radius, which is what per-beam placement should buy over a
+blurred vote grid. **So the gap is in the weights and the training, not in how the output is read** -- and the
+standing proposal to adopt their decoder and their metric wholesale (2026-11-01, ~4 h, CPU-only) now has a price
+tag: it is a protocol-comparability decision, not an accuracy one. Their metric also reports **peak F1 52.5% /
+EER 52.3%** at `d = 0.5` and **48.9% / 48.5%** at `d = 0.3`, the first such figures for any detector here and
+with no published counterpart, since their paper quotes AP alone.
+
+**Two by-products of the same table.** (1) **Their AP and this project's `wp-AUC` agree to within 0.1 pp at split
+scale** on identical detections -- the strongest check this project has that the two are the same quantity,
+stronger than the DR-SPAAM source comparison, because it is measured rather than read off the source. Their
+implementation's quirks (no anchor at recall 0, blind to false positives arriving after recall saturates) are
+real and matter on a handful of frames, not on a split. (2) Cell 1 equalled the `Person (wp)` line of its own run
+exactly in both passes, which is the guarantee `tests/test_upstream_grid_wiring.py` pins to 1e-9 and the only
+reason the other three cells can be read against it.
+
+**A correction to the entry below, and it is the lesson of the item.** That entry quotes a strided smoke run at
+**+1.7 pp**; the real figure is **+0.1 pp**. A 41-frame slice (`--eval-stride 60`) got the *difference* between
+cells wrong by a factor of 17, in the direction that flattered the item, while its *absolute* cells looked
+entirely reasonable (44.2% against the split's 48.1%) and so gave no warning. The arithmetic says to expect it: a
+difference between two strided numbers carries roughly the noise of each. Recorded in
+`memory/interpreting-evaluation.md` -- a strided run is a smoke test of the plumbing, never a preview of the
+comparison.
+
+**The resume leg's curve, moved here from `TODO.md` section A as the item closes** (12 epochs, batch 1,
+`lr 1e-4`, 16:03:10 for the 11 resumed epochs at 87.6 min each; `train vote` is 3/4 of the total loss by their
+`LOSS_WEIGHT`):
+
+| epoch | train_loss | train class | **train vote** | val_loss | val class | **val vote** | **val wp-AUC** | train wp-AUC | gap | patience |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1/12 (paused leg) | 0.8160 | 0.2712 | **0.1816** | 0.6784 | 0.2554 | **0.1410** | **31.3%** | 45.2% | +13.9% | -- |
+| 2/12 | 0.8018 | 0.2570 | **0.1816** | 0.6855 | 0.2620 | **0.1412** | **27.5%** | 44.8% | +17.3% | 1/15 |
+| 3/12 | 0.7938 | 0.2585 | **0.1784** | 0.6872 | 0.2627 | **0.1415** | **23.6%** | 33.2% | +9.6% | 2/15 |
+| 4/12 | 0.7829 | 0.2600 | **0.1743** | 0.7013 | 0.2647 | **0.1455** | **25.3%** | 44.7% | +19.4% | 3/15 |
+| 5/12 | 0.7607 | 0.2582 | **0.1675** | 0.6511 | 0.2590 | **0.1307** | **24.3%** | 39.6% | +15.3% | 4/15 |
+| 6/12 | **0.7274** | 0.2563 | **0.1570** | **0.6494** | 0.2610 | **0.1295** | **23.4%** | 38.5% | +15.1% | 5/15 |
+| 7/12 | 0.7179 | 0.2547 | **0.1544** | 0.6521 | 0.2615 | **0.1302** | **24.5%** | 44.8% | +20.3% | 6/15 |
+| **8/12** | 0.7116 | **0.2530** | **0.1529** | **0.6338** | 0.2563 | **0.1258** | **32.3%** | **51.4%** | +19.1% | *reset* |
+| 9/12 | 0.7065 | **0.2515** | **0.1517** | 0.6415 | 0.2668 | **0.1249** | **25.8%** | 44.9% | +19.1% | 1/15 |
+| **10/12** | *0.4753* | 0.2558 | ***0.0732*** | *0.2621* | 0.2621 | ***0.0000*** | ***0.0%*** | ***0.0%*** | +0.0% | 2/15 |
+| 11/12 | *0.2461* | 0.2461 | ***0.0000*** | *0.2533* | 0.2533 | ***0.0000*** | ***0.0%*** | ***0.0%*** | +0.0% | 3/15 |
+| 12/12 | *0.2432* | 0.2432 | ***0.0000*** | *0.2544* | 0.2544 | ***0.0000*** | ***0.0%*** | ***0.0%*** | +0.0% | 4/15 |
+
+Epoch 8 is the answer: **32.9% wp-AUC on full DROW val** (3,919 frames), **48.1% on test**. The 15.2 pp
+val-test split gap is larger than any epoch-to-epoch move in the run, so a val-side reading of this arm is not a
+test-side one. The `d = 0.5` to `d = 0.3` drop is **7.6 pp, -15.8% relative**, against their published pair's
+-5.1%: our localisation degrades about three times faster, the one shape in this comparison a training budget
+does not explain. Epochs 10-12 are the escape basin in their `lossReg`, not a bug to fix -- mechanism in
+`docs/RESEARCH.md` section 3.3.1 and the entry below.
+
+**Tested:** 1,218 pass, `ruff` clean on `utils library tests`. Both grid passes exited 0 with no warning,
+on a checkpoint written before the collapse. **One of the new tests was flaky, and only a re-run showed it.**
+The wiring module scores an *untrained* network, and the borrowed `eer()` raises rather than returning zero on
+a split where no detection ever matched an annotation (`np.where(precs != 0)[0][0]`) -- which is what an
+unseeded random network produces most of the time, so the module was passing on the draw. The weights are now
+seeded and three consecutive runs pass; their code is untouched, since the defect to work around is theirs and
+the luck was ours.
+
+**Documentation landed with the result, not after it:** `docs/RESEARCH.md` gains section 3.3.1 (their released
+code, their `MODE`, the clamp and the escape basin -- mechanism, since results do not live there) and its
+table-of-ports row and "no published weights" bullet are corrected; `memory/performance-log.md` gains the
+reproduction section with both tables and footnote 2 gains the outcome, so the FROG cell now stays `gap` for a
+stated reason; `memory/detector-architectures.md` corrects the arm A / arm B framing, because arm A *does* train
+at `lr 1e-4` and arm B no longer "could reproduce their figure" -- it unpins `dx` and does nothing about the
+basin; `memory/interpreting-evaluation.md` gains the strided-delta lesson; `memory/dos-and-donts.md` gains the
+mutation-testing rule; `memory/commands.md` gains `--upstream-grid`, both chains and the convention check, and
+loses a command that never existed (`queue_item31b.py`, planned on 2026-11-01 and superseded by the grid);
+`memory/keywords.md` routes both.
+
+**Status:** items 31 and 64 are closed and their `TODO.md` rows are deleted, per that file's rule 4b. The one
+piece of work they left over -- timing the authors' network under the CPU protocol -- was filed as a row and
+**dropped the same day on the owner's call**, with the reason in `memory/rejected-ideas.md`: their code builds
+16.85 M parameters in the mode trained here and 29.47 M as their `__init__` builds it, so there is no single
+"their time" to measure, and the speed table already states that its `Li2Former` row is this project's smaller
+class with theirs slower than it. Still awaiting a word from the owner: **339 MB** of superseded checkpoints
+(`checkpoints_drow/li2former_official.best.pth` and `item31_rate.pth`, which the corrected class cannot load),
+and whether to spend the ~4 h on their decoder and metric now that it is known to be worth 0.1 pp.
+
+## Item 31 completed, and their regression loss turns out to have an escape basin (2026-11-02)
+
+*keywords: item 31, item 64, li2former_official, drow_train_resume, drow_eval, drow_eval_r03, escape basin, DYNAMIC_REG, lossReg, adaptive focus, reg_loss_weight, 0.70 m escape, 1.34r, epoch 8, 32.9% val wp-AUC, 48.1% test wp-AUC, 40.5% at d=0.3, val-test split gap 15.2 pp, upstream_scoring.py, score_grid, decode_theirs, return_raw, --upstream-grid, nms_detections, upstream_ap, calPrecisionRecall, no anchor at recall 0, eer IndexError, check_upstream_convention.py, oracle votes, queue_upstream_grid.py, lidar_item64, mutation testing, vacuous test, Li2FormerDetector 1090 ms/scan, no released checkpoint, GPL-3.0 borrowed not vendored*
+
+**The 12-epoch DROW run finished (16:03:10 for 11 resumed epochs, 87.6 min/epoch) and epoch 8 is its answer.**
+Epoch 8 scored **32.9% wp-AUC on full DROW val** and **48.1% on DROW test at d=0.5, 40.5% at d=0.3**.
+Epochs 10-12 then scored **0.0%** with `train vote` identically zero, which is not a training failure to debug
+but a property of their released objective, found by reading it:
+
+**`FormerCriterion.lossReg` weights each positive beam's vote error `e` by `w(e) = a * 3^(-(e/r - 1)^2)`**
+(`a=1.5`, `r = 0.35 * alpha = 0.525` m) and averages `e * w(e)`. That product **peaks at `e = 1.34 r = 0.70 m`
+and decreases for every larger error** -- 0.051 at 1.5 m, 7e-7 at 2.5 m. Past 0.70 m the gradient reverses sign:
+a beam is rewarded for voting further wrong, and its contribution decays to numerically nothing. So
+`loss_reg -> 0` means the positive set has **escaped**, not converged, and the classification term never notices
+(`class=` stayed in its 0.25-0.26 band while `train_loss` fell to 0.2432). Epoch 9's `vote=0.1517` inverts to a
+mean error near 0.17 m, so the trapdoor sits at ~4x the typical error -- crossable by a tail of hard beams, not
+by the mean, which is why the collapse arrived at epoch 10 and in two stages (0.0732, then 0.0000).
+It is **scoped to this recipe** (batch 1, `lr 1e-4`, their constants) and does not say their 76.4% is
+unreachable; it says this path to it has a trapdoor and names where. Their code was left exactly as released.
+
+**Three other things measured on the way.** (1) The **val-test split gap is 15.2 pp** (32.9% against 48.1%) --
+larger than any epoch-to-epoch move in the run, so a val-side conclusion must never be quoted as a test-side
+one. (2) Tightening the radius costs **7.6 pp, -15.8% relative**, against their published pair's -5.1%: our
+localisation degrades about three times faster than theirs. (3) `evaluate.py`'s own CPU benchmark puts
+`Li2FormerDetector` at **1090 +- 34 ms/scan** against `DrowDetector`'s 185.5, `DrSpaamDetector`'s 614.7 and
+this project's `SpaceTimeCNN` at **8.2** -- two orders of magnitude outside FROG's 25 ms period. That row times
+this repository's own port, not the `li2former_official` class, and is not item 29's protocol.
+
+**Item 64 is wired, because reproducing their number by scoring their weights is impossible**: no checkpoint
+exists in their tree at `a19e134`, no releases, no download link anywhere in the repository or the author's
+other repositories. What is reachable without a retrain is a 2x2 -- their suppression and their
+`calPrecisionRecall` crossed with ours -- and `evaluate_auc` grew one additive `return_raw` hook so that all
+four cells come from **one** inference pass whose baseline cell equals this function's own answer to 1e-9.
+`utils/upstream_scoring.py` borrows their code at call time from the gitignored GPL-3.0 tree and copies none of
+it. Two properties of their metric, found by reading it: **their AP has no anchor at recall 0**, so `n` perfect
+detections score `1 - 1/n` rather than 1, and **a cell with no true positives raises inside their `eer()`**.
+A strided smoke run says the whole decode-and-score path is worth about **+1.7 pp of a ~28 pp gap**, so that
+gap is in the weights and the training, not in the measurement.
+**[CORRECTED 2026-11-03, see the entry above: the full split says +0.1 pp at `d = 0.5` and +0.5 pp at `d = 0.3`.
+The conclusion of this sentence survives; its number was a 41-frame artifact and was wrong by a factor of 17.]**
+
+**Tested:** 1,211 pass, ruff clean. `utils/check_upstream_convention.py` checks the frame bridge on **154 real
+DROW frames** with oracle votes rather than a synthetic scan (rule 4) -- median placement error 0.000 m for both
+decoders, theirs placing 98.6% of annotations within 10 cm against ours at 97.2%. The 19 item-64 tests went
+green on their first observed run, which proves nothing by itself because the red phase was never watched, so
+the three behavioural guards were mutation-tested: **one test turned out vacuous** (numpy raises `ValueError`
+from the reshape inside their file by itself) and now asserts the message.
+
+**Decision:** keep epoch 8's checkpoint as the Li2Former result for this project, do not retrain under their
+recipe, and do not patch their loss. The escape basin is a finding to report, not a bug to fix here.
+
+## Item 31: our `Li2FormerDetector` was never Li2Former, so the authors' own network is now here (2026-11-01)
+
+*keywords: item 31, li2former_official, OfficialLi2FormerDetector, Li2Former-v1, a19e134, ODA, BatchFormer, adaptive focus, DYNAMIC_REG, FormerCriterion, scans2cutout, cutout_li2former, build_cutout, upstream_criterion_loss, POSITIVE_CLASS, GPL-3.0, torchvision rocm, kernel compilation 370s, queue_li2former_drow.py, lidar_item31, 29.47M, test_li2former_port.py, dead ReLU, reg_head, dead vote head, loss_reg bit-stable, diagnose_vote_head.py, arm A, arm B, queue_li2former_drowb.py, eval-r 0.3, 0.19 m vote magnitude, plateau from the loss not the AUC, four-point standard, data scarcity ruled out, MODE TEMPORAL, MODE PARALLEL, omni-dimension aggregation, ros_li2former.yaml, deployment config is not the paper's config, add_bf, lr 1e-3 default, misconfigured leg, NUM_CTS, PositionalEncodingSine, max_len, pe short not raising, beam count cap, 450 beams, 541 beams, 720 beams, BatchFormerEncoderLayer is the ordinary layer, N_BEAMS 16 below the cap, whole-scan test, TestItAcceptsAWholeScanFromEveryDatasetHere*
+
+> **CORRECTION, 2026-11-01 11:15, before this entry is read as a result: the DROW leg below was misconfigured and its
+> ~30% measures nothing publishable.** The owner challenged the number -- *"it should be quite accurate, more than 30%"* --
+> and the challenge was right. **`MODE: TEMPORAL`, transcribed from their `cfgs/ros_li2former.yaml`, is their ROS robot
+> deployment setting, not the configuration the paper's 76.4% was measured on.** It runs their 1-layer temporal encoder
+> alone, never calls their 3-layer spatial encoder, and therefore has **no cross-beam path** -- while the paper's
+> contribution is **Omni-Dimension Aggregation** over *both* dimensions, which is their `SERIAL`/`PARALLEL` branch. With
+> `add_bf=True` doubling every encoder layer, `TEMPORAL` left **22,068,736 of the 29,466,056 parameters without a gradient**
+> (measured per submodule, and corroborated by a new test naming **88 starved parameter tensors**: the whole 9.46M spatial
+> encoder, its 9.46M of BatchFormer twins, and the 3.15M `fusion` MLP). The active inference path was **4,243,912** --
+> against the **4,703,939** of the hand-written detector this port was brought in to replace, whose two faults (one temporal
+> layer, no cross-beam path) it shared exactly. Corrected, the trained network is **16,852,424** parameters, all live but
+> their 2-element `alpha`. Compounding it, **`--lr` defaulted to `1e-3`** (plain Adam, no warmup,
+> `train.py`'s setting for this repo's small CNNs), ~10x the usual for a 29.5M pre-LN transformer and the textbook cause of
+> the dead ReLU reported further down. Cleared on inspection: `POSITIVE_CLASS = 3` is right (`0=bg, 1=wc, 2=wa, 3=wp`),
+> `NUM_SCANS: 5` and the cutout match, the yaml transcription is exact, and their repository really does ship no recipe or
+> weights (verified against a full tree listing at `a19e134`, by the releases API, and independently by the owner).
+> **Attempt 2 launched 11:26:37**: `MODE: PARALLEL` at `--lr 1e-4`, which needs `add_bf=False` passed at construction,
+> because their `__init__` hardcodes it `True` while the omni-dimension branches do not reshape the doubled batch and say
+> *"Keep add_bf option False"* -- so **the auxiliary stream and the omni-dimension modes are mutually exclusive in the
+> released code**, and since the abstract describes ODA as having both streams, **no mode in their repository is the full
+> published architecture**; `PARALLEL` also never reads their learnable `alpha` pooling, which the single-dimension modes
+> do. The deviations are asserted in `tests/test_li2former_port.py`, which grew a class that fails if any parameter but
+> `alpha` goes without a gradient -- the silent failure that cost attempt 1. No warmup: pre-LN is the variant that does not
+> need it, and `train.py` has no warmup option. Everything below about the port's *mechanics* stands; everything about what
+> the trained model scores does not. The lesson is in `memory/interpreting-evaluation.md`: a deployment config is not a
+> paper's configuration.
+>
+> **SECOND CORRECTION, 12:06: attempt 2 crashed on the first batch, three times, and the same file supplied the third
+> defect.** `RuntimeError: The size of tensor a (450) must match the size of tensor b (90)` at `src + pos`, 01:02 into each
+> attempt (the 13 minutes each occupied was ROCm teardown after the traceback). **`NUM_CTS: 90` is their robot's cutout
+> count**, and a beam count belongs to the sensor: DROW carries **450** beams, JRDB **541**, FROG **720**. It reaches two
+> places upstream -- `buildBackbone(num_cts=...)`, which `ConvBackbone` accepts and ignores, and
+> `PositionalEncodingSine(d_model, max_len=num_cts)`, whose `forward` returns `pe[:, :x.size(1), :]` and so comes back
+> **short instead of raising**. `TEMPORAL` attends over the `T` scans, so the cap was never approached; the omni-dimension
+> modes attend over the beams, where it binds at once. The crashing frame is in `batch_former.py` but is **not** the
+> auxiliary stream -- `BatchFormerEncoderLayer` is their ordinary encoder layer, the file being named for its optional
+> second use. Set to **`NUM_CTS: 720`**, which changes no parameter and no value: the encoding is a registered buffer,
+> closed-form in the position, hence bit-identical to theirs at every position either can reach, and the count stays
+> **16,852,424**. **The tests could not have caught it**: every case in `tests/test_li2former_port.py` ran `N_BEAMS = 16`,
+> chosen for speed and sitting below the cap, so the one value that limits the beam count was unfalsifiable. The new class
+> `TestItAcceptsAWholeScanFromEveryDatasetHere` runs a whole scan at 450 / 541 / 720 and asserts the encoding spans the
+> widest; it reproduced the production error before the fix. **28 port tests, was 24.** Second lesson, in
+> `memory/dos-and-donts.md`: a test size chosen for speed can sit on the safe side of a configuration limit, and then the
+> limit is the one thing the suite cannot test.
+
+Item 31 asked for Li2Former's accuracy on FROG, believing the detector was Li2Former and only its *training* had failed --
+three DirectML crash modes behind `AGENTS.md` I4. **Both halves of that premise were wrong, and the second one mattered more.**
+
+**It trains fine.** I4's DirectML premise predates this host having ROCm: forward, backward and optimizer step all run, at
+**2.09 GiB peak and 259 ms/frame at batch 1** (285 at batch 2, so batching does not help; memory is linear, so batch 8 would
+not fit this card's ~10.7 GB). Preprocessing is 3.0 ms/frame and irrelevant. Two environment traps cost real time getting
+there and are now in `memory/gotchas.md`: **the first optimizer step takes 230-370 s of ROCm kernel compilation with no
+output at all** -- per process *and* per batch shape, and it is indistinguishable from a hang except by the process's CPU rate
+(pinned at ~1 core) -- and **tqdm's bar never reaches a redirected log without `-u`**, because stderr is line-buffered and the
+bar writes `\r` with no newline. Ten minutes went on a `train.py` probe that was frozen at `0/27` and perfectly healthy.
+
+**But what trains is not Li2Former.** `Li2FormerDetector` was written from the paper's prose: a conv backbone, **one**
+temporal encoder layer, no cross-beam path anywhere, 4.70 M parameters. The authors publish code --
+`github.com/ai-winter/Li2Former-v1`, found by reading the paper's own abstract page -- and their released network has
+**29,466,056 parameters**, 6.3x more, with a `MODE` over spatial/temporal/serial/parallel encoders, a **BatchFormer auxiliary
+stream** attending across the batch during training only (concatenating its output, so the batch doubles), learnable
+softmax-weighted avg+max pooling, and an **adaptive focus mechanism** in the regression loss
+(`a * exp(ln(1/3) * (loss/r - 1)^2)`, `a=1.5`, `r=0.35*1.5`) plus label smoothing 0.1. Their cutout differs too: 1.0 m wide
+and 0.5 m deep with area sampling and no odometry, against this repository's DROW `cutout()` at 1.66/1.0.
+
+So training ours would have put a number in the Li2Former row that Li2Former did not produce -- **worse than the `gap` it
+replaced**, and exactly the mislabelling `AGENTS.md` rule 3 exists to prevent. The owner's call was to port theirs.
+
+**It is downloaded, never vendored.** Their code is GPL-3.0 and this repository is MIT, so `library/setup.py` fetches it at
+a pinned commit (`a19e134`, 2024-10-07) into the gitignored `takheliped/include/li2former_upstream/` tree beside the datasets
+and published weights; only a thin MIT adapter is in the repo. Relicensing the owner's repository for a table row is not a
+trade to make without being asked. A side effect worth knowing: `ruff check library/` honours `.gitignore`, so those files
+lint clean in CI and report 7 findings only when pointed at directly.
+
+**Built tests-first** (`tests/test_li2former_port.py`, 18 tests, 1145 -> 1163): that the network **is** upstream's class from
+the `include` tree, that it is configured as their published `ros_li2former.yaml` down to the AFM constants, that the
+auxiliary stream doubles the batch **in training and not in eval**, that the adapter reproduces their `scans2cutout` exactly,
+and that this repository's `make_targets` agrees with their own `global2local` to 1e-6 -- which is what makes it legitimate to
+train their network against our targets at all. Two of them failed first for the right reasons: one guard caught a *vacuous*
+test (a random scan with no beam inside the annotation radius) and the person-only test showed the two losses bit-identical
+at 2.918149948120117, proving the binary target could not tell a wheelchair from a person.
+
+**Three things are ours and are stated rather than hidden.** Their repository is the ROS *deployment* copy: no weights, so
+there is no output to match numerically, and **no training recipe**, so the optimiser, schedule and epoch count are this
+project's. Their head emits one logit, so something must say what counts positive: `POSITIVE_CLASS = 3`, inferred from the
+regime their DROW figure comes from (DR-SPAAM's released weights are `pedestrian_only=True`, the published metric is person
+AP) rather than transcribed from their loader -- it differs from `compute_loss`'s "any non-background beam" rule on DROW's
+wheelchairs and walkers and agrees exactly on FROG, which annotates neither. And **the terminal `ReLU` on their regression
+head is kept as released**: it clamps **both** channels non-negative while their own `global2local` produces a signed `dx`
+and their own `augmentation()` negates it on a coin flip, so the released head cannot vote left. That is their code, not a
+transcription error -- my own first reading called it our bug and was wrong.
+
+**And it is not a theoretical concern: it kills the vote head in two epochs, measured on the DROW leg.** `loss_reg` came
+back **bit-identical** across epochs 1 and 2 in both splits -- 0.1816 train, 0.1410 val -- which can only happen if
+`pred_reg` has stopped moving, and it is 3/4 of their total loss (`LOSS_WEIGHT` 1.0 class / 3.0 reg; `0.2806 + 3 x 0.1816 =
+0.8254`, to the digit). The cause was separated from an adapter defect before being written down, because the two look
+identical in the loss: a forward hook on the activation feeding the ReLU shows it **alive at initialisation** (59% of
+pre-activations positive, gradient on `reg_head[2]` = 1.674, so the path from `pred_reg` back to their weights works) and
+**dead after two epochs** (every pre-activation negative, both channels *constant* across beams -- the final `Linear`'s
+weights collapsed to zero leaving a negative bias -- `pred_reg` identically 0, gradient exactly 0). The gradient through a
+dead ReLU is zero in perpetuity, so the remaining ten epochs cannot recover it. The mechanism is their own augmentation:
+against a zero-mean symmetric target the best non-negative constant is 0 (`E[(x-c)^2] = E[x^2] + c^2`), so flipping `dx`'s
+sign on half the frames drives that channel below zero and the clamp holds it there. Classification trains normally, which
+is why wp-AUC still rises (12.7% -> 18.3%) -- every detection is simply placed at its beam's own `(r, phi)`, which for a
+beam on a person's surface is often inside the 0.5 m matching radius. **The leg therefore measures what their released
+repository does when trained, not Li2Former's 76.4%, and its number must not reach a Li2Former row.** Two readings remain
+and no weights exist to separate them: either the published figure came from a head without the clamp and the released ROS
+copy carries a regression, or it came with it and the votes are one-sided by design. Removing it is **arm B** and is the
+arm that could reproduce their figure.
+
+**What the clamp costs took two readings to get right, and the first one was wrong.** With `pred_reg == 0`, `loss_reg`
+reduces to `mean(|t| * w(|t|))` under their AFM; inverting 0.1816 puts the typical vote magnitude at **~0.19 m**, well
+inside the 0.5 m radius their 76.4% is scored at, which predicts the loss is nearly free there. **It is not.** That estimate
+prices the *matching* step and ignores the *clustering* step that consumes the votes: with every vote identically zero the
+per-person votes never converge, they stay smeared across the surface the beams hit, so one person yields several detections
+instead of one peak and the false positives take the precision with them.
+
+**What the curve does, with one false reading recorded because the mistake is the reusable part.** Val wp-AUC over nine
+epochs: 12.7 -> 18.3 -> 25.5 -> 25.7 -> 24.6 -> 29.2 -> 28.9 -> 24.1 -> **29.7%**, train alongside it 19.3 -> 29.9 -> 32.2 ->
+33.9 -> 34.1 -> 38.1 -> 38.9 -> 35.1 -> 38.5%. Epochs 4-5 were read as a plateau at 25.7% / 34.1% and reported as one; epoch
+6 then set a new best and both curves resumed climbing. **Val wp-AUC moves +-1 to 5 pp epoch to epoch here, so two points
+cannot establish a plateau** -- judge it on four, or on the `.best.pth` write times, which is the cheap check that was
+available and skipped. The withdrawn claim was that the model "cannot fit the data it was shown past 34%".
+
+**The series to read a plateau off is the training loss, and that is the correction that generalises.** It is monotone and
+nearly noiseless where the AUC swings +-5 pp between adjacent epochs -- epoch 8's 24.1% sits between two 29s. Its per-epoch
+change ran -0.0072 (epoch 2) -> -0.0034 -> -0.0059 -> -0.0030 -> -0.0012 -> -0.0008 -> -0.0006 -> **-0.0002** (epoch 9):
+optimisation has stopped, not slowed, and it says so without ambiguity two epochs after the noisy series misled a reading.
+Held to the four-point standard, epochs 6-9 give val 29.2 / 28.9 / 24.1 / 29.7 (best +0.5 pp over three epochs) and train
+38.1 / 38.9 / 35.1 / 38.5 -- flat, with the gap steady near +9 pp. **That also settles what the train probe was switched on
+for: this is not the DROW data-scarcity overfit**, which is train climbing while val falls (the `spacetime_cnn` FROG run's
+83.8% / 63.6%, gap +20.2 widening to +32.5). Both series flat with the loss converged is a bad optimum, not a memorised
+training set, so "DROW is too small for this model" is ruled out.
+
+**What survives is the level.** Converged, the 12-epoch run lands near **30%** -- the 33-35% projected at 08:56 assumed the
++1 pp/epoch trend continued, and it did not -- against 76.4%, and under half the 61.9% DROW3 floor, with three quarters of
+its loss a frozen constant the whole way. Two hypotheses survive for that shortfall: the dead clamp, and a recipe that is
+this project's because they publish none. Arm B separates them -- into the 60-70% range and the head was the cause, still
+near 30% and the recipe is -- and arm A is its **control at equal budget**, same twelve epochs and same recipe with one
+layer different, which is why it was left to finish.
+
+`queue_li2former_drow.py`'s `drow_eval` scores only `d = 0.5` (`evaluate.py` takes one radius per pass), so the `d = 0.3`
+column needs a second pass over the same checkpoint -- planned here as a follow-on chain, and delivered by
+`queue_upstream_grid.py`'s `grid_r03`, ~3 h on the CPU. The general rule was already in
+`memory/interpreting-evaluation.md` from the LFE-PPN decode calibration -- a 0.5 m gate accepts a decoder systematically off
+by 10-20 cm -- and that section now also carries the correction above, because a per-beam distance argument underestimates a
+broken vote head badly.
+systematically off by 10-20 cm -- and this is its sharpest instance yet: not a miscalibrated decoder but an absent one.
+
+**`torchvision` is now a hard requirement**, because their `matcher.py` imports `box_area` at module scope even though their
+published loss types use no box term. It must be AMD's ROCm build from the same index as the torch wheel: PyPI's 0.24.1
+installs cleanly and then dies with `operator torchvision::nms does not exist`, its extension being built for CUDA.
+Installed with `--no-deps` either way, so pip cannot replace the ROCm torch.
+
+**Corrected in three places, because the old rows said things about Li2Former that were measured on something else.**
+`memory/performance-log.md`'s footnote 2 claimed training had never completed (it does) and now says what actually blocks the
+cell; its speed table's **1675.24 ms/frame row is `Li2FormerDetector`, and the published model is slower than it, not equal
+to it**; and `docs/PROPOSAL.md`'s cost table row (88.2 G, 4.70 M, 2.0 GB) is this project's reimplementation, whose parameter
+count is 6.3x short and whose "attention is cheap, only 5 frames per beam" reading holds at inference but not in training,
+where the BatchFormer makes the quadratic term 720 x 720.
+
+**Running now: the DROW leg, which is the only available check that the port is right.** They publish 76.4% AP@0.5 on DROW
+(Li2Former-A, `T=5`; 74.8% without the AFM; 72.5% at `d=0.3`), and with no weights to match, reproducing that figure is the
+test -- so DROW comes before FROG rather than after it. `utils/queue_li2former_drow.py`, 12 epochs at batch 1 (forced: the
+BatchFormer attends over `B x N_beams` tokens, 3,600 at batch 8), ~56 min/epoch at the measured **5.25 fr/s** over 17,665
+annotated frames, ~13.6 h, then `evaluate.py` on DROW test. Twelve rather than forty so the val curve is read at 13.6 h
+instead of 43; extending is one `--resume`. The train probe is left on deliberately: DROW-native training here has
+textbook-overfitted before at 6.1x fewer annotated frames than FROG, and the probe is what separates "the port is wrong"
+from "DROW is too small for this model" without another run.
+
 ## Item 56: the tracking baselines on the frozen candidates -- +2.16 pp over the tuned tracker, and a queue defect that nearly reported +3.5 (2026-10-31)
 
 *keywords: item 56, a74, queue_item56.py, track_rows.json, EXIT_GRACE_SECONDS, best_classical, bytetrack_cbmot, rule_cbmot, report_focus, test_queue_declarations.py, FRZ, +2.16, 86.29, 84.13, first_frame, GOSPA 0.435, lidar_item56*

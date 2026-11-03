@@ -27,9 +27,15 @@ rocm_sdk_libraries_custom @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/
 rocm @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/rocm-7.2.1.tar.gz
 
 # --- PyTorch 2.9.1 built for ROCm 7.2.1 ------------------------------------
-# torchvision and torchaudio are left out: nothing in library/, utils/ or
-# tests/ imports them.
+# torchaudio is left out: nothing in library/, utils/ or tests/ imports it.
+# torchvision is needed from 2026-11-01: Li2Former's own `matcher.py` imports
+# `box_area` from it at module scope (item 31), so the upstream model cannot be
+# imported without it -- even though its published config uses no box loss.
+# It must be AMD's ROCm build from this same index. PyPI's torchvision 0.24.1
+# installs but cannot load against this torch ("operator torchvision::nms does
+# not exist"), since its compiled extension is built for CUDA.
 torch @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torch-2.9.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl
+torchvision @ https://repo.radeon.com/rocm/windows/rocm-rel-7.2.1/torchvision-0.24.1%2Brocm7.2.1-cp312-cp312-win_amd64.whl
 
 # --- this project's library (builds the pybind11 extension) -----------------
 # The first install downloads ~2 GB of datasets and weights only if

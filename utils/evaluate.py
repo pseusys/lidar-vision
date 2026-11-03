@@ -318,8 +318,15 @@ def eval_nn_model(det_name: str, weights_path: Path,
                   return_curves: bool = False,
                   return_detections: bool = False,
                   tracker_kwargs: Optional[dict] = None,
-                  v2d_conf: Optional[dict] = None) -> dict:
-    """Load checkpoint and compute AUC on CPU."""
+                  v2d_conf: Optional[dict] = None,
+                  upstream_grid: bool = False) -> dict:
+    """Load checkpoint and compute AUC on CPU.
+
+    `upstream_grid` additionally scores the same inference pass three more ways -- Li2Former's own suppression
+    and their own `calPrecisionRecall`, in both combinations with ours (`TODO.md` item 64). It is one pass, not
+    four: the extra cells re-decode the per-beam outputs this one already produced, which is what makes the
+    baseline cell this function's own number rather than a re-implementation of it.
+    """
     if det_name == "drspaam" and weights_path == DrSpaamDetector.DEFAULT_WEIGHTS:
         net = DrSpaamDetector.load_published()
         if dtime is None:
@@ -358,6 +365,7 @@ def eval_nn_model(det_name: str, weights_path: Path,
                          local_normalize_window=local_normalize_window,
                          return_curves=return_curves,
                          return_detections=return_detections,
+                         return_raw=upstream_grid,
                          tracker_kwargs=tracker_kwargs,
                          v2d_conf=v2d_conf)
     print(f"  Agnostic (any) : {aucs['agnostic']:.1%}")
@@ -365,7 +373,31 @@ def eval_nn_model(det_name: str, weights_path: Path,
     print(f"  Walker    (wa) : {aucs['wa']:.1%}")
     print(f"  Person    (wp) : {aucs['wp']:.1%}")
     print()
+    if upstream_grid:
+        _print_upstream_grid(aucs, eval_r, v2d_conf)
     return aucs
+
+
+def _print_upstream_grid(aucs: dict, eval_r: float, v2d_conf: Optional[dict]) -> None:
+    """The item-64 2x2 over the pass `eval_nn_model` just ran. Person class only, at one matching radius."""
+    import upstream_scoring as us
+
+    if aucs.get("raw") is None:
+        print("  [WARN] no raw outputs to re-decode -- a heatmap head has no votes to hand over.\n")
+        return
+
+    grid = us.score_grid(aucs["raw"], eval_r=eval_r, v2d_conf=v2d_conf)
+    print(f"=== Li2Former's decoder and metric, d={eval_r} (TODO.md item 64) ===")
+    print(f"  {'cell':<16}{'our wp-AUC':>12}{'their AP':>10}{'peak F1':>10}{'EER':>8}{'dets':>10}")
+    print(f"  {'-' * 66}")
+    for cell in us.GRID:
+        row = grid[cell.name]
+        ours = f"{row['wp_auc']:.1%}" if "wp_auc" in row else "--"
+        theirs = f"{row['AP']:.1%}" if "AP" in row else "--"
+        peak = f"{row['peak_F1']:.1%}" if "peak_F1" in row else "--"
+        eer = f"{row['EER']:.1%}" if "EER" in row else "--"
+        print(f"  {cell.name:<16}{ours:>12}{theirs:>10}{peak:>10}{eer:>8}{row['n_det']:>10}")
+    print("  Their published figures for reference: 76.4% AP@0.5, 72.5% AP@0.3.\n")
 
 
 def _temporal_consensus_filter(detections, seq_id, cache_by_seq,
@@ -935,10 +967,13 @@ def print_summary(algo_stats: Optional[dict],
 
 # PyTorch cutout/full-scan models evaluated via evaluate_auc
 _NN_MODELS = {
-    "drow":          "drow",
-    "drspaam":       "drspaam",
-    "li2former":     "li2former",
-    "spacetime-cnn": "spacetime_cnn",
+    "drow":               "drow",
+    "drspaam":            "drspaam",
+    "li2former":          "li2former",
+    # The authors' own network (TODO.md item 31). `--li2former` is this project's reading of their
+    # paper's prose and is a different architecture, so the two are not each other's numbers.
+    "li2former-official": "li2former_official",
+    "spacetime-cnn":      "spacetime_cnn",
 }
 
 # ONNX-based models evaluated via eval_lfe_model
@@ -1064,6 +1099,11 @@ def main():
                              "proposals the sweep meant to count.")
     parser.add_argument("--eval-r",  type=float, default=0.5,
                         help="Detection radius for AUC / precision-recall (default: 0.5 m)")
+    parser.add_argument("--upstream-grid", action="store_true",
+                        help="Also score the same pass with Li2Former's own suppression and their own "
+                             "calPrecisionRecall, as a 2x2 over the two halves (TODO.md item 64). One "
+                             "inference pass; the extra cells re-decode outputs already computed. Needs "
+                             "the GPL-3.0 upstream tree in takheliped/include/li2former_upstream.")
     parser.add_argument("--eval-stride", type=int, default=1,
                         help="Evaluate every Nth annotated frame instead of all of "
                              "them (systematic subsample, default: 1 = no "
@@ -1306,7 +1346,8 @@ def main():
                         diff_channels=args.eval_diff_channels,
                         global_normalize=args.eval_global_normalize,
                         local_normalize_window=args.eval_local_normalize_window,
-                        tracker_kwargs=_tracker_kwargs)
+                        tracker_kwargs=_tracker_kwargs,
+                        upstream_grid=args.upstream_grid)
             except Exception as exc:
                 print(f"  [ERROR] {exc}\n")
 

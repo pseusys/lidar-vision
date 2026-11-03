@@ -58,7 +58,7 @@ Every detector this repo trains or evaluates falls into exactly one of three pro
 | `DrowDetector` | **Replicated â€” official weights** | Architecture is a direct port of the official DROW notebook release; loads the official checkpoint `final-WNet3xLF2p-T5-odom.rot-trainval-50ep.pth.tar` (`library/setup.py`) via `load_state_dict`, which only succeeds because the layer shapes match the original bit-for-bit. |
 | `DrSpaamDetector` | **Replicated â€” official weights** | Module docstring states the code matches "the official SpatialDROW implementation"; module structure is deliberately nested to load the official checkpoint `dr_spaam_e40.pth` exactly. |
 | `LFEPeaksDetector` / `LFEPPNDetector` | **Replicated â€” official weights (ONNX)** | Loads the authors' own exported ONNX models (`LFE-Peaks.onnx`, `LFE-PPN.onnx`, hosted at `robotics.upo.es/~famozur/onnx/`) via `onnxruntime.InferenceSession` â€” genuine published-model inference, not a reimplementation. |
-| `Li2FormerDetector` | **Reimplemented â€” no official code or weights** | Header says the architecture is "inspired by" Yang et al. (weaker language than the DROW/DR-SPAAM ports) and explicitly notes no published weights exist; this project trains it from scratch from the paper's description alone. No official repo was available to verify against, so treat any AP this project reports for Li2Former as this project's own reproduction attempt, not a confirmed match to the paper's reported 0.764 (DROW) / 0.814 (JRDB). |
+| `Li2FormerDetector` / `OfficialLi2FormerDetector` | **Two classes: ours from the paper's prose, and the authors' own code -- GPL-3.0, no weights, no recipe** | **Corrected 2026-11-01 (item 31): official code does exist** (`ai-winter/Li2Former-v1`), downloaded rather than vendored, and `OfficialLi2FormerDetector` wraps it; Section 3.3.1. `Li2FormerDetector` was written from the paper's description before that repository was found and **is not Li2Former** -- one temporal encoder layer, no cross-beam path -- so nothing measured from it may fill a Li2Former row. Their tree ships **no weights and no training recipe**, so any AP reported for the official class is a reproduction attempt under *this project's* recipe, not a confirmed match to their reported 0.764 (DROW) / 0.814 (JRDB). |
 | `AlgorithmicDetector` | **Prof. O. Aycard's classical algorithm, ported â€” not this work, and not from any of the SOTA papers compared here** | The algorithm is **due to prof. O. Aycard**, whose C++ implementation (`cpp_core/sources/detector.cpp`, header comment "Person detector using 2 lidar data / Written by O. Aycard") is what this repo builds and calls; **it must be credited to him in any write-up, and only the pybind11 binding, the Python wrapper and the evaluation harness around it are this project's**. It is a distinct two-tier leg+chest clustering/tracking algorithm â€” not Pantofaru's ROS `leg_detector`, not Arras et al., not Leigh et al. (Section 2.2) â€” included as this repo's non-learned reference point rather than as a port of any baseline used by DROW/DR-SPAAM/Li2Former/FROG. A formal bibliographic reference for it is still to be obtained from the author (`../TODO.md` Â§A). |
 | `SpaceTimeCNNDetector`, `FullScanTCNDetector`, `TemporalUNetDetector` | **Novel â€” proposed by this work** | No prior paper describes these architectures, so no official weights could exist; each must be trained locally. Individual sub-components (SE blocks, Inception-style branching, causal TCN, U-Net skip connections) are explicitly credited to their originating papers in the code (Section 5), but the overall architectures and their combination are this project's own design. |
 
@@ -281,8 +281,62 @@ Key properties:
 - **Temporal attention, not spatial**: DR-SPAAM attends across neighbouring beams at a fixed timestep; Li2Former attends across T timesteps for a single beam. The two mechanisms are complementary.
 - **Wider cutout** (P=64 vs. 48 for DROW, 56 for DR-SPAAM): more angular context per beam.
 - **Binary output** (person vs. background): the sigmoid probability is placed in the pedestrian slot for compatibility with the unified evaluation pipeline.
-- **No published weights**: must be trained from scratch using `train.py --detector li2former`.
+- **No published weights, but published code**: their repository ships neither weights nor a training recipe, so reproducing their figure means retraining under a recipe of our own -- Section 3.3.1 for what their code contains, and `train.py --detector li2former_official` for the class that runs it. The bullet this replaces said no official code existed, which was wrong.
 - Recurrent-free in the RNN sense, but uses a temporal Transformer â€” exactly the kind of component constraint 1 (Section 2) excludes from this project's own proposed architectures, and the comparison point that constraint's efficiency argument is made against.
+
+#### 3.3.1 The authors' released code, and the basin in their regression objective
+
+**Added 2026-11-01 (`TODO.md` item 31); it corrects the "no official code" claim above.** The authors do publish an
+implementation -- `ai-winter/Li2Former-v1`, GPL-3.0, pinned here at commit `a19e134` and **downloaded, never vendored**,
+because this repository is MIT: `library/setup.py` fetches it into the gitignored `takheliped/include/li2former_upstream/`
+and `OfficialLi2FormerDetector` adapts it at call time. The code block above is `Li2FormerDetector`, this project's earlier
+reading of the paper's prose, which has one temporal encoder layer and no cross-beam path and is therefore **not** the
+published architecture.
+
+Their tree is a **ROS deployment copy**: no weights, no training recipe. The optimiser, schedule and epoch count used here
+are consequently this project's, and the only check available without weights is whether their network, trained here,
+reaches their published figure.
+
+**Their `MODE` is the architecture, and only two of its four values are the paper's.** `TEMPORAL` -- the value in their only
+published config, `cfgs/ros_li2former.yaml` -- runs the 1-layer temporal encoder alone and never calls the 3-layer spatial
+encoder; `SPATIAL` is its mirror. Omni-Dimension Aggregation, the paper's contribution and its title, is `SERIAL` or
+`PARALLEL`, which run both dimensions and, in `PARALLEL`, fuse them through an MLP. A config shipped for a robot is not the
+configuration a paper's table was measured on.
+
+**Two shapes in their heads and losses matter more than anything in the backbone.** The first is a clamp: their `reg_head`
+ends in `nn.ReLU()`, so both vote channels are non-negative, while their own `global2local` produces a signed `dx` and their
+own augmentation negates it on a coin flip -- against a zero-mean symmetric target the best non-negative constant is 0, and
+the ReLU's dead zone has exactly zero gradient. The second is their **adaptive focus mechanism**, which the paper credits
+with the difference between 76.4% and 74.8%. It does not average the vote error; it averages the error weighted by a bell
+over the error itself:
+
+```
+e      = ||pred_reg - target_reg||_2            per positive beam
+w(e)   = a * exp(ln(1/3) * (e/r - 1)^2)         a = 1.5, r = 0.35 * alpha = 0.525 m
+loss   = mean(e * w(e))
+```
+
+`w(e)` peaks at `e = r` and falls to a third of that at `e = 0` and `e = 2r`, which is the stated intent: a beam that is
+already nearly right and a beam that is hopeless both matter less than one in between. **The consequence is in the product,
+not the weight.** `e * w(e)` peaks at `e = 1.34 r = 0.70 m` and **decreases monotonically for every larger error** -- 0.051
+at 1.5 m, 7e-7 at 2.5 m. Past 0.70 m the gradient on that beam reverses sign: moving its vote *further* from the target
+lowers the loss, and the contribution then decays to numerically nothing. The far side of the peak is an **escape basin**,
+so `loss_reg -> 0` has two preimages -- every vote on target, or every positive beam escaped -- and the classification term
+cannot tell them apart, because it never reads the vote.
+
+Two consequences for anyone training this objective, ours or theirs:
+
+- **Watch the error, not the loss.** The loss is two-to-one onto the error, and one of the two branches is failure.
+- **The basin is crossed by the tail, not the mean.** At a typical error near 0.17 m the trapdoor sits at about 4x it, so
+  what leaves first is a minority of hard beams; the collapse is therefore abrupt and late, not visible from epoch 1.
+
+**Their decoder differs from this project's as well**, and in a way worth stating because it is the other half of any
+comparison: they project each beam's vote to global x-y and greedily suppress within 0.5 m, while this project accumulates
+every beam's vote into a 0.1 m grid, blurs it and collects within 0.3 m. Their metric is `sklearn` AP over a greedily
+matched PR curve; ours is trapezoidal AUC over a Hungarian-matched one. What the two halves are worth, measured by running
+all four combinations over one inference pass, is in [`../memory/performance-log.md`](../memory/performance-log.md) with the
+rest of the numbers; the history is in [`../CHANGELOG.md`](../CHANGELOG.md). **Their code is used exactly as released** --
+the basin and the clamp are reported, not patched (owner's instruction, 2026-11-02).
 
 ### 3.4 LFE-Peaks and LFE-PPN â€” Amodeo et al. (2025)
 

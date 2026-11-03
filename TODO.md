@@ -50,8 +50,38 @@ That's a structural gap, not a pending deploy — see §E below.
 > killed it mid-work and `report` silently scored three classical pipelines instead of four. Fixed with the replays
 > declared and `report_focus` generalised off A61's `E13:` label; `tests/test_queue_declarations.py` pins both. Row
 > deleted per rule 4b; the entry is in `CHANGELOG.md`.
-> because `--resume` runs N *more* epochs. Eleven epochs is ~16.6 h at the measured 90.7 min/epoch.
-
+>
+> **Items 31 and 64 are CLOSED (2026-11-03, 03:00).** Item 31 asked for Li2Former's accuracy or its removal from the
+> comparison, and the answer is **48.1% wp-AUC on DROW test at `d = 0.5`, 40.5% at `d = 0.3`** -- the authors' own
+> network trained here, since no weights of theirs have ever been released -- against their published **76.4% / 72.5%**.
+> So the FROG cell stays `gap`, now for a stated reason rather than a pending one, and `memory/performance-log.md`
+> footnote 2 says which. Item 64 asked how much of that **28.3 pp** gap is the measurement: **+0.1 pp at `d = 0.5` and
+> +0.5 pp at `d = 0.3`**, from their decoder and their metric crossed with ours over one inference pass per radius
+> (2,428 frames each, `grid_r05` and `grid_r03`, both exit 0). **The gap is in the weights and the training.** Epoch 8 is
+> the arm at its best, not a collapsed head: epochs 10-12 scored 0.0% because their regression objective has an **escape
+> basin** past 0.70 m of vote error, where the gradient reverses sign and a beam is rewarded for voting further wrong --
+> found by reading their code, and reported rather than patched (owner's instruction, 2026-11-02).
+>
+> **Where the 904 lines these two rows held have gone**, because rule 4b asks that before deleting: the mechanism to
+> [`docs/RESEARCH.md`](docs/RESEARCH.md) section 3.3.1 (their released code, their `MODE`, the clamp, the basin); the
+> numbers and the four-cell check that rules the harness out of the gap to
+> [`memory/performance-log.md`](memory/performance-log.md), with footnote 2's outcome; the corrected arm A / arm B
+> framing to [`memory/detector-architectures.md`](memory/detector-architectures.md), because arm A *does* train at
+> `lr 1e-4` and arm B no longer "could reproduce their figure"; the strided-delta lesson to
+> [`memory/interpreting-evaluation.md`](memory/interpreting-evaluation.md); the mutation-testing rule to
+> [`memory/dos-and-donts.md`](memory/dos-and-donts.md); and the run's full curve, the timings and the history to
+> [`CHANGELOG.md`](CHANGELOG.md)'s two entries. Both rows deleted per rule 4b.
+>
+> **Two answers are the owner's, and nothing moves without them.** (1) **339 MB of superseded checkpoints** --
+> `checkpoints_drow/li2former_official.best.pth` and `checkpoints_drow/item31_rate.pth`, 201 tensors / 29,515,605
+> elements against the corrected class's 145 / 17,224,533, so the class cannot load them and deleting them loses nothing.
+> (2) **Whether to adopt their `nms` decoder and their `calPrecisionRecall` metric as this project's own** (~4 h,
+> CPU-only, proposed 2026-11-01): now measured at **+0.1 pp**, so it buys protocol comparability rather than accuracy,
+> which makes it a judgement about how the pre-print should read rather than a result to chase.
+>
+> **Nothing is left over.** The one piece of real work that looked open -- timing their network under the CPU protocol --
+> was dropped unrun on 2026-11-03, with the reason and what would reopen it in `memory/rejected-ideas.md`.
+>
 > ### Reorganised 2026-09-10, around a measurement that changed the question
 >
 > Four history ablations on the epoch-1 checkpoint, identical weights, whole `frog_16-41` test recording (50,088 frames). The decomposition is clean:
@@ -128,15 +158,6 @@ written, and these are what that evidence suggests instead. Ordered by value per
 | ~~24~~ | ~~**Does the coasting head earn its parameters?**~~ **ANSWERED 2026-10-15: no** (`a64_no_coast_s0`, `--no-coast`, one step-3a run on the adopted recipe). Ablated **AP 86.08%** against the matched seed's **86.35%** and the three-seed control range **85.49-86.35** -- inside it, and inside E13's own 1.32 pp three-sigma bar. Every other metric lands inside the control's spread too (FP/frame 0.885 against 0.849-1.239, recall 82.63% against 81.17-87.76). **The head is 137 parameters of 173,579, so the case for removing it is not size -- it is that the write-up should not describe a mechanism that never acts**: it fires 0.0012-0.0020 times per populated frame and **2 / 0 / 0** times across 72,533 person-free frames (item 27). **DROPPED from the architecture 2026-10-16 on the owner's call.** `coast` defaults off; `--coast` restores the head, because every number published before that date was produced with it -- the same reason item 32 kept `SpaceTimeCNNDetector`. One subtlety handled: checkpoints written before the flag existed carry `coast.*` and say nothing about it, so `object_memory` reads the **weights** rather than the default, or the adopted model's own weights would be refused. **Consequence to carry:** the published 85.87% describes the *with-head* model, and step 2's multi-seed runs on the frozen architecture are what will produce the head-free headline -- no extra cost, since those runs are already planned | one run, plus a flag | done |
 | ~~25~~ | ~~**Finish O1: one-sided rescoring**~~ **ANSWERED 2026-10-18: bounding is not the fix.** A +-4 logit tanh does not stabilise the head that diverged twice with NaN -- it **silences** it. Memory AP **82.22%, exactly its candidates' 82.22%**, FP 3.045, recall 93.37%: the raw candidate operating point, untouched. A bound tight enough to be stable is tight enough to be useless, so the divergences stay unexplained and **the paper states them as a limitation** rather than a solved problem | one run |
 | 26 | **Person-free frames as training negatives** -- **scheduled into the `balanced` step (owner, 2026-10-15), and it has to be there.** `transferred`'s train and val splits are *identical to `official`*; only its **test** split is person-free, so `balanced` (every split 19-21% empty) is the repo's only source of person-free *training* frames. **The detector has never seen a room with nobody in it**, which is the likeliest reason stage 2 emits **2.62 phantoms per empty frame** before the memory filters them to 0.74 -- and item 27 closed the loop on that: every person-free phantom is provably a stage-2 candidate, not a memory invention. **The owner's framing: report `official` and `balanced` side by side in the final table, so the difference between them justifies `balanced`'s existence.** That makes this a column rather than a replacement, so it cannot stale the frozen architecture's ablation table | one run, plus a loader path, after A62 |
-
-**Items 29-31: CPU inference time, the secondary metric (owner, 2026-10-10).** Accuracy is measured for every detector and
-speed is not -- not comparably. `memory/performance-log.md`'s speed table has a CPU row for eight of them, but those rows were
-taken around 2026-09-10 by a different script than the one that timed ours on 2026-10-08/10, at an unstated thread count and
-with no percentile, so the table satisfies its own stated rule ("one machine") while breaking the one it needs ("one protocol").
-
-| # | action | why | cost |
-| --- | --- | --- | --- |
-| 31 | **Li2Former's accuracy on FROG, or its removal from the comparison.** It is the one detector whose numbers we cite but have never measured: its *inference* runs here (**1675.24 ms** per frame on CPU, p99 1758.21 -- 70x the frame period, item 29) and only its *training* failed, on DirectML, three separate ways (`AGENTS.md` I4) -- and that was before this machine had ROCm, so the premise of that rule no longer holds for it | A comparison table with a cited-but-unmeasured row invites exactly the cross-regime confusion `AGENTS.md` rule 3 exists to prevent. Either it trains here and gets a measured row, or it is dropped to a cited-published-only footnote like PeTra | one training chain, unknown until attempted |
 
 **PeTra stays cited-only, and the reason is recorded so the question does not come back:** there is no PeTra implementation or weights in this repository -- only its published GPU figure (28.17 ms) -- so it has never run here and cannot be timed. It is not a failed attempt.
 

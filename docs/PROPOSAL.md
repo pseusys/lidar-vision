@@ -418,7 +418,7 @@ Multiply-adds are a hardware-independent count of the arithmetic a network perfo
 | DR-SPAAM, official streaming code | 18.4 G | 1.98 M | — | ~10 MB |
 | DR-SPAAM, 5-frame window (this repository's version) | 48.0 G | 1.98 M | 1.4 GB | none |
 | DR-SPAAM, 10-frame window (official setting) | 88.2 G | 1.98 M | 2.6 GB | none |
-| Li2Former, 5 frames | 88.2 G | 4.70 M | 2.0 GB | none |
+| Li2Former, 5 frames *(this project's reimplementation -- see below)* | 88.2 G | 4.70 M | 2.0 GB | none |
 
 *This proposal counted from a sketch with the defaults of §6. DR-SPAAM counted at 720 beams directly, because its attention compares all 720 beams with each other; Li2Former extrapolated from 72 beams after checking the count doubles from 36 to 72.*
 
@@ -426,6 +426,7 @@ Multiply-adds are a hardware-independent count of the arithmetic a network perfo
 
 - **The cost of current temporal detectors comes from how many positions they process, not from attention.** DR-SPAAM runs a 128-512-channel CNN over a 56-point window around each of 720 beams (~40,000 positions per scan); Li2Former a 512-channel CNN over 720 windows of 64 points for 5 frames (~230,000). Their attention is cheap by comparison: Li2Former attends over only 5 frames per beam, and DR-SPAAM's 720 x 720 beam comparison is ~7 G of its 48 G. A whole-scan network processes 720 positions with narrow channels.
 - **This proposal's own quadratic part** — 256 slots exchanging information — is roughly 34 M of its 303 M.
+- **The Li2Former row is this project's reimplementation, not the published model** (corrected 2026-11-01, `TODO.md` item 31). The authors' released network, as their `__init__` builds it, has **29,466,056 parameters against the 4,703,939 counted here**, because it cascades omni-dimension aggregation blocks where ours had a single temporal encoder layer. Its attention is also **not** only over the 5 frames per beam: in the omni-dimension modes a 3-layer spatial encoder attends across all 720 cutouts of a scan, and a BatchFormer stream attends across the whole batch while training, so the quadratic term is 720 x 720 rather than 5 x 5 and the "attention is cheap by comparison" reading does not survive either way. **Trained here as `PARALLEL` with the auxiliary stream off, the network is 16,852,424 parameters** (2026-11-01: their deployment yaml's `MODE: TEMPORAL` was measured to leave 22.07 M of those 29.47 M without a gradient, so it is not the published configuration -- `TODO.md` item 31). The multiply-adds and training memory have not been recounted on their network.
 - **Training memory.** Li2Former's 2 GB per frame explains why it ran out of memory here at batch size 2. This proposal stores ~22 MB per frame: a 35-frame clip needs ~0.8 GB, but a 10-second chunk trained end to end ~5.7 GB, so full-model training needs short gradient windows or activation checkpointing.
 - **Limits of the count.** Multiply-adds are not milliseconds: attention and memory lookups run slower than their count suggests, so the model must be timed once built. The first sizing's 1.49 M parameters are above this project's usual 100-500 K range, mostly because of the 4x block widening (§12).
 

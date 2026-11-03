@@ -109,6 +109,30 @@ A tried-and-rejected idea goes in [`rejected-ideas.md`](rejected-ideas.md) with 
 Name what would have failed if it were wrong, and run that.
 A synthetic unit test passing has already been mistaken for "the logic is correct" twice in this project's real history — once for a scan-alignment sign error, once for the odometry timestamp-gap bug — and both were only caught by checking against real recorded FROG data, not by any test that was green beforehand.
 
+**DON'T let a test size be chosen only for speed: check it against the configuration's own limits.**
+A size picked to keep the suite fast can sit on the safe side of a cap, and then the cap is the one thing the suite cannot
+falsify. Every case in `tests/test_li2former_port.py` ran 16 beams; Li2Former's `NUM_CTS` caps the beams at 90 by sizing
+its position encoding, whose `forward` slices rather than raises — so 24 green tests, a `ruff` pass and a clean import all
+held while the real 450-beam DROW scan crashed on the first batch, three launches in a row (2026-11-01, item 31).
+**Ask of every dimension a test fixes: is the real value larger, and is there a configured maximum between them?**
+A cheap standing answer is one case at the real size — the new class runs a whole scan at 450, 541 and 720 beams, the three
+sensors in this repository, and costs about five seconds.
+
+**DO smoke-run a long job at `--subsample` before committing hours to it.**
+One epoch on a percent of the data exercises the real loader, the real criterion and a real backward pass, and it reaches
+the first batch in about a minute — against 13 minutes per failed attempt for the full launch, three of which were spent
+discovering a crash that a smoke run would have shown before the watchdog's first check (2026-11-01, item 31).
+
+**DO mutation-test a guard whose red phase you never watched.**
+A test that has only ever been seen to pass is a claim, not a check.
+Three behavioural guards in `tests/test_upstream_scoring.py` were written before the implementation but first
+*run* after it existed, so each was verified by breaking the implementation on purpose and re-running: two failed as they
+should, and **one passed with the guard it exists to protect deleted** -- numpy raised `ValueError` from a reshape inside
+the upstream file by itself, so the test had been pinning numpy's accident rather than our behaviour (2026-11-02, item 64).
+It asserts the message now.
+Deleting the line under test takes a minute, restoring it takes a `diff -q` against a copy, and it is the only way this
+class of test is ever found.
+
 **DON'T write a test that asserts a property of an untrained network's random draw.**
 It measures the draw, not the behaviour, and the seed decides whether it passes.
 This has happened three times here and cost a test each time: item 40's aggregator test asserted that concatenating a
