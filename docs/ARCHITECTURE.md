@@ -73,6 +73,32 @@ stride 5. **Two were load-bearing.** The full ledger with numbers is in
 **Nine ties are the finding about everything except the two load-bearing rows.** Each was resolved toward the cheaper
 or simpler option, which is why the adopted model is *smaller* than the one the project started with.
 
+**The bookkeeping and training rules were screened the same way, and are reported as they stand** (owner's call,
+2026-11-03). These are the knobs that decide how a slot is held and how the rescoring is trained rather than what the
+model is, each one flag on top of the adopted configuration, one seed against the control's three:
+
+| arm | what it changes | AP | FP/frame | recall | reading |
+| --- | --- | ---: | ---: | ---: | --- |
+| **adopted control**, 3 seeds | -- | **85.49-86.35%** | 0.849-1.239 | 81.17-87.76% | the range everything is read against |
+| no rescore gate (T1) | a zero-initialised head instead of a scalar gate | 86.20% | 0.690 | 80.20% | inside |
+| no coasting head | the coasting head removed | 86.08% | 0.885 | 82.63% | inside |
+| coasting weight 3x (O2) | the coasting loss weighted up | 85.84% | 1.161 | 86.72% | inside |
+| latest value (D2) | the latest score holds a slot, not accumulated value | 85.76% | 1.052 | 85.57% | inside |
+| plateau schedule (T2) | a plateau schedule instead of cosine | 85.72% | 1.118 | 86.01% | inside |
+| metric gather | a first layer reading 1.66 m of arc, not 7 beams | 85.28% | 1.068 | 85.23% | **0.21 pp below the floor** |
+| fixed decay (D3) | one decay time for every slot instead of a learned one | 84.45% | 0.774 | 80.40% | **1.04 pp below the floor** |
+| bounded rescoring (O1) | the correction clipped to +-4 logits | 82.22% | 3.045 | 93.37% | **4.13 pp below; the head is silent** |
+
+**Two of these are load-bearing and the rest are interchangeable.** The decay must be **learned** and the rescoring
+must be **unbounded** -- O1's bound silences the head outright, and its AP is exactly its candidates'. Everything
+else moves AP less than the control's own seed spread. Read with two caveats, both stated rather than worked around:
+a single seed against three is "no evidence of a difference", **not** equivalence; and this screening carried the
+**`selective`** recurrence, which was the adopted one until minGRU replaced it, and the two tie within **0.52 pp** --
+inside the control's own 0.86 pp spread. **The fixed-decay row cannot be re-measured on the current model at all**,
+since a decay time is a parameter only `selective` has, which makes its 84.45% the last word on that question rather
+than an open one. The value rule's own constants were then trained rather than screened (`gain` 0.100 -> 0.085,
+`fade_time_s` 10.0 -> 8.94 s, AP +0.86 against a 1.32 pp bar), so the hand-set numbers defend themselves too.
+
 > **Why that arm has no score, stated as what was measured** (2026-10-28). The arm did not hit an
 > implementation bug; it hit an instability that is a property of the idea as applied here. Published Slot Attention
 > re-initialises its slots from a learned Gaussian on every input, so it backpropagates through `iterations`

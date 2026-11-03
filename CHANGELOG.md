@@ -38,6 +38,53 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Pre-print audit: the design-rule ablations were in no paper document, and three statements had gone stale (2026-11-03)
+
+*keywords: pre-print, preprint readiness, ablation table, design arms, D2 D3 T1 T2 O1 O2, PAPER.md status, 86.29 not 85.87, Li2Former in the draft, attribution ladder answered, limitations*
+
+**What the audit checked, document by document**, against what a pre-print needs: the architecture and its selection,
+the experimental design, the metric's definition, the literature, the results, the limitations and the reproduction
+instructions.
+
+| needed | where it is | state |
+| --- | --- | --- |
+| the architecture | `ARCHITECTURE.md` section 3, `RESEARCH.md` section 5, `PROPOSAL.md` section 5 | complete |
+| how it was chosen | `ARCHITECTURE.md` section 2 -- 14 questions against a 1.32 pp bar | complete, **plus the table added below** |
+| experimental design | `PAPER.md`'s dataset section and results, both splits, counts in the footnote | complete |
+| the metric | `PAPER.md`: `wp-AUC` is the person curve at a 0.5 m association distance, the column the published figures use | defined |
+| the literature | `RESEARCH.md` section 3 (~340 lines) and section 7, with section 9's reference quotes | complete |
+| the results | the three-seed freeze, the speed table, the phantom column, the tracking ladder | complete |
+| reproduction | `PAPER.md`'s command table -- **all eight scripts it names verified to exist** | complete |
+| limitations | spread across the draft's status list, `PROPOSAL.md` sections 11 and 14 | **present but not consolidated** |
+
+**The real gap, and it came out of today's decision.** Reporting the six design-rule arms "as they stand" requires them
+to *be* in the write-up, and they were in **no** paper document -- only in `memory/slot-design-evidence.md`.
+`ARCHITECTURE.md` section 2 now carries their table: T1 86.20%, no-coast 86.08%, O2 85.84%, D2 85.76%, T2 85.72%,
+metric gather 85.28%, D3 84.45%, O1 82.22%, against the control's 85.49-86.35%. It states both caveats rather than
+working around them -- one seed against three is "no evidence of a difference", not equivalence, and the screening
+carried the `selective` recurrence, which ties with the adopted minGRU within 0.52 pp -- and it notes that the
+fixed-decay row cannot be re-measured on the current model, which makes its 84.45% final rather than open. The value
+rule's own constants were trained rather than screened, so they defend themselves too.
+
+**Three statements in `PAPER.md` had gone stale.**
+
+1. Its status paragraph still read "stage 2 at 82.20%, the whole detector at 85.87%" -- the pre-freeze pair. Now
+   **82.8%** and **86.29%** over three seeds (86.11 / 86.33 / 86.43, sd 0.17 pp).
+2. "Why stage 2 alone already beats DR-SPAAM and LFE" sat under *not yet measured* while its own body recited the
+   measurement. The attribution ladder answered it on 2026-10-11; the row is struck and labelled.
+3. **Li2Former appeared nowhere in the draft at all** -- the strongest published number in the field, and the one this
+   project has just measured against. Now a status entry: their 76.4% / 72.5% on DROW, our 48.1% / 40.5% from their
+   own released code, the four-cell check pricing the decode-and-score path at +0.1 / +0.5 pp, why the FROG cell stays
+   empty, and the escape basin in their regression objective reported as released.
+
+**What stays open on purpose**, and none of it blocks the draft: no claim about `balanced` (defined, never evaluated,
+and the first cross-dataset step); whether LFE's 65% is its architecture or its training, stated as a limitation after
+the ONNX port was attempted and dropped; the LFE-PPN mislocalisation residual visible only at 0.3 m; and no DROW or
+JRDB number for this detector, because the draft is FROG-only by design.
+
+**Suggested before submission, not before the draft is readable:** fold the scattered limitations into one section.
+They are all written, in three places.
+
 ## Item 55 fixed: step 3b now fine-tunes against the objective stage 2 actually minimised (2026-11-03)
 
 *keywords: item 55, step3b, joint_frame_loss, make_targets, nearest, label_radius, label_sigma_m, beam_heatmap, soft_labels, stage2_training, dropout, calibration_network, mutation test, feedback contribution*
