@@ -38,6 +38,32 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A55 dropped, and FROG `official` is finished (2026-11-03)
+
+*keywords: A55, driver revert, dropped unexecuted, tripwire, bugcheck 0x7E, 32.0.32015.7029, FROG official complete, end of the FROG phase*
+
+**A55 is dropped unexecuted, which is not the same as resolved.** The five `0x7E`/`0xc0000005` bugchecks it existed to
+prevent are 2026-09-01, 09-22, 09-25 and twice on 10-01, and none has followed in **33 days** -- through ~30 h of ROCm
+training and two CPU evaluation passes. That is not the argument, because they stopped **17 days before** the current
+driver arrived and nothing measured links the two. The argument is that **the driver the item names is gone**: this
+host runs `32.0.32015.7029` (2026-10-18), neither the `32.0.31041.1004` the crashes sit on nor the `32.0.23027.2005`
+AMD names for the ROCm 7.2.1 wheels -- which work on it, since they trained the Li2Former port. Reverting would be
+host surgery backwards across two driver generations, on the only GPU, against a risk that has not fired in a month.
+
+**What replaces it is a trigger, and what it costs is stated.** Kernel dumps stay on, and a recurrence of
+`0x7E`/`0xc0000005` reopens the question -- with a dump in hand to confirm the power-state handler instead of inferring
+it. What is given up is the clean answer: whether the `31xxx` branch was ever the cause is now permanently unknown. The
+cost of a hit is bounded, because every trainer takes `--resume`, a flag that exists *because* of these crashes, so a
+crash costs the time since the last resume point and corrupts nothing.
+
+**With it, FROG `official` is finished.** Over today: the last open decision turned out to have been answered by a run
+sixteen days earlier; two rows the queue called open were closed weeks ago; the step-3b target divergences are fixed
+with the convention read out of the checkpoint; the design-rule ablations are in the write-up where the decision to
+report them requires them to be; three stale statements in the draft are corrected and Li2Former is in it at last; and
+the limitations are collected in the document that makes the claims. **Section A holds three rows and none of them is
+FROG `official`** -- the identity loss (needs identities, so JRDB), person-free negatives (needs `balanced`) and the
+character repair in `docs/RESEARCH.md`.
+
 ## The limitations are collected in one place, and it is the document that makes the claims (2026-11-03)
 
 *keywords: limitations, PAPER.md, draft status, scope, evidential strength, single seed, speed protocol, baselines, PROPOSAL risks, where documentation goes*

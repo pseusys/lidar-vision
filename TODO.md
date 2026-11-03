@@ -203,7 +203,7 @@ credited, and the fastest row in the table.
   though it shares FROG's sensor and venue).
 - **The ROS deployment gap** (§E), which is a separate project rather than a queued task.
 - **Owner-side and not blocking a pre-print:** A54's formal citation for prof. Aycard's `AlgorithmicDetector` (cite as personal
-  communication until it arrives), the pending review of `docs/PROPOSAL.md`, and A55's driver revert.
+  communication until it arrives), the pending review of `docs/PROPOSAL.md`, and the pre-print's own read-through.
 
 ### Running order
 
@@ -236,7 +236,7 @@ credited, and the fastest row in the table.
 | | **A52** finish the migration to the name **TAKHeLiPeD** | docs done 2026-09-23; the code half waits for a gap between training runs | mechanical renames, one commit per step |
 | | **A53** rewrite `docs/RESEARCH.md` around TAKHeLiPeD | header note added 2026-09-23; the body still argues the superseded framing | a day of writing, no compute |
 | | **A54** a formal citation for prof. O. Aycard's `AlgorithmicDetector` | credit stated everywhere 2026-09-23; **blocked on the owner** for a reference | one question |
-| | **A55** revert the GPU driver to Adrenalin 26.2.2, the version AMD requires for ROCm 7.2.1 | queue stopped for it 2026-09-26 04:51; **owner installing** | ~30 min by hand, then one long run as the test |
+| | ~~**A55** revert the GPU driver to Adrenalin 26.2.2~~ | **dropped 2026-11-03 unexecuted**: the driver it names is no longer installed and no bugcheck has followed in 33 days; a recurrence is the trigger | -- |
 | | ~~**A56** tracking-literature baselines and the paper's claims~~ | **done 2026-10-03**: E13 +2.90 pp over a tuned ByteTrack + CBMOT, which itself gains +3.30; the unlinked annotations were FROG duplicate labels (2026-10-05); E17-E18 wait for A49 | -- |
 | | ~~**A58** a merge radius on the memory's output~~ | **done 2026-10-05, negative**: val picks no merge or 0.10-0.15 m, test moves under 0.06 pp; even an oracle buys only ~0.5 pp | -- |
 | | ~~**A57** replace the eight PowerShell launchers with one typed Python queue runner~~ | **done 2026-10-09**: `utils/run_queue.py`, explicit dependencies, a `BLOCKED` outcome, 40 tests with the spawn behind a seam | -- |
@@ -1765,17 +1765,23 @@ Left to rename, in the order that minimises breakage:
 
 **Why not now.** Steps 1-3 are safe at any time; step 4 is not, and doing 1-3 without 4 leaves a third spelling in play. Worth batching behind the A51 slot experiments.
 
-### A55. Revert the GPU driver to Adrenalin 26.2.2, then prove it on one long run — **owner's hands, started 2026-09-26**
+### A55. Revert the GPU driver to Adrenalin 26.2.2 -- **DROPPED 2026-11-03 (owner): not now, and here is the trigger**
 
-**What.** Replace Adrenalin 26.8.1 (`32.0.31041.1004`) with **26.2.2** (`32.0.23027.2005`), the exact driver AMD requires for the ROCm 7.2.1 PyTorch wheels in `requirements.txt`. The A51 queue was stopped for it at 2026-09-26 04:51 (`checkpoints_three_horizon/progress.txt`); O2's `step3a_resume.pth` (chunk stage 1, epoch 7, 3.86 h) is intact.
+**Dropped unexecuted, not resolved**, and the difference matters. The five `0x7E`/`0xc0000005` bugchecks this item
+existed to prevent are 2026-09-01, 09-22, 09-25 and twice on 10-01, and **none has followed in 33 days** -- through
+~30 h of ROCm training and two CPU evaluation passes. But they stopped **17 days before** the current driver was
+installed, so nothing measured says that driver fixed anything. What dropped the item is that **the driver it names
+is gone**: this host runs `32.0.32015.7029` (2026-10-18), neither the `32.0.31041.1004` the crashes sit on nor the
+`32.0.23027.2005` AMD names for the ROCm 7.2.1 wheels -- and those wheels work on it, since they trained the
+Li2Former port. Reverting would mean host surgery backwards across two driver generations, on the only GPU, against a
+risk that has not fired in a month.
 
-**How.** The owner does the install: download 26.2.2 from AMD first, clean-uninstall the current driver (AMD Cleanup Utility), install 26.2.2 with networking off, and stop Windows Update from replacing it (Device Installation Settings -> No). Then `python -c "import torch; print(torch.cuda.is_available())"` in `.venv`, and relaunch the queue, which resumes O2 by itself. **Pass:** no `0x7E` in the System log across the next A51 runs (26.8.1 managed about one per week under ROCm load). **Fail:** a `0x7E` on 26.2.2 means the driver branch was not the cause; then test the hardware (memory test, EXPO/XMP off, PCIe slot forced to Gen4) before anything else.
-
-**Owner's decision 2026-09-26: no revert until the cause is known.** Kernel dumps are on (since the 05:58 boot) and the queue was relaunched at 06:03 on 26.8.1; the next bugcheck is the evidence. Leading suspect is a display **wake** under load (both crashes came as the owner logged in; `memory/gotchas.md`). A wake test (automated display off/on cycles under a ROCm load, ~300 cycles overnight) runs only in a gap between training runs, with the owner's go-ahead, since a hit kills the run.
-
-**Earlier the same day: test done, revert back on.** The dumps put both recent bugchecks in the driver's power-state handler (`memory/gotchas.md`), but a 10-minute display-off test under ROCm load showed no GPU power-down and no crash, so keeping the display on or disabling BACO (`PP_GPUPowerDownEnabled`) targets nothing observed; leave both alone so the revert's effect stays readable. **Before the revert, switch crash dumps to kernel dumps** (elevated: `CrashDumpEnabled = 2` plus a `DedicatedDumpFile` on `C:`, since the page file is on `S:`; reboot), so that a recurrence shows which power request (sleep, shutdown, or the driver's own) triggers it.
-
-**Why.** Five bugchecks since May, all on the `31xxx` branch, three at the same code offset on 26.8.1; none on the `23xxx` branch 26.2.2 belongs to (`memory/gotchas.md`). Going back one release (26.7.x) would stay on the branch that crashed. O2 resumes across the driver change; note it in its CHANGELOG entry, since kernels can differ numerically.
+**The trigger, which is what replaces the item.** Kernel dumps stay on. **A recurrence of `0x7E`/`0xc0000005` is what
+reopens this**, and then with a dump in hand to confirm the power-state handler rather than inferring it. What is
+given up by closing is the clean answer: whether the `31xxx` branch was ever the cause is now permanently unknown.
+The cost of a hit is bounded -- every trainer takes `--resume`, which exists because of these crashes, so a crash
+costs the time since the last resume point and corrupts nothing. Measurement and history in
+[`memory/gotchas.md`](memory/gotchas.md).
 
 ### A54. Get a formal citation for `AlgorithmicDetector` from prof. O. Aycard — **owner's to answer**
 
