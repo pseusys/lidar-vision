@@ -479,6 +479,9 @@ Step 1 gives stage 3 the weakest input it will ever see, so a gain there is a fl
 
 ## 11. Risks
 
+These are the **design-time** risks the architecture was built against. What the measured study
+cannot claim is collected in [`PAPER.md`](PAPER.md)'s "Limitations" section.
+
 - **The long horizon cannot judge a person who has not moved yet.** The best movement-based filter needed to see the future; in real time, a person who has stood still for twenty seconds and a chair look alike. Feedback sharpens this: a slot convinced it holds a chair could teach the detector to stop seeing a standing person. Mitigations: memory is gated evidence starting at zero, simulated priors include wrong tracks, and people standing still are always reported separately.
 - **Hardware.** Recurrent training has crashed on this project's DirectML setup before; whether CUDA is available decides chunk lengths.
 - ~~**Cache alignment errors** grow with the coarse span and with odometry noise; step 0's static-scene test and the input ablation expose them.~~ Moot since 2026-10-08: stage 2 keeps no cache.

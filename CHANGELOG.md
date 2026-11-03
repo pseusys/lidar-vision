@@ -38,6 +38,37 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The limitations are collected in one place, and it is the document that makes the claims (2026-11-03)
+
+*keywords: limitations, PAPER.md, draft status, scope, evidential strength, single seed, speed protocol, baselines, PROPOSAL risks, where documentation goes*
+
+**Where, and why there.** `docs/PAPER.md` gains a **Limitations** section. It is the right home by this repository's
+own division of labour rather than by preference: `PAPER.md` "holds the argument" and is "the measurements the design
+is argued from", and a limitation bounds a claim, so it is unreadable away from the claim it bounds.
+`docs/ARCHITECTURE.md` is the architecture specification and most of these are not architectural;
+`docs/RESEARCH.md` is explicitly mechanism-only with results living in `memory/`; and a separate file would have
+divorced every caveat from its claim while adding a document, against this project's preference for editing over
+adding.
+
+**What it collects**, in four groups: **scope** (every number is FROG `official`; `balanced` defined but never
+evaluated by anyone; DROW and JRDB not claimed; FROG has no identities, so no HOTA / MOTA / IDF1 / OSPA(2) appears
+anywhere and the tracking comparison is a detection comparison against trackers); **evidential strength** (a
+three-seed headline, but one-seed screens against it, so "inside the range" is *no evidence of a difference* and never
+equivalence -- and the design-rule screen ran with the `selective` recurrence, which ties with minGRU within 0.52 pp);
+**speed** (one host, one protocol, CPU at four threads and batch 1, with published figures quoted and never compared
+directly); and **the baselines** (LFE's architecture-versus-training unseparated after the ONNX port was dropped, the
+LFE-PPN residual visible only at 0.3 m, and Li2Former's empty FROG cell with its measured reason).
+
+**Three entries moved rather than being rewritten**, out of "Status of this draft" and into the new section verbatim.
+That section had been doing two jobs at once: *draft progress* (what is written) and *limitations* (what cannot be
+claimed). It now says which it is, and `balanced` is named as the one entry that is legitimately both -- unmeasured
+there, therefore unclaimed here. `PROPOSAL.md` section 11 now says its risks are the **design-time** ones and points
+at the collected list; `ARCHITECTURE.md` section 2 does the same for the caveats its verdicts carry.
+
+**Tested:** 1,227 pass, `verify_memory.py` 0 errors. One defect found in the writing of it: the first draft linked to
+the new section with a `#limitations` anchor, which `verify_memory.py` rejects -- it resolves file links, not
+same-file fragments -- so the reference names the section instead, as the rest of the file already does.
+
 ## Pre-print audit: the design-rule ablations were in no paper document, and three statements had gone stale (2026-11-03)
 
 *keywords: pre-print, preprint readiness, ablation table, design arms, D2 D3 T1 T2 O1 O2, PAPER.md status, 86.29 not 85.87, Li2Former in the draft, attribution ladder answered, limitations*

@@ -49,6 +49,10 @@ effect is not venue-specific; it is not evidence that it is universal (`memory/d
 
 ## 2. How the architecture was chosen
 
+The caveats these verdicts carry -- single seed against a three-seed
+control, and the recurrence the design-rule screen ran with -- are stated below and collected with every other
+caveat in [`PAPER.md`](PAPER.md)'s "Limitations" section.
+
 Fourteen architectural questions were measured against E13's **1.32 pp** three-sigma bar on FROG `official` test,
 stride 5. **Two were load-bearing.** The full ledger with numbers is in
 [`../memory/detector-architectures.md`](../memory/detector-architectures.md); this is the summary.
