@@ -69,6 +69,14 @@ history and full numbers in `CHANGELOG.md`; the design's own reasoning in `docs/
 
 The six design arms plus the gather and coasting ablations, each E13's configuration plus one flag, against the adopted control's three seeds.
 
+**Read these with one sentence attached, and it is not a backbone disclaimer** (settled 2026-11-03, owner's call to report them as they stand). The screening ran on the adopted recipe's own stage 2, so the control is the right
+one -- but stage 3 still carried the **`selective`** recurrence, which was the adopted one until **minGRU replaced it
+on 2026-10-23**. The three recurrences were then measured to tie within **0.52 pp**, inside this control's own 0.86 pp
+spread, so the arm table is one recurrence behind the proposed model and that difference is smaller than the bar every
+row is read against. **D3 cannot be re-run on the current model at all**: `fixed_decay_s` is a decay rate only
+`selective` reads, minGRU has no decay term, and the command now raises. Its 84.45% is therefore the last word on a
+fixed decay time rather than an open question.
+
 | arm | what it changes | AP | FP/frame | recall | reading |
 | --- | --- | ---: | ---: | ---: | --- |
 | **adopted control**, 3 seeds | -- | **85.49-86.35%** | 0.849-1.239 | 81.17-87.76% | the range everything is read against |

@@ -110,14 +110,17 @@ That's a structural gap, not a pending deploy — see §E below.
 every design choice measured, every baseline fair. The other datasets (**A62**, **A63**) then run in parallel with the writing
 rather than blocking it.
 
-**Everything here is FROG, unblocked, and can start now.** One decision is the owner's and gates the longest job:
+**Everything here is FROG, unblocked, and the one decision that gated it is answered:**
 
-> **The decision (owner's, one answer, gates ~2 GPU-days).** A51's six single-seed arms -- D2 `--latest-value`, D3
-> `--fixed-decay-s 8`, T1 `--no-rescore-gate`, T2 `--schedule plateau`, O1 bounded rescoring, O2 `--coast-weight 3` -- were
-> screened on the superseded no-temporal backbone. Either **(a) re-screen them on the adopted recipe** (~5 h each, two GPU-days,
-> and the ablation table then describes the model being proposed) or **(b) report them as they stand**, each labelled with the
-> backbone it ran on. **(b) costs nothing and is defensible**, because none of the six changed the adopted design; **(a) is what
-> a reviewer would prefer** on noticing the backbone moved under the table. Nothing else waits on this.
+> **ANSWERED 2026-11-03 (owner): report the six design arms as they stand.** And the ground for that is firmer than this
+> block used to claim, because the re-screen it offered as option (a) **had already been run on 2026-10-18**: step 1's
+> chain put all six -- D2 `--latest-value`, D3 `--fixed-decay-s 8`, T1 `--no-rescore-gate`, T2 `--schedule plateau`,
+> O1 bounded rescoring, O2 `--coast-weight 3` -- on the **adopted recipe's own stage 2**, one seed each against the
+> three-seed control's 85.49-86.35% range, together with the gather and coasting ablations (`CHANGELOG.md`,
+> 2026-10-18). So no GPU time is owed and none was deferred. **The single caveat the write-up must carry is one
+> sentence, not a backbone disclaimer:** those arms ran with the `selective` recurrence, which was the adopted one
+> until minGRU replaced it on 2026-10-23, and the three recurrences were measured to tie within **0.52 pp**. The
+> caveat is recorded where the numbers are, in `memory/slot-design-evidence.md`.
 
 **Numbers are permanent and the gaps are deliberate.** A finished item's row is deleted once `CHANGELOG.md` carries its entry (the house rule in `AGENTS.md`), but the numbering never shifts: `item 29` means the same item in every commit message, `memory/` page and `docs/` reference. To read what a missing number did, grep `CHANGELOG.md`.
 
@@ -705,27 +708,22 @@ an experiment.
 > evidence for the coasting head) were already nulls end to end, and on this recipe the quantity they improve is ~0.001 reports
 > per frame. (3) Any paper sentence about the coasting head must say which backbone it was measured on.
 >
-> **The decision this item now needs (owner's call).** The deferred single-seed arms -- D2 `--latest-value`, D3
-> `--fixed-decay-s 8`, T1 `--no-rescore-gate`, T2 `--schedule plateau`, O1 bounded rescoring, O2 `--coast-weight 3` -- cannot be
-> "given extra seeds": on this recipe they are *new screens* against a new control, about 5 h each, so roughly **two GPU-days for
-> the six**. Either:
+> **ANSWERED 2026-11-03 (owner): report them as they stand.** *"We have tested them, and the architecture didn't change
+> much since."* The record agrees, and more strongly than this block did: the six deferred arms -- D2 `--latest-value`,
+> D3 `--fixed-decay-s 8`, T1 `--no-rescore-gate`, T2 `--schedule plateau`, O1 bounded rescoring, O2 `--coast-weight 3`
+> -- were **not** left on the superseded backbone. Step 1's chain re-screened all six on the adopted recipe's own stage 2
+> on **2026-10-18**, one seed each against the three-seed control's 85.49-86.35% range, and the table is in
+> `CHANGELOG.md` and in `memory/slot-design-evidence.md`. Five read inside the control's spread; D3 is 1.04 pp below its
+> floor and O1 4.13 pp below with the head silent. **So the two GPU-days were spent, not deferred, and the paragraphs
+> above about "either re-screen or label the backbone" were stale from 2026-10-18 onwards.**
 >
-> - **(a) re-screen them on the adopted recipe** -- every design-choice number in the paper then describes the model being
->   proposed, and the three-bar protocol applies cleanly; or
-> - **(b) report them as they stand**, each labelled with the backbone it was run on, and say plainly that the design choices were
->   screened on a superseded stage 2 while the adopted configuration (E6+E7, i.e. E13) was confirmed at three seeds on the current
->   one.
->
-> **(b) is defensible and costs nothing**, because none of the six changed the adopted design: D2 and O2 were nulls, D3 and T2
-> were inside their bars, T1 was inside on AP, and O1 never finished. **(a) is what a reviewer would prefer** if they notice the
-> backbone changed under the ablation table. The write-up cannot stay silent on it either way.
->
-> **And (a) is now impossible for one of the six (2026-10-28).** **D3 `--fixed-decay-s 8` cannot be re-screened on the adopted
-> recipe at all**: `fixed_decay_s` is a decay *rate* read only by the `selective` recurrence, and item 38 adopted **minGRU**,
-> which has no decay term. Before 2026-10-28 the command ran and silently trained the control; it now raises, by the guard the
-> pre-freeze audit added. So D3 is a **`selective`-only ablation that does not transfer**, and the write-up must report it
-> against the backbone it was run on whatever is decided for the other five -- which is option (b) for that row by necessity
-> rather than by choice. The other five (D2, T1, T2, O1, O2) remain expressible on the adopted recipe.
+> **What the write-up still owes is one sentence.** That screening ran with the `selective` recurrence, which was the
+> adopted one until **minGRU replaced it on 2026-10-23**, so the arm table is one recurrence behind the proposed model.
+> The three recurrences tie within **0.52 pp**, which is well inside the control's own 0.86 pp spread, so the sentence is
+> "these arms were screened with the selective recurrence, which ties with the adopted minGRU" -- not a disclaimer about
+> a different backbone. **D3 also cannot be re-run now even if someone wanted to**: `fixed_decay_s` is a decay rate read
+> only by `selective`, minGRU has no decay term, and the command raises since the pre-freeze audit added its guard. That
+> is a reason its 84.45% stands as the final word on a fixed decay time, not a gap.
 >
 > **Both of the arms that were open inside the item are now closed, and neither needed the decision above.** D4 (`step3a --learn-value`) ran 2026-10-11 and
 > D5 (a learned association width) was rejected without a run on 2026-10-22. Between them they answered whether the hand-coded

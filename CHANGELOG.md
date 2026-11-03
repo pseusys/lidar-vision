@@ -38,6 +38,43 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## FROG `official` closes: its last open decision had already been answered by a run (2026-11-03)
+
+*keywords: six design arms, D2 D3 T1 T2 O1 O2, step 1, selective vs minGRU, 0.52 pp tie, backbone label, D4 learn_value, D5 association width, A55, Adrenalin, 32.0.32015.7029, bugcheck 0x7E, owner's call*
+
+**The decision, and why it cost nothing.** The owner's call: **report the six single-seed design arms as they stand**
+-- *"we have tested them, and the architecture didn't change much since."* Checking the record before writing that down
+turned up something better than the queue claimed: the option the block offered as a ~2 GPU-day job, re-screening those
+arms on the adopted recipe, **had already been run on 2026-10-18**. Step 1's chain put all six on the adopted recipe's
+own stage 2, one seed each against the three-seed control's 85.49-86.35% range. **The two GPU-days were spent, not
+deferred, and the decision block had been stale for sixteen days.**
+
+**What the write-up owes is one sentence, not a disclaimer.** That screening carried the **`selective`** recurrence,
+which was adopted until **minGRU replaced it on 2026-10-23**, so the arm table is one recurrence behind the proposed
+model. The three recurrences tie within **0.52 pp** -- inside the control's own 0.86 pp spread -- so the sentence is
+"screened with the selective recurrence, which ties with the adopted minGRU", and it now sits beside the numbers in
+`memory/slot-design-evidence.md` rather than only in the queue. **D3 cannot be re-run on the current model at all**
+(`fixed_decay_s` is a decay rate only `selective` reads; minGRU has none, and the command raises since the pre-freeze
+audit's guard), which makes its 84.45% the last word on a fixed decay time rather than a gap.
+
+**Two more rows in the same block were stale, in the direction that invents work.** `TODO.md` said D4
+`step3a --learn-value` was "never run" and D5 "needs code first". D4 ran **2026-10-11** -- one seed, AP +0.86 against a
+1.32 pp bar, `gain` 0.100 -> 0.085 and `fade_time_s` 10.0 -> 8.94 s -- and D5 was **rejected without a run 2026-10-22**
+on the gate sweep's flat 99.1 / 99.2 / 99.2%. Both corrected; with them stale the queue read as though two FROG runs
+were still owed.
+
+**So FROG `official` has nothing left to measure.** Every pre-print blocker is done, every design knob is screened, and
+the baseline table's FROG column is filled except Li2Former, whose gap was given a stated reason on 2026-11-03.
+
+**And the host's driver item was measured rather than argued** (`memory/gotchas.md`). The five `0x7E`/`0xc0000005`
+bugchecks it exists to prevent are 2026-09-01, 09-22, 09-25 and twice on 10-01 -- **then nothing for 33 days**, through
+~30 h of ROCm training and two CPU evaluation passes. The driver the pattern belongs to is **gone**: this host runs
+`32.0.32015.7029` (2026-10-18), neither the `32.0.31041.1004` the crashes sit on nor the `32.0.23027.2005` AMD names
+for the ROCm 7.2.1 wheels -- which work on it, since they trained the Li2Former port. The crashes also stopped 17 days
+*before* that driver arrived, so nothing measured links the two. **Recommendation recorded, decision the owner's:** do
+not revert, and keep it as a tripwire -- dumps stay on, and a recurrence of `0x7E`/`c0000005` is what triggers the
+revert, with the dump in hand.
+
 ## The item numbering leaves the repository: code and docs now name what a thing tests (2026-11-03)
 
 *keywords: item notation, A-numbers, rename, readable without prior knowledge, operational notation, queue script names, strip_tags, mojibake, IDEAS_BACKLOG, rule 4b, owner's call*
