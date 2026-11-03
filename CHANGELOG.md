@@ -38,6 +38,73 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## FROG `balanced` becomes trainable, is verified against the real recordings, and the one-seed chain is queued (2026-11-03)
+
+*keywords: balanced, FROG partition, --frog-mode, train_takheliped, load_frames, frog_mode in checkpoint, resume guard, check_balanced_partition, 133367, 121329, 110846, run-up, official test subset, queue_balanced, LFE on balanced, item 67 68 69*
+
+**This project had never trained on `balanced`, and could not have.** `train.py` has taken `--frog-mode` since
+the three partitions were defined, but `train_takheliped.py` never did: `load_frames` named `mode="official"` in
+its own body, so **every stage-2 and stage-3 run in this project's history is an `official` run whatever anyone
+intended**. Harmless while `official` is the only partition in use, and a silent wrong answer the moment it is
+not -- `balanced`'s val contains recordings `official` trains on, so the failure mode is scoring a model on its
+own training data.
+
+**What landed.** `--frog-mode {official,transferred,balanced}` on `step2`, `step3a`, `step3b` and `step4`,
+defaulting to `official` so every number measured so far is reproduced by the default command. It is threaded
+through all six frame-loading call sites, it keys the stage-3 candidate cache (so a `balanced` run cannot read
+`official`'s cached candidates), and it is **stored in the checkpoint** as `frog_mode` at the top level, which
+is where `evaluate.py._resolve_frog_mode` looks and how it refuses to put two partitions in one evaluation
+pass. A resume file written under another partition is now **refused**, not ignored: every queued job passes
+`--resume`, so that is the realistic way two partitions would have been mixed.
+
+**Verified against the real recordings, which is what rule 4 asks for.** The existing partition tests are good
+and they run on synthetic HDF5 files in a `tmp_path`, so they are evidence about the loader and not about the
+dataset. `utils/check_balanced_partition.py` reads the actual files:
+
+| split | scans | claimed | empty | claimed | people / populated | claimed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| train | **133,367** | 133,367 | 20.7% | 20.6% | 3.72 | 3.70 |
+| val | **121,329** | 121,329 | 20.0% | 19.8% | 3.54 | 3.52 |
+| test | **110,846** | 110,846 | 19.1% | 19.1% | 3.20 | 3.20 |
+
+Every frame count is exact and the fractions sit inside tolerance, because the table's shares were taken over
+scans and these are taken over scorable frames. **Two overlaps that are load-bearing claims are now measured
+rather than asserted:** `official`'s test is **100% contained** in `balanced`'s test (40,022 frames, 45.2% of
+it), so the published split really is extractable from one pass; and `balanced`'s val shares **45,557 frames,
+47.1% of itself,** with `official`'s **train**, so the loader's warning against mixing partitions is live and
+not stale.
+
+**One thing the check got wrong first, and it is worth recording.** It read `train` as 1,040 frames short of
+the table. The table is right: `train` and `val` hand out detections from frame 40 of each sequence, so a
+temporal model's first judged frame has a full window behind it -- 26 sequences times 40 is exactly the 1,040 --
+and `test` takes **no** run-up, because dropping 40 frames from each of its 48 sequences would remove frames
+from the official-test subset and destroy the comparability the pairing exists for. The asymmetry is now pinned
+by a test.
+
+**Four tests added to the partition suite**, all mutation-tested: `balanced` differs from `official` on every
+split by recording; **train and val both hold person-free frames**, stated on the two splits `official` cannot
+supply; `official`'s test frames are all present in `balanced`'s test; and the run-up asymmetry. Each fails on
+the mutation it exists to catch and on no other.
+
+**The chain is `utils/queue_balanced.py`, one seed** (owner's call): stage 2, its weight average, stage 3a, and
+LFE-Peaks and LFE-PPN on `balanced`'s test -- the minutes-long job first, so a broken partition surfaces before
+a GPU-day starts. If `balanced` lands within about half a point of `official`'s **86.29%** one seed has said
+what there was to say; the three-seed spread there is 0.22 pp. A smoke run of stage 2 on `balanced` trains,
+evaluates and writes, and prints the verified frame counts back.
+
+**"Every architecture" is less than it sounds, and it is not this queue's doing.** Only this project's own
+detector can be trained here: LFE is an inference graph whose PyTorch port was attempted and dropped, and
+DR-SPAAM and DROW3 are not in `train.py`'s trainable set either. All three can only be **scored** with their
+authors' weights -- which is exactly what makes `balanced`'s test the right place to score them, since it holds
+out both recordings they were trained on. DROW3 and DR-SPAAM are left out of the scoring job as well, for cost:
+they run one forward pass per beam, which over 110,846 frames is days, and their FROG numbers already exist on
+`official`.
+
+**Two gaps filed rather than invented at the end of a long session** (items 68 and 69): `empty_scene.py` takes
+no partition, so item 26's `official`-against-`balanced` phantom column cannot be run yet; and nothing scores a
+trained checkpoint on a partition it was not trained on, so the official-test subset of the balanced pass --
+the comparison that pairing was chosen for -- has no entry point.
+
 ## A55 dropped, and FROG `official` is finished (2026-11-03)
 
 *keywords: A55, driver revert, dropped unexecuted, tripwire, bugcheck 0x7E, 32.0.32015.7029, FROG official complete, end of the FROG phase*

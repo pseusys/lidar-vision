@@ -507,16 +507,28 @@ def save_resume(path: Path, **state) -> None:
     os.replace(temporary, path)
 
 
-def load_resume(path: Path, resume: bool) -> Optional[Dict[str, object]]:
+def load_resume(path: Path, resume: bool, frog_mode: Optional[str] = None) -> Optional[Dict[str, object]]:
     """The state `save_resume` wrote, or None when not resuming, when there is nothing to resume from, or when the file cannot be
-    read -- a run that has to start over is better than one that starts from rubble."""
+    read -- a run that has to start over is better than one that starts from rubble.
+
+    `frog_mode` is refused rather than ignored when it disagrees with what the resume file was written under. Every
+    queued job passes `--resume`, so a chain relaunched with a different partition would otherwise carry on from the
+    other partition's weights and optimiser and report the result under this partition's name. A file written before
+    the field existed says nothing and is allowed, because it can only be an `official` run.
+    """
     if not resume or not path.exists():
         return None
     try:
-        return torch.load(path, map_location="cpu", weights_only=False)
+        state = torch.load(path, map_location="cpu", weights_only=False)
     except Exception as error:
         print(f"ignoring {path}: {error}", flush=True)
         return None
+    stored = state.get("frog_mode")
+    if frog_mode is not None and stored is not None and stored != frog_mode:
+        raise SystemExit(f"{path} was written under FROG '{stored}' and this run is '{frog_mode}'. Resuming would "
+                         f"continue the other partition's run under this one's name. Delete it, or point --out-dir "
+                         f"somewhere else.")
+    return state
 
 
 def periodic_reset(since_s: np.ndarray, dt: np.ndarray, interval_s: Optional[float]):
@@ -1147,13 +1159,14 @@ def train_memory(args) -> None:
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     device, _ = detect_device()
-    splits = {name: load_split(name, args.limit_recordings, args.stage2, device) for name in ("train", "val")}
+    splits = {name: load_split(name, args.limit_recordings, args.stage2, device, args.frog_mode)
+              for name in ("train", "val")}
     for name, split in splits.items():
         print(f"{name}: {len(split.lengths)} recordings, {split.lengths.sum()} frames, {int(split.data.annotated.sum())} annotated", flush=True)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     best = BestCheckpoint(args.out_dir / f"{args.mode}_object_memory.best.pth")
     resume_path = args.out_dir / f"{args.mode}_resume.pth"
-    resumed = load_resume(resume_path, args.resume)
+    resumed = load_resume(resume_path, args.resume, args.frog_mode)
 
     model = ObjectMemory(SlotRules(capacity=args.slots, latest_value=args.latest_value, association=args.association, cell_m=args.cell_m), feature_dim=splits["train"].data.features.shape[-1],
                          rescore_gate=args.rescore_gate, rescore_limit=args.rescore_limit, room_frame=args.room_frame, coast=args.coast,
@@ -1262,7 +1275,7 @@ def train_memory(args) -> None:
                         print(f"  skipped a step at {where} ({skipped} of {GRAD_SKIP_LIMIT} allowed this epoch): {diagnosis}", flush=True)
                         continue
                     path = args.out_dir / f"{args.mode}_nan.pth"
-                    torch.save(dict(model=model.state_dict(), chunk_s=chunk_s, epoch=epoch + 1, seq=seq, frame=frame, reset=reset,
+                    torch.save(dict(model=model.state_dict(), chunk_s=chunk_s, epoch=epoch + 1, seq=seq, frame=frame, reset=reset, frog_mode=args.frog_mode,
                                     args={k: str(v) for k, v in vars(args).items()}), path)
                     raise RuntimeError(f"not finite at {where}: {diagnosis}\n  chunk and weights saved to {path}")
                 optimizer.step()
@@ -1280,7 +1293,7 @@ def train_memory(args) -> None:
             if not step_every_iteration:
                 schedule.step(val["memory"]["ap"])
             improved = stopper.update(val["memory"]["ap"])      # patience restarts with every chunk length
-            checkpoint = dict(model=model.state_dict(), chunk_s=chunk_s, epoch=epoch, val=val, args={k: str(v) for k, v in vars(args).items()})
+            checkpoint = dict(model=model.state_dict(), chunk_s=chunk_s, epoch=epoch, val=val, frog_mode=args.frog_mode, args={k: str(v) for k, v in vars(args).items()})
             if improved:
                 torch.save(checkpoint, args.out_dir / f"{args.mode}_object_memory.{chunk_s:g}s.best.pth")
             overall = best.offer(val["memory"]["ap"], checkpoint)   # the run's best does not
@@ -1290,7 +1303,7 @@ def train_memory(args) -> None:
                        eval_s=time.time() - t_epoch - train_s, hours=hours, stage_best=improved, best=overall,
                        gpu_gb=torch.cuda.max_memory_allocated() / 2**30 if torch.cuda.is_available() else float("nan"))
             history.append(row)
-            save_resume(resume_path, model=model.state_dict(), optimizer=optimizer.state_dict(), schedule=schedule.state_dict(),
+            save_resume(resume_path, frog_mode=args.frog_mode, model=model.state_dict(), optimizer=optimizer.state_dict(), schedule=schedule.state_dict(),
                         stopper=stopper.state(), best=best.state(), history=history, hours=hours, stage=stage, epoch=epoch,
                         rng=rng_snapshot(rng), args={k: str(v) for k, v in vars(args).items()})
             marker = "  best" if overall else ("  stage best" if improved else "")
@@ -1303,7 +1316,7 @@ def train_memory(args) -> None:
         if best.saved:
             model.load_state_dict(torch.load(best.path, map_location=device)["model"])     # the next stage resumes from the run's best
     del splits["train"], splits["val"]                  # the test candidates are only needed now, and three splits at once exhaust a 16 GB host
-    splits["test"] = load_split("test", args.limit_recordings, args.stage2, device)
+    splits["test"] = load_split("test", args.limit_recordings, args.stage2, device, args.frog_mode)
     print(f"test: {len(splits['test'].lengths)} recordings, {splits['test'].lengths.sum()} frames, "
           f"{int(splits['test'].data.annotated.sum())} annotated", flush=True)
     results = dict(history=history, test={}, memory_ms_per_frame=memory_ms_per_frame(model, splits["test"], device))
@@ -1339,8 +1352,14 @@ class FrameSplit:
     time: np.ndarray
 
 
-def load_frames(name: str) -> FrameSplit:
-    return frames_from_dataset(FROG_Dataset(split=name, mode="official", auto_download=False, verbose=False, missing_return_m=None))
+def load_frames(name: str, mode: str = DEFAULT_MODE) -> FrameSplit:
+    """Every recording of FROG `mode`'s `name` split, packed end to end.
+
+    The partition is an argument because it used to be a literal here, which quietly made every run an
+    `official` run whatever the caller intended. It stays `official` by default so every number measured
+    before the flag existed is reproduced by the default command.
+    """
+    return frames_from_dataset(FROG_Dataset(split=name, mode=mode, auto_download=False, verbose=False, missing_return_m=None))
 
 
 def frames_from_dataset(ds) -> FrameSplit:
@@ -1474,7 +1493,7 @@ def train_calibration(args) -> None:
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     device, _ = detect_device()
-    splits = {name: load_frames(name) for name in SPLITS}
+    splits = {name: load_frames(name, args.frog_mode) for name in SPLITS}
     for name, split in splits.items():
         print(f"{name}: {len(split.scans)} frames, {len(split.annotated)} annotated", flush=True)
     angles = frog_laser_angles(720)
@@ -1488,7 +1507,7 @@ def train_calibration(args) -> None:
     best = BestCheckpoint(args.out_dir / "step2_calibration.best.pth")
     periodic = PeriodicCheckpoint(args.out_dir, "step2_calibration", args.checkpoint_every)
     resume_path = args.out_dir / "step2_resume.pth"
-    resumed = load_resume(resume_path, args.resume)
+    resumed = load_resume(resume_path, args.resume, args.frog_mode)
 
     train_split, val_split = splits["train"], splits["val"]
     iterations = math.ceil(len(train_split.annotated) / args.batch)
@@ -1554,7 +1573,8 @@ def train_calibration(args) -> None:
             improved = stopper.update(val["ap"])
             if args.schedule == "plateau":
                 schedule.step(val["ap"])
-            checkpoint = dict(model=net.state_dict(), epoch=epoch, val=val, args=stored_args)
+            checkpoint = dict(model=net.state_dict(), epoch=epoch, val=val, frog_mode=args.frog_mode,
+                              args=stored_args)
             best.offer(val["ap"], checkpoint)
             periodic.offer(epoch, checkpoint)
             hours = done_hours + (time.time() - start) / 3600
@@ -1562,7 +1582,7 @@ def train_calibration(args) -> None:
                        eval_s=time.time() - t_block - train_s, hours=hours, best=improved,
                        gpu_gb=torch.cuda.max_memory_allocated() / 2**30 if torch.cuda.is_available() else float("nan"))
             history.append(row)
-            save_resume(resume_path, model=net.state_dict(), optimizer=optimizer.state_dict(), schedule=schedule.state_dict(),
+            save_resume(resume_path, frog_mode=args.frog_mode, model=net.state_dict(), optimizer=optimizer.state_dict(), schedule=schedule.state_dict(),
                         stopper=stopper.state(), best=best.state(), periodic=periodic.state(), history=history, hours=hours,
                         step=step, rng=rng_snapshot(rng), args=stored_args)
             print(f"  epoch {epoch:6.2f}  loss {row['loss']:.4f}  val AP {row['val_ap']:.2%}  FP {row['val_fp']:.3f} FN {row['val_fn']:.3f}  lr {row['lr']:.1e}  "
@@ -1696,7 +1716,7 @@ def train_joint(args) -> None:
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     device, _ = detect_device()
-    splits = {name: first_recordings(load_frames(name), args.limit_recordings) for name in SPLITS}
+    splits = {name: first_recordings(load_frames(name, args.frog_mode), args.limit_recordings) for name in SPLITS}
     angles = frog_laser_angles(720)
     stage2 = torch.load(args.stage2, map_location="cpu")
     # What those weights were trained against. The targets below and the dropout here both come from the checkpoint,
@@ -1735,7 +1755,7 @@ def train_joint(args) -> None:
     print(f"joint: {length} frames per chunk, {iterations} chunks per epoch, evaluating every {eval_every}", flush=True)
     state, start, step, history, losses, t_block = None, time.time(), 0, [], [], time.time()
     resume_path = args.out_dir / "step3b_resume.pth"
-    resumed = load_resume(resume_path, args.resume)
+    resumed = load_resume(resume_path, args.resume, args.frog_mode)
     done_hours = 0.0
     if resumed:
         net.load_state_dict(resumed["net"]), memory.load_state_dict(resumed["memory"])
@@ -1778,6 +1798,7 @@ def train_joint(args) -> None:
         result = evaluate_joint(net, memory, val, val_segments, args.val_stride, device, args.val_windows, mode)
         stopper.update(result["memory"]["ap"])          # called for its side effect: it records the bar and the misses
         overall = best.offer(result["memory"]["ap"], dict(net=net.state_dict(), memory=memory.state_dict(), epoch=epoch, val=result,
+                                                          frog_mode=args.frog_mode,
                                                           args={k: str(v) for k, v in vars(args).items()}))
         hours = (time.time() - start) / 3600
         row = dict(epoch=epoch, loss=float(np.mean(losses)) if losses else float("nan"), val_ap=result["memory"]["ap"], val_ap_candidates=result["candidates"]["ap"],
@@ -1855,7 +1876,7 @@ def run_ablations(args) -> None:
     device, _ = detect_device()
     angles = frog_laser_angles(720)
     results = dict(sort={}, memory_slots={}, joint_slots={})
-    candidates = load_split("test", args.limit_recordings, args.stage2, device)
+    candidates = load_split("test", args.limit_recordings, args.stage2, device, args.frog_mode)
     raw = score_detections([(d_s[v], d_xy[v], gt[gv]) for d_s, d_xy, v, gt, gv, a in
                             zip(candidates.data.score, candidates.data.xy, candidates.data.valid, candidates.data.gt_xy, candidates.data.gt_valid, candidates.data.annotated) if a])
     results["candidates"] = raw
@@ -1870,7 +1891,7 @@ def run_ablations(args) -> None:
     whole = evaluation_segments(candidates, 0, 0, 0)
     memory_checkpoint = torch.load(args.memory, map_location=device, weights_only=False)
     joint_state = torch.load(args.joint, map_location=device)
-    test = first_recordings(load_frames("test"), args.limit_recordings)
+    test = first_recordings(load_frames("test", args.frog_mode), args.limit_recordings)
     test_segments = evaluation_segments(SimpleNamespace(lengths=recording_bounds(test.start)[1]), 0, 0, 0)
     for slots in args.slots:
         memory = object_memory(memory_checkpoint, candidates.data.features.shape[-1], capacity=slots).to(device)
@@ -1894,6 +1915,14 @@ def build_parser() -> argparse.ArgumentParser:
     sub = ap.add_subparsers(dest="mode", required=True)
     for name in ("step1", "step2", "step3a", "step3b"):
         p = sub.add_parser(name)
+        # Which FROG partition to train on. `official` is the default because every number this project has
+        # measured is an `official` number, and the flag's absence is what made that true by accident rather
+        # than by choice: `load_frames` used to name the partition in its own body. `balanced` is the only
+        # partition with person-free frames in train and val, and its val holds recordings `official` trains
+        # on, so it is never mixed with an `official` run -- `evaluate.py` enforces that from the checkpoints.
+        p.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
+                       help="FROG partition to train on; stored in the checkpoint, which is how evaluate.py "
+                            "knows which partition to score on and refuses to mix two in one pass")
         p.add_argument("--lr", type=float, default=1e-3)
         p.add_argument("--weight-decay", type=float, default=1e-2)
         p.add_argument("--seed", type=int, default=0)
@@ -2051,6 +2080,9 @@ def build_parser() -> argparse.ArgumentParser:
     step3b.add_argument("--val-window-s", type=float, default=60.0)
     step3b.add_argument("--val-warmup-s", type=float, default=30.0)
     step4 = sub.add_parser("step4")
+    step4.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
+                       help="FROG partition to run the ablations on; must match the one the checkpoints were "
+                            "trained under, or the ablation scores a model on another partition's frames")
     step4.add_argument("--stage2", type=Path, required=True)
     step4.add_argument("--memory", type=Path, required=True, help="step3a's stage 3")
     step4.add_argument("--joint", type=Path, required=True, help="step3b's whole detector")

@@ -61,6 +61,16 @@ python train_takheliped.py step3b --stage2 ../checkpoints_three_horizon/step2_ca
 #   checkpoint and prints them, because fine-tuning has to minimise the objective those weights already minimised.
 python train_takheliped.py step4 --stage2 ... --memory ... --joint ../checkpoints_three_horizon/step3b_joint.best.pth   # SORT and slot-count ablations, no training
 python scan_anomalies.py --dataset frog    # raw-scan noise report: no-return encodings, invalid runs, spikes, jitter, timestamps (also drow)
+
+# Another FROG partition. `--frog-mode` reaches every step that loads frames and is **stored in the checkpoint**,
+# so `evaluate.py` scores the partition the weights were trained on and refuses to put two in one pass. It also
+# keys the stage-3 candidate cache, and a resume file written under another partition is refused rather than used.
+python train_takheliped.py step2 --frog-mode balanced --no-aggregator --label-sigma-m 0.3 --seed 0 --out-dir ../checkpoints_three_horizon/balanced_stage2_s0 --resume
+python queue_balanced.py --list                     # the whole one-seed chain plus the published pair on balanced's test
+
+# Is the partition what the loader claims? Real recordings, not the synthetic fixtures the unit tests use.
+.venv/Scripts/python.exe -I utils/check_balanced_partition.py                 # all three splits, ~10 min
+.venv/Scripts/python.exe -I utils/check_balanced_partition.py --splits val    # one at a time, for memory
 python slot_experiments.py horizon --memory <step3a ckpt> --stage2 <step2 ckpt>    # how long a memory the model uses: AP against how often it is emptied
 python slot_experiments.py odometry --memory ... --stage2 ... --sensor-memory <D1 ckpt>  # AP against odometry drift, room frame vs sensor frame
 python slot_experiments.py crowding --memory ... --stage2 ...                    # AP by people per frame, candidates vs memory

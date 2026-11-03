@@ -533,6 +533,73 @@ class TestBalancedMode:
         assert train_val_starts(tr) and all(x >= 100_000 for x in train_val_starts(tr))
         assert train_val_starts(va) and all(x < 100_000 for x in train_val_starts(va))
 
+    def test_every_split_differs_from_officials_split_of_the_same_name(self, frog_dir):
+        """A `balanced` number and an `official` number must never be the same measurement under two names.
+
+        Checked per split rather than over the partition as a whole: it would be possible to permute the six
+        recordings and still hand one split the same data, which is the case that would make one mode's result
+        quietly reusable as the other's.
+        """
+        for split in ("train", "val", "test"):
+            ours = FROG_Dataset(datapath=frog_dir, split=split, mode="balanced",
+                                auto_download=False, verbose=False)
+            theirs = FROG_Dataset(datapath=frog_dir, split=split, mode="official",
+                                  auto_download=False, verbose=False)
+
+            assert _recording_ids(ours) != _recording_ids(theirs), split
+
+    def test_both_train_and_val_hold_person_free_frames(self, frog_dir):
+        """The reason the mode exists, stated on the two splits that `official` cannot supply.
+
+        `official` and `transferred` have person-free frames only in a *test* split, so a detector trained on
+        either has never seen a room with nobody in it -- which is the leading explanation for stage 2 emitting
+        2.62 phantoms per empty frame. A mode that lost them from train or val would keep the name and lose the
+        point, and the whole-split test above would still pass on the strength of `test` alone.
+        """
+        for split in ("train", "val"):
+            ds = FROG_Dataset(datapath=frog_dir, split=split, mode="balanced",
+                              auto_download=False, verbose=False)
+            empty = sum(1 for seq in ds.det_wp for wp in seq if len(wp) == 0)
+            populated = sum(1 for seq in ds.det_wp for wp in seq if len(wp) > 0)
+
+            assert empty > 0, f"{split} has no person-free frames, which is this mode's only purpose"
+            assert populated > 0, f"{split} has no populated frames"
+
+    def test_officials_test_frames_are_all_present_in_the_balanced_test_split(self, frog_dir):
+        """So one evaluation pass yields both numbers, which is why this pairing was chosen.
+
+        `balanced`'s test is 16-41 + 15-53 and `official`'s is 16-41 alone, so the official-test subset falls
+        out of the same pass and stays directly comparable to every published figure. Verified on the real
+        recordings too, where it is 40,022 frames, 100% of official's test
+        (`utils/check_balanced_partition.py`).
+        """
+        ours = FROG_Dataset(datapath=frog_dir, split="test", mode="balanced",
+                            auto_download=False, verbose=False)
+        theirs = FROG_Dataset(datapath=frog_dir, split="test", mode="official",
+                              auto_download=False, verbose=False)
+        here = {round(float(t), 6) for stamps in ours.scan_time for t in stamps}
+        there = {round(float(t), 6) for stamps in theirs.scan_time for t in stamps}
+
+        assert there and there <= here, f"{len(there - here)} of official's test frames are missing"
+
+    def test_the_test_split_takes_no_runup_while_train_and_val_do(self, frog_dir):
+        """The asymmetry is load-bearing, not an oversight.
+
+        A temporal model's first judged frame should have a full window behind it, so `train` and `val` hand
+        out detections from frame 40 of each sequence. `test` cannot: dropping 40 frames from each of its
+        sequences would remove frames from the official-test subset above and destroy the comparability that
+        pairing exists for. On the real recordings this is 1,040 frames over 26 train sequences and 1,200 over
+        30 val sequences, against 0 in test.
+        """
+        for split in ("train", "val"):
+            ds = FROG_Dataset(datapath=frog_dir, split=split, mode="balanced",
+                              auto_download=False, verbose=False)
+            assert all(int(d[0]) >= 40 for d in ds.det_id if len(d)), split
+
+        te = FROG_Dataset(datapath=frog_dir, split="test", mode="balanced",
+                          auto_download=False, verbose=False)
+        assert any(int(d[0]) == 0 for d in te.det_id if len(d)), "test must not hold back a run-up"
+
     def test_it_ignores_the_papers_own_interleaved_split_field(self, frog_dir):
         """`balanced` is our partition, so the paper's per-frame holdout has no
         standing in it -- keeping it would drop a tenth of the frames for a
