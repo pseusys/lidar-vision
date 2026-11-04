@@ -38,6 +38,48 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Why the FROG benchmark uses three of its six annotated recordings, from the paper itself (2026-11-04)
+
+*keywords: FROG paper, benchmark split, greatest attendance, maximizing person annotations, empty lists excluded, Table 1, PROPOSAL 2.1, balanced contribution, 26.2 Hz corrected, Amodeo*
+
+**Read back out of the paper** (Amodeo, Perez-Higueras, Merino & Caballero, *Frontiers in Robotics and AI* 2025,
+arXiv:2306.08531, section 5 "FROG benchmark" and section 3.2), because the `balanced` partition is a contribution
+and its justification rested on two quotes in the draft and on comments in the loader.
+
+**The paper states one selection criterion, and it is a reason for inclusion rather than exclusion.** Training and
+validation come from two sequences "recorded around the time of greatest attendance (around noon, maximizing the
+number of person annotations)", randomly split 90:10 and marked in the files' `split` field. Of the test set it
+says only that it "is sourced from another different sequence" -- **no reason given** for which. And "scans with
+empty lists of person annotations are excluded from the benchmark", **stated without justification**.
+
+**What it does not say is the part that matters.** It never names which of the six annotated sequences the
+benchmark uses -- Table 1 lists them by start time, 10:31, 11:36, 12:43, 14:57, 15:53 and 16:41, across four days
+-- so which three they are had to be recovered from the files. It never says why the other three are left out, or
+mentions them as excluded at all. The conclusions' "we recorded more sequences than we annotated", and the
+suggestion of a hidden test set for a competition, are about further *unannotated* data, not these three.
+
+**So the exclusion is arithmetic, not a judgement about the recordings.** The three the benchmark uses are **0%**
+person-free; the three it omits are **37.4%**, **39.2%** and **34.8%**. Maximising person annotations selects the
+first three and discards the second three mechanically, and the empty-scan filter would have removed about a third
+of each of the latter anyway. Nothing in the paper says the unused recordings are worse data, and on our
+measurements they are not: same venue, sensor and annotation procedure, 3.2-3.7 people per populated frame against
+the benchmark's own 3.1-3.9.
+
+**Written up in `docs/PROPOSAL.md` section 2.1**, which previously summarised the three partitions in one sentence
+and gave no reasoning at all -- the rationale existed only in `frog_dataset.py`'s comments and in one dense
+paragraph of the draft. It now carries the paper's criterion, what the paper is silent on, and this project's own
+reasons: that the criterion optimises annotation density and is silent about the error this design targets (on
+person-free frames LFE-Peaks emits **1.39** phantoms and LFE-PPN **3.17**), that the three omitted recordings are
+the only frames in FROG carrying the negative class, and why `balanced` assigns whole recordings, equalises the
+person-free share at 20.6 / 19.8 / 19.1%, and puts 16-41 and 15-53 in test -- with the caveat that a split holding
+person-free frames scores lower for free, measured at 5-6 points on the published pair.
+
+**Two corrections on the way.** `PROPOSAL.md` still described FROG as **26.2 Hz**, the median of bunched timestamps
+that was retracted on 2026-09-17 and is wrong by 1.53x; it now says 40 Hz with the 24.99 ms period and names the
+trap. And the draft called the empty-scan filtering "an explicit trade of environment diversity for annotation
+density" -- the trade is real but the paper never acknowledges it, so the sentence now says the criterion makes the
+trade rather than that the authors state it.
+
 ## The first `balanced` numbers, and they reproduce the two figures retracted as unmeasured (2026-11-03)
 
 *keywords: balanced, LFE-Peaks 59.8, LFE-PPN 63.5, retraction reproduced, A32 closed, person-free composition, cross-regime, rule 3, item 69*

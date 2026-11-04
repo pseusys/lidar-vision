@@ -44,10 +44,63 @@ The object memory feeds back into stage 2 *before* anything is thresholded, so m
 
 | dataset | what it is | used here for |
 | --- | --- | --- |
-| **FROG** — Amodeo, Pérez-Higueras, Merino & Caballero, *Frontiers in Robotics and AI* 2025 | six ~30-minute recordings from a robot in a museum; 720 beams per scan at 26.2 Hz; every scan annotated with person positions; no person identities across frames | all measurements and training |
+| **FROG** — Amodeo, Pérez-Higueras, Merino & Caballero, *Frontiers in Robotics and AI* 2025 | six ~30-minute recordings from a robot in a museum; 720 beams per scan at **40 Hz** (a 24.99 ms mean period; the often-quoted 26.2 Hz is the median of bunched timestamps and is wrong by 1.53x); every scan annotated with person positions; no person identities across frames | all measurements and training |
 | **DROW** — Beyer, Hermans & Leibe, 2016 and 2018 | recordings in a care facility; 450 beams at ~10 Hz; people, wheelchairs and walkers annotated on every 5th scan | cross-venue checks |
 
-This project reorganised FROG into three partitions: `official` reproduces the published benchmark; `balanced` mixes crowded, sparse and empty scenes in train, validation and test; `transferred` evaluates on 72,533 person-free frames that the benchmark never scores.
+This project reorganised FROG into three partitions: `official` reproduces the published benchmark;
+`balanced` mixes crowded, sparse and empty scenes in train, validation and test; `transferred` evaluates on
+72,533 person-free frames that the benchmark never scores. The argument for doing so is in
+[`PAPER.md`](PAPER.md); what follows is why the published cut leaves room for it.
+
+#### Why the published benchmark uses three of the six annotated recordings
+
+**The paper states one selection criterion, and it is a reason for inclusion rather than for exclusion.** Its
+benchmark section sources the training and validation set from two sequences "recorded around the time of
+greatest attendance (around noon, maximizing the number of person annotations)", randomly split 90:10 and
+marked in the files' own `split` field. Of the test set it says only that it "is sourced from another
+different sequence" -- no reason is given for which. And "scans with empty lists of person annotations are
+excluded from the benchmark", stated without justification.
+
+**What the paper does not say is the part that matters here.** It never names which of its six annotated
+sequences the benchmark uses -- Table 1 lists them by start time, 10:31, 11:36, 12:43, 14:57, 15:53 and
+16:41, across four days -- so which three they are had to be recovered from the files themselves. It never
+says why the other three are left out, nor mentions them as excluded at all. The conclusions' remark that
+"we recorded more sequences than we annotated", and the suggestion of a hidden test set for a competition,
+are about further *unannotated* data, not about these three.
+
+**So the exclusion is a consequence of the criterion rather than a judgement about the recordings.** Measured
+on the files, the three the benchmark uses (11-36, 12-43, 16-41) are **0%** person-free, and the three it
+leaves out are **37.4%**, **39.2%** and **34.8%** person-free. A rule that maximises person annotations
+selects the first three and discards the second three arithmetically, and the empty-scan filter would have
+removed about a third of each of the latter in any case. Nothing in the paper argues that the unused
+recordings are worse data, and on our measurements they are not: same venue, same sensor, same annotation
+procedure, and 3.2-3.7 people per populated frame against the benchmark's own 3.1-3.9.
+
+#### Why this project puts them back
+
+**The criterion optimises annotation density, which is the right objective for a detection benchmark and
+silent about the error this design targets.** A benchmark whose every scored frame contains a person cannot
+score a false positive raised in a room with nobody in it -- and that is the failure that dominates
+deployment: measured on FROG's person-free frames, LFE-Peaks emits **1.39** and LFE-PPN **3.17** of them
+per frame (`../memory/performance-log.md`). The three unused
+recordings are therefore not spare data of lower quality; they are the only frames in FROG that carry the
+negative class at all.
+
+**`balanced` pairs one populated-only recording with one raw recording in each split**, which is the pairing
+of the six that most nearly equalises the person-free share across them: 20.6 / 19.8 / 19.1% in train, val
+and test. Three further choices are deliberate. Whole recordings are assigned rather than interleaved
+blocks, so no temporal window can bridge a split boundary -- adjacent blocks of one recording share venue,
+lighting and the same people in the same clothes, and cross-recording generalisation is the kind that
+matters on a robot. `frog_16-41` and `frog_15-53` form the test split because neither appears in any
+published baseline's training data, which keeps a comparison against them honest; `balanced`'s **validation**
+split does contain 11-36, half of `official`'s train, so a published baseline's number must never be
+reported on it. And 16-41 is kept whole, so the published test split remains extractable from the same
+evaluation pass -- verified frame for frame at 40,022 frames, 100% of `official`'s test.
+
+**One caveat travels with every `balanced` number.** A split containing person-free frames scores lower for
+free: those frames offer no true positive to find and can only cost precision, so a `balanced` figure is not
+comparable with an `official` one, and the like-for-like comparison is the extractable subset above. Measured
+on the published detectors, that difference is 5-6 points (`memory/performance-log.md`).
 
 ### 2.2 Current detectors
 
