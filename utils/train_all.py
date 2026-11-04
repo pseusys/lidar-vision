@@ -7,7 +7,7 @@ Calls train_model() from train.py for each detector and collects the final
 val-loss and AUC results in a summary table.
 
 spacetime_cnn is non-recursive (CNN only, no RNN/attention) and
-DirectML-compatible — no force_cpu juggling needed.
+DirectML-compatible -- no force_cpu juggling needed.
 
 Usage
 -----
@@ -228,7 +228,7 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  Training {len(todo)} full-scan model(s) on {cli.dataset.upper()} "
-          f"— {cli.epochs} epochs, patience={cli.patience}")
+          f"-- {cli.epochs} epochs, patience={cli.patience}")
     print(f"  Models : {', '.join(todo)}")
     print(f"  Output : {cli.out_dir.resolve()}")
     print(f"{'='*60}\n")
@@ -302,7 +302,7 @@ def main():
         del test_ds, _cfg
 
         if not has_test_data:
-            print(f"  [WARN] No data found for split '{test_split}' — skipping test eval.\n")
+            print(f"  [WARN] No data found for split '{test_split}' -- skipping test eval.\n")
         else:
             for det, vl, *_ in summaries:
                 ckpt = cli.out_dir / f"{det}.pth"

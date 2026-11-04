@@ -260,6 +260,138 @@ AUCs agreeing to a tenth of a point is not coincidence, so a run did happen and 
 turns out to equal, and the retraction is what made this check possible, because it recorded both values
 instead of only deleting them. Keep doing that.
 
+### This project's own detector on `balanced`, one seed (2026-11-04)
+
+**The first model ever trained on this partition** (`queue_balanced.py`, 5.45 h: 46 min of stage 2 and the
+rest stage 3, early-stopped at epoch 12 on patience with the best at epoch 4). Scored over all 110,846 test
+frames, and again at stride 5, which **agree to 0.01 pp** -- so the number is not a sampling artefact.
+
+| | `balanced` test | `official` test (frozen, 3 seeds) | difference |
+| --- | ---: | ---: | ---: |
+| whole detector, wp-AUC | **82.49%** | **86.29%** | **-3.80 pp** |
+| the same at 0.3 m | 81.37% | 85.19% | -3.82 pp |
+| stage 2 alone | 77.89% | 82.8% | -4.91 pp |
+| **the memory's contribution** | **+4.60 pp** | +3.49 pp | **+1.11 pp** |
+| FP/frame, whole detector | 1.327 | 0.849-1.239 | -- |
+| recall / precision | 87.6% / 63.1% | -- | -- |
+| memory cost | 5.29 ms/frame | 7.23 ms/frame | -- |
+
+**Read the -3.80 pp against what the same split change costs everyone else, not against zero.** Measured the
+same night on the same two splits: **LFE-Peaks -5.3 pp**, **LFE-PPN -6.1 pp**, this detector **-3.80 pp**.
+`balanced`'s test is 19.1% person-free and a person-free frame offers no true positive, so it can only cost
+precision -- part of every one of those drops is bought rather than earned. **This architecture loses the
+least of the three**, and the memory's contribution *grows* from +3.49 to +4.60 pp, which is what the design
+predicts: phantom suppression has more to do where there are more frames with nobody in them. The same
+reading shows in the operating point -- the memory cuts false positives from 2.833 to **1.327** per frame, a
+53% cut, against 72% on `official`'s person-free split.
+
+**What this does not settle, and no amount of seeds would.** Whether 82.49% and 86.29% differ for any reason
+beyond composition is answerable only on the same frames, and `balanced`'s test contains `official`'s whole
+(40,022 frames, verified). Nothing can score a trained checkpoint on a partition it did not train on yet --
+`TODO.md` item 69 -- so **the second and third seeds would reproduce a composition effect rather than test
+it**, and the cheap answer comes first. Coasting fired **0.000** times per frame here too, as on `official`.
+
+### The same model on the same frames: 2.44 of those 3.80 points were composition (2026-11-04)
+
+**`train_takheliped.py score`** scores a trained detector on a partition it was not trained on, reusing the
+same `evaluate` the training path uses so the number stays comparable with the frozen one. The
+`balanced`-trained pair on **`official`'s own test split**, stride 5 -- the stride 86.29% was measured at --
+over 50,088 annotated frames:
+
+| trained on | scored on | stage 2 | whole detector | memory's gain |
+| --- | --- | ---: | ---: | ---: |
+| `official` (3 seeds, frozen) | `official` test | 82.8% | **86.29%** | +3.49 pp |
+| `balanced` (1 seed) | `official` test | **82.38%** | **84.93%** | +2.55 pp |
+| `balanced` (1 seed) | `balanced` test | 77.89% | 82.49% | +4.60 pp |
+
+**So the recipe costs 1.36 pp, and composition accounted for the other 2.44.** On `balanced`'s own test the
+gap read -3.80 pp; on identical frames it is **-1.36 pp** for the whole detector and **-0.42 pp** for stage 2,
+the latter inside what three `official` seeds span twice over. That is the measurement the mode comparison
+needed and could not take before: two thirds of the apparent penalty was the 19.1% person-free frames in
+`balanced`'s test, which can only cost precision.
+
+**What the remaining 1.36 pp is, stated as a trade rather than a loss.** Training on `balanced` means training
+on 12-43 + 14-57 with a fifth of the frames empty, instead of `official`'s two populated-only recordings. It
+costs about a point and a half on a populated-only test split, and it buys the shallower degradation measured
+above -- **-3.80 pp** across the composition change against LFE-Peaks' **-5.3** and LFE-PPN's **-6.1**. The
+memory's gain moves the same way for the same reason: **+4.60 pp** where empty frames exist, **+2.55 pp** on
+a split with none, against the `official`-trained model's +3.49 pp.
+
+**One seed, and what that does and does not support.** The direction and rough size are safe: 1.36 pp is six
+times the 0.22 pp spread three `official` seeds show. What one seed cannot do is bound `balanced`'s *own*
+spread, so a pre-print quoting this row beside a three-seed row should either say so plainly or spend the
+~11 h on seeds 1 and 2. That is now a presentation decision rather than an open measurement.
+
+### Person-free training frames cut stage 2's phantoms by 21%, and the pipeline's output not at all (2026-11-04)
+
+**The one thing `balanced` exists to test.** `official`'s train split is 100% populated and `transferred`'s train and val
+are *identical to it*, so no detector this project trained had ever seen a room with nobody in it -- the standing
+explanation for stage 2 emitting ~2.1 phantoms per person-free frame. `balanced` shows it one in every split, and both
+arms are counted here on the **same 21,149 person-free frames** of `balanced` test (19.07% of 110,846, matching the
+composition measured from the real files). Those frames are all **15-53**'s, since 16-41 is 100% populated, and 15-53
+is in *neither* arm's training set. `utils/queue_person_free.py`, `results/person_free_*.json`.
+
+Detections per frame at threshold 0.3, both arms read at the same scale:
+
+| at threshold 0.3 | `official`-trained | `balanced`-trained | change |
+| --- | ---: | ---: | ---: |
+| **stage 2 candidates** | 2.216 | **1.751** | **−21.0%** |
+| frames holding at least one | 59.7% | 49.2% | −10.5 pp |
+| **stage 2, the 9,917 frames beyond the 10 s fade** | 1.788 | **1.153** | **−35.5%** |
+| whole detector | 0.710 | 0.684 | −3.8% |
+| whole detector, beyond the fade | 0.414 | 0.295 | −28.8% |
+| what the memory itself removes | −67.9% | −60.9% | — |
+
+**The effect is in stage 2, it is large, and it is outside the noise.** The cut grows with the threshold --
+**−23.0%** at 0.5 and **−33.5%** at 0.9 -- and roughly doubles on the frames where nobody has been in view for ten
+seconds (**−57.5%** at 0.9), which is the subset where "a stale memory of someone who just left" is unavailable as an
+explanation. Against the stage-2 column's three-seed spread of **sd 0.03** on this measurement, a 0.465 move is about
+fifteen standard deviations.
+
+**The whole detector's output does not improve, and that is the honest headline.** 0.710 against 0.684 is **−3.8%**,
+and the whole-detector column spreads **sd 0.073 (11% relative)** across three seeds -- so this difference is inside
+one seed's noise and is not a result. The reason is visible in the last row: **the memory's filtering is
+substitutive**. It removes 67.9% of the worse arm's candidates and 60.9% of the better arm's, so a 21% improvement
+upstream arrives at the output as nothing. The better stage 2 is reached with the memory doing *less* work, not with a
+better final count. Beyond the fade horizon the output does move, −28.8%, but on a column with 11% seed noise and one
+seed per arm that is suggestive rather than settled. At thresholds 0.2 and 0.1 the two arms' outputs cross, with the
+`balanced` arm marginally **higher** (0.975 against 0.974, 1.606 against 1.572).
+
+**Coasting is zero at every threshold in both arms.** Item 27's finding -- every person-free phantom is a stage-2
+candidate the memory failed to suppress, never a memory invention -- now holds on a second partition and for a
+detector trained on empty rooms. The surviving phantoms also recur slightly *less*: 83.8% against 85.1% within 0.3 m
+in the next frame, and 77.1% against 82.5% beyond the fade, so what the person-free training removed was
+disproportionately the persistent, furniture-like kind.
+
+**The price, and the trade.** Item 69 measured it on identical populated frames: **−1.36 pp** wp-AUC. So person-free
+training buys a 21% stage-2 phantom cut (35.5% beyond fade) for about a point and a half of accuracy, with no change
+to what the assembled pipeline emits. For a robot reading the pipeline's output, this is not yet a reason to train on
+`balanced`; for the paper's account of *where* the phantoms come from, it is direct evidence.
+
+**Two caveats that belong beside the numbers.** The `official` arm *selected* on 15-53's populated frames, since
+`official`'s val holds all three raw recordings -- venue exposure the `balanced` arm never had, which favours the arm
+this result argues against, so the direction is safe. And the seed spreads quoted above were measured on `official`
+seeds over `transferred`'s frames; carrying their *relative* size to this partition is an assumption, not a
+measurement.
+
+**Checked rather than assumed, 2026-11-04**: no recording either arm trained on appears in any split it was scored
+on, read from each checkpoint's own recorded `frog_mode` and `_MODES`' assignment. The 15-53 overlap above is
+selection only, and the frames do not even coincide -- `official`'s val takes that recording's **populated** frames
+and this comparison counts its **person-free** ones. Six tests in `tests/test_frog_splits.py` now assert the property
+off the partition table, so a future edit cannot reintroduce it quietly. The two arms also record **identical**
+hyperparameters except the partition and `chunk_s`, where the `balanced` run used a `1 -> 10 s` curriculum against
+the adopted flat 10 s -- a choice adopted on a tie, so it does not re-base these figures
+(`docs/ARCHITECTURE.md` section 6.1).
+
+**Both arms were read with `--no-calibration`, and skipping that would have reversed the sign.** The `official` runs
+carry a fitted `(temperature, bias)` and the `balanced` run does not, and every row here is a fixed-threshold row. As
+published, the `official` arm reports **0.582** per frame against the `balanced` arm's 0.684 -- which reads as the
+person-free training making the detector **17.5% worse**, the opposite of what the matched-scale comparison shows.
+The third job measured that as-published row deliberately, and it reproduces the calibration's known behaviour on new
+frames: **−18.1%** at threshold 0.3 and **3.7x** at 0.9, against the −11.8% and 8x measured on `transferred`. The two
+`official` arms' candidate columns are **bit-identical**, which is the control proving the override touches stage 3
+and nothing else (`interpreting-evaluation.md`).
+
 ## Why stage 2 beats LFE and DR-SPAAM: what it is *not*
 
 **What the lead is made of, measured on fixed weights** (FROG `official` test, 0.5 m match radius). Each row changes one thing and keeps everything above it, so the deltas add to the whole gap:

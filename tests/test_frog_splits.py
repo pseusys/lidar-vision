@@ -614,3 +614,98 @@ class TestBalancedMode:
             if float(t[0]) >= 100_000)
         # only the run-up is dropped, not the paper's every-10th-frame half
         assert scored > 0.95 * train_val_frames
+
+
+class TestNoPartitionLetsTrainingDataReachAScoredSplit:
+    """The property that makes every number in this repository mean something, asserted on the table itself.
+
+    `test_no_recording_appears_in_two_splits` above checks one partition at a time against the fixture files.
+    This checks all three straight off `_MODES`, which needs no data and therefore cannot be skipped when the
+    dataset is absent -- and the question it answers is the one asked of every cross-partition number: could a
+    model trained or selected on one split have seen frames of the split it was scored on?
+
+    Two subtleties, both of which the first version of this class got wrong.
+
+    **The unit is a `(file key, recording index)` pair**, because one file holds two recordings 24.6 h apart and
+    `balanced` sends them to different splits. `None` as the index claims **every** recording in that file, and
+    `_recordings_per_file` is what resolves that, so its own rule ("None wins over any explicit index") decides
+    here rather than a second copy of it.
+
+    **A shared recording is not automatically a shared frame.** `transferred` deliberately gives val and test
+    the *same* three recordings under the `populated` and `empty` rules, which partition each recording's
+    frames between them. So two splits may share a recording exactly when their frame rules are disjoint.
+    """
+
+    #: The two frame rules that cut a recording in half between them: a frame holds at least one annotated
+    #: person or it does not. Every other pair of rules can select the same frame.
+    DISJOINT_RULES = frozenset({frozenset({"populated", "empty"})})
+
+    @staticmethod
+    def spec(mode, split):
+        rec_spec, rule = _MODES[mode][split]
+        return _recordings_per_file(rec_spec), rule
+
+    @classmethod
+    def overlap(cls, mode_a, split_a, mode_b, split_b):
+        """The recordings two splits share, as `(file key, index)` pairs; `None` means the whole file."""
+        left, _ = cls.spec(mode_a, split_a)
+        right, _ = cls.spec(mode_b, split_b)
+        shared = set()
+        for key in set(left) & set(right):
+            if left[key] is None or right[key] is None:
+                shared.add((key, None))
+            else:
+                shared |= {(key, index) for index in left[key] & right[key]}
+        return shared
+
+    @classmethod
+    def rules_are_disjoint(cls, mode, split_a, split_b):
+        return frozenset({cls.spec(mode, split_a)[1], cls.spec(mode, split_b)[1]}) in cls.DISJOINT_RULES
+
+    @pytest.mark.parametrize("mode", sorted(_MODES))
+    def test_two_splits_of_one_partition_never_hold_the_same_frame(self, mode):
+        """Either they share no recording, or their frame rules cut the shared recordings between them."""
+        for first, second in (("train", "val"), ("train", "test"), ("val", "test")):
+            shared = self.overlap(mode, first, mode, second)
+
+            assert not shared or self.rules_are_disjoint(mode, first, second), (
+                f"{mode}: {first} ({self.spec(mode, first)[1]}) and {second} ({self.spec(mode, second)[1]}) "
+                f"share {sorted(shared)} under rules that can select the same frame")
+
+    def test_transferred_is_the_one_partition_that_shares_recordings_and_it_does_so_by_rule(self):
+        """Its test split is `official`'s person-free complement over the same three raw recordings -- the
+        whole point of the partition. Pinned, so a rule change cannot turn the design into a leak quietly."""
+        assert self.overlap("transferred", "val", "transferred", "test")
+        assert self.spec("transferred", "val")[1] == "populated"
+        assert self.spec("transferred", "test")[1] == "empty"
+
+    def test_the_balanced_trained_detector_was_scored_on_recordings_it_never_saw(self):
+        """`balanced` test is scored in its own right and `official`'s test is extracted from it, so both have
+        to be clear of `balanced`'s train and val -- no rule exemption applies, every `balanced` split is
+        `all`."""
+        for split in ("train", "val"):
+            assert not self.overlap("balanced", split, "balanced", "test")
+            assert not self.overlap("balanced", split, "official", "test")
+
+    def test_the_official_trained_detector_trained_on_nothing_in_balanceds_test(self):
+        """The person-free comparison counts an `official`-trained detector on `balanced` test. No gradient may
+        have seen those recordings; `official`'s **val** is a separate matter, pinned below."""
+        assert not self.overlap("official", "train", "balanced", "test")
+
+    def test_officials_val_does_reach_balanceds_test_and_that_is_selection_not_training(self):
+        """`official` val is all three raw recordings, one of which (`extra_1553`) `balanced` puts in test. No
+        gradient touches it, but checkpoint selection saw its **populated** frames -- and the person-free
+        comparison counts its **person-free** frames, a disjoint set of the same recording. Reported with the
+        number rather than engineered away, because it favours the arm that result argues against.
+
+        Pinned so a future edit either keeps the exposure or removes it deliberately."""
+        assert self.overlap("official", "val", "balanced", "test") == {("extra_1553", None)}
+        assert self.spec("official", "val")[1] == "populated"
+
+    def test_balanceds_val_holds_a_recording_officials_train_holds(self):
+        """Not a fault of ours, and the reason the warning exists: `balanced` val contains 11-36, half of the
+        set the published baselines' authors trained on, so **no published baseline's number may be reported on
+        `balanced` val**. `official` train claims `train_val` whole, which is why the shared entry is the file
+        rather than recording 0. Pinned here so the trap cannot leave the data without a test failing."""
+        assert self.overlap("official", "train", "balanced", "val") == {("train_val", None)}
+        assert _MODES["balanced"]["val"][0] == (("train_val", 0), ("extra_1031", None))

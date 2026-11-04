@@ -81,3 +81,28 @@ class TestOnlyTheAffordableBaselinesAreScored:
         cli = " ".join(str(c) for c in chain.BASELINES.cli)
 
         assert "--drow" not in cli and "--drspaam" not in cli
+
+
+class TestTheOneDepartureFromTheAdoptedRecipe:
+    """Stage 3 runs a 1 s -> 10 s curriculum where the adopted recipe is a flat 10 s with none.
+
+    Pinned rather than corrected, because this is the configuration that produced the recorded 82.49% and
+    84.93%: a later seed that silently used the adopted flag would be measuring two changes at once. The
+    adopted choice won on a tie -- same accuracy, ~24% less time -- so the figures stand, and the departure is
+    stated in `docs/ARCHITECTURE.md` section 6.1 instead of being quietly fixed here.
+    """
+
+    def test_stage_3_keeps_the_curriculum_the_recorded_numbers_came_from(self):
+        stage3 = next(j for j in chain.JOBS if j.name == "stage3")
+        cli = [str(c) for c in stage3.cli]
+        at = cli.index("--chunk-s")
+
+        assert cli[at + 1:at + 3] == ["1", "10"], "changing this re-bases every balanced number on this page"
+
+    def test_everything_else_about_stage_3_is_the_frozen_architecture(self):
+        """No `--dim`, `--heads`, `--recurrence` or `--slots` override: the adopted values are the defaults, and
+        both trained arms' checkpoints record them identically."""
+        cli = " ".join(str(c) for c in next(j for j in chain.JOBS if j.name == "stage3").cli)
+
+        for tuned in ("--dim", "--heads", "--recurrence", "--slots", "--cell-m", "--fixed-decay-s"):
+            assert tuned not in cli, f"{tuned} would make this arm something other than the adopted architecture"

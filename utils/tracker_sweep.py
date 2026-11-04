@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
 Sweep a SORT-style tracker over a published detector's per-frame output, and
-report what temporal association alone buys — on both a populated split and a
+report what temporal association alone buys -- on both a populated split and a
 person-free one (docs/PAPER.md, "Primitive temporal tracking").
 
 The question is the one docs/PAPER.md is built around: **can temporal
 information reduce false positives without giving up detections?** A tracker is
-the cheapest possible answer — no retraining, no architecture change, the
+the cheapest possible answer -- no retraining, no architecture change, the
 published weights untouched.
 
 Which tracker, stated precisely because the paper cites it

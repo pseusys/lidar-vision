@@ -68,6 +68,13 @@ python scan_anomalies.py --dataset frog    # raw-scan noise report: no-return en
 python train_takheliped.py step2 --frog-mode balanced --no-aggregator --label-sigma-m 0.3 --seed 0 --out-dir ../checkpoints_three_horizon/balanced_stage2_s0 --resume
 python queue_balanced.py --list                     # the whole one-seed chain plus the published pair on balanced's test
 
+# Score a trained detector on a partition it did NOT train on -- the like-for-like comparison, no training.
+# Stride 5 by default, because the frozen 86.29% is a stride-5 number; the partition mismatch is printed and
+# stored in the output rather than refused, since that mismatch is the whole point of the mode.
+python train_takheliped.py score --stage2 ../checkpoints_three_horizon/balanced_stage2_s0/step2_calibration.averaged.pth \r
+    --memory ../checkpoints_three_horizon/balanced_stage3_s0/step3a_object_memory.best.pth \r
+    --frog-mode official --split test --out ../results/score_balanced_on_official.json   # ~7 min on the CPU
+
 # Is the partition what the loader claims? Real recordings, not the synthetic fixtures the unit tests use.
 .venv/Scripts/python.exe -I utils/check_balanced_partition.py                 # all three splits, ~10 min
 .venv/Scripts/python.exe -I utils/check_balanced_partition.py --splits val    # one at a time, for memory
@@ -77,6 +84,9 @@ python slot_experiments.py crowding --memory ... --stage2 ...                   
 python slot_experiments.py cost --memory ... --stage2 ...                        # ms per frame against slot count, 64-720
 python slot_experiments.py odometry --memory ... --stage2 ... --out ../results/<name>.json   # --out names the results file; without it every run of a mode overwrites the same a51_<mode>.json, which destroyed E2's and E4's numbers once
 python empty_scene.py --stage2 <step2 ckpt> --memory <step3a ckpt>               # detections per frame on FROG transferred's 72,533 person-free frames, where every one is a false positive
+python empty_scene.py --stage2 ... --memory ... --frog-mode balanced --split test   # the same count on another partition's person-free frames; only those frames are counted and a split with none is refused (official is 100% populated)
+python empty_scene.py --stage2 ... --memory ... --no-calibration                  # ignore the stage-3 checkpoint's fitted (temperature, bias) so a calibrated arm and an uncalibrated one are read at the same thresholds; off by default, which reproduces the published rows
+python queue_person_free.py --list                                                    # both arms of the person-free comparison on balanced test's person-free frames: the balanced-trained pair, the official-trained one at matched scale, then the official one as published (~45 min)
 python score_memory.py --memory ... --stage2 ... --out <json>                    # score an interrupted run's best checkpoint
 python calibrate_rescore.py --memory ... --stage2 ... --out <json> [--frames <npz>]  # fit (temperature, bias) on val so a fixed threshold means something (~65 min/seed)
 python calibrate_rescore.py --memory ... --apply <json>                          # store an already-fitted pair in the checkpoint, re-checking its gates; seconds, no re-measurement

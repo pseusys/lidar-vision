@@ -3,21 +3,21 @@
 Render a dataset sequence to a video file.
 
 Each frame shows:
-  • LiDAR scan points        — grey dots
-  • GT wheelchair (wc)       — orange circles
-  • GT walker (wa)           — purple circles
-  • GT person (wp)           — green circles
-  • AlgorithmicDetector      — red triangles       (on by default)
-  • Any trained NN detector  — coloured circles,
-                               radius ∝ agnostic confidence
+  * LiDAR scan points        -- grey dots
+  * GT wheelchair (wc)       -- orange circles
+  * GT walker (wa)           -- purple circles
+  * GT person (wp)           -- green circles
+  * AlgorithmicDetector      -- red triangles       (on by default)
+  * Any trained NN detector  -- coloured circles,
+                               radius proportional to agnostic confidence
                                (enabled per detector via CLI flags)
 
 Annotations outside the laser FoV are drawn faded (alpha=0.25).
 
 Output formats
 --------------
-  mp4   — H.264 via cv2.VideoWriter  (default, requires OpenCV)
-  gif   — animated GIF via Pillow
+  mp4   -- H.264 via cv2.VideoWriter  (default, requires OpenCV)
+  gif   -- animated GIF via Pillow
 
 Usage
 -----
@@ -100,7 +100,7 @@ def _setup(args):
     if args.dataset == "frog":
         from takheliped.datasets import FROG_Dataset, frog_laser_angles
         _mode = getattr(args, "frog_mode", "official")
-        print(f"Loading FROG dataset (mode='{_mode}', split='{args.split}') …")
+        print(f"Loading FROG dataset (mode='{_mode}', split='{args.split}') ...")
         dataset = FROG_Dataset(split=args.split, mode=_mode)
         cfg = SimpleNamespace(
             name="frog",
@@ -115,7 +115,7 @@ def _setup(args):
         _drow_splits = {"train", "val", "test"}
         if args.split not in _drow_splits:
             raise ValueError(f"DROW split must be train/val/test, got '{args.split}'")
-        print(f"Loading DROW dataset (split='{args.split}') …")
+        print(f"Loading DROW dataset (split='{args.split}') ...")
         dataset = DROW_Dataset(dataset=args.split)
         cfg = SimpleNamespace(
             name="drow",
@@ -415,7 +415,7 @@ def _parse():
     p.add_argument("--fps",    type=int, default=None,
                    help="Output FPS (default: native dataset annotation rate)")
     p.add_argument("--dpi",    type=int, default=100,
-                   help="Figure DPI — controls resolution (default: 100)")
+                   help="Figure DPI -- controls resolution (default: 100)")
     return p.parse_args()
 
 
@@ -467,9 +467,9 @@ def main():
             continue
         w = Path(weights)
         if not w.exists():
-            print(f"  [WARN] weights not found: {w} — skipping {det_name}")
+            print(f"  [WARN] weights not found: {w} -- skipping {det_name}")
             continue
-        print(f"  Loading {det_name} from {w} …")
+        print(f"  Loading {det_name} from {w} ...")
         color   = next(color_iter, "#AAAAAA")
         runner  = _load_nn_runner(det_name, w, cfg, device)
         label   = det_name.replace("_", " ")
@@ -498,7 +498,7 @@ def main():
     # Determine pixel dimensions from the first rendered frame
     probe = _render_frame(fig, ax, dataset, cfg, *frames[0], detectors, 0, len(frames))
     h, w = probe.shape[:2]
-    print(f"  Frame size: {w}×{h} px\n")
+    print(f"  Frame size: {w}x{h} px\n")
 
     # Open video writer
     if args.format == "mp4":

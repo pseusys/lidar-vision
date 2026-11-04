@@ -11,12 +11,12 @@ plausibly explained by raw capacity/joint fusion rather than motion modeling
 is compromised on FROG specifically:
 
   1. FROG ships no odometry at all (confirmed: its .h5 files have no pose/
-     odom field) — aligned_raw_scan() silently falls back to zero-motion,
+     odom field) -- aligned_raw_scan() silently falls back to zero-motion,
      so every "temporal" window is actually raw *unaligned* stacking: beam i
      at frame t-k is compared to beam i at frame t with no correction for
      however much the robot rotated in between.
   2. FROG runs at 40 Hz (vs. the ~10 Hz T=5 was originally justified against
-     as "half a gait cycle", Section 5.4) — so T=5 covers only ~100-125 ms
+     as "half a gait cycle", Section 5.4) -- so T=5 covers only ~100-125 ms
      of real time on FROG, not the ~500 ms the design rationale assumes.
 
 This script trains the architecture twice on FROG, identical in every way
@@ -24,7 +24,7 @@ except one flag:
   - control:      normal T=5 window (--zero-history not set)
   - zero_history: same T=5 architecture, but every historical frame (all but
                   the current/last one) is zeroed before feature extraction
-                  (--zero-history) — so the model can only ever learn from
+                  (--zero-history) -- so the model can only ever learn from
                   single-frame information, with the architecture itself
                   (parameter count, receptive field) held fixed.
 
@@ -33,7 +33,7 @@ contributing much (consistent with reasons 1/2 above). If control clearly
 wins, the temporal window is doing real work despite those issues.
 
 Smoke-test scope: --subsample 0.2 (fast directional signal, not a final
-number) — a full run would take the original 3.3-8.9h/model x2 variants.
+number) -- a full run would take the original 3.3-8.9h/model x2 variants.
 
 Usage
 -----
@@ -69,7 +69,7 @@ def main():
     cli.out_dir.mkdir(parents=True, exist_ok=True)
     todo = [d for d in _DETECTORS if d not in set(cli.skip)]
 
-    print(f"\n{'='*60}\n  FROG temporal-window ablation — {len(todo)} model(s) x 2 variants\n"
+    print(f"\n{'='*60}\n  FROG temporal-window ablation -- {len(todo)} model(s) x 2 variants\n"
           f"  subsample={cli.subsample}\n{'='*60}\n")
 
     results = {}  # (det, variant) -> (final_val_loss, best_val_auc_wp)

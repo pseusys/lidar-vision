@@ -124,7 +124,7 @@ def _load_dataset(args):
     elif args.dataset == "jrdb":
         from takheliped.datasets import JRDB_Dataset, jrdb_laser_angles
         print(f"Loading JRDB dataset (split='{args.split}') ...")
-        print("  NOTE: JRDB requires manual download — see JRDB_Dataset docstring.")
+        print("  NOTE: JRDB requires manual download -- see JRDB_Dataset docstring.")
         ds = JRDB_Dataset(split=args.split)
         cfg = SimpleNamespace(
             name="jrdb",
@@ -644,7 +644,7 @@ def eval_lfe_model(
 
     print(f"Evaluating {det_name} (ONNX) on CPU ...")
     print(f"  Agnostic (any) : {aucs['agnostic']:.1%}")
-    print(f"  Person    (wp) : {aucs['wp']:.1%}  (wc/wa: n/a — class-agnostic)")
+    print(f"  Person    (wp) : {aucs['wp']:.1%}  (wc/wa: n/a -- class-agnostic)")
     print()
     return aucs
 
@@ -1109,7 +1109,7 @@ def main():
                              "them (systematic subsample, default: 1 = no "
                              "subsampling). Recommended for FROG (every scan "
                              "annotated at 40 Hz, so adjacent frames are highly "
-                             "correlated near-duplicates for AP purposes) — leave "
+                             "correlated near-duplicates for AP purposes) -- leave "
                              "at 1 for DROW, which is already sparsely labeled "
                              "(~5%% of scans) in the source data.")
     parser.add_argument("--eval-batch-size", type=int, default=16,
@@ -1122,7 +1122,7 @@ def main():
                         help="Stride (in raw scans) between the T frames in each "
                              "detector's temporal window. Defaults to the value "
                              "stored in the checkpoint being evaluated, i.e. the "
-                             "stride the weights were actually trained at — pass "
+                             "stride the weights were actually trained at -- pass "
                              "this flag only to deliberately evaluate off-"
                              "distribution. Scoring a dtime=10 model at dtime=1 "
                              "silently cost 2.5pp wp-AUC (76.3%% vs 78.8%%) before "
@@ -1152,21 +1152,21 @@ def main():
                              "existing checkpoint). Set to match --time-frame T used "
                              "when *training* the checkpoint being evaluated (e.g. "
                              "the DROW long-stride experiments used --time-frame 10) "
-                             "— evaluate_auc() reads dataset.time_frame, not the "
+                             "-- evaluate_auc() reads dataset.time_frame, not the "
                              "model's own n_time attribute, for window size.")
     parser.add_argument("--eval-diff-channels", action="store_true", default=False,
                         help="Must match --diff-channels used when *training* the "
-                             "checkpoint being evaluated (default: False) — a "
+                             "checkpoint being evaluated (default: False) -- a "
                              "representation choice, not an augmentation, so eval "
                              "has to reproduce it exactly. Applies to --spacetime-cnn.")
     parser.add_argument("--eval-global-normalize", action="store_true", default=False,
                         help="Must match --global-normalize used when *training* the "
-                             "checkpoint being evaluated (default: False) — a "
+                             "checkpoint being evaluated (default: False) -- a "
                              "representation choice, not an augmentation. Applies to "
                              "--spacetime-cnn.")
     parser.add_argument("--eval-local-normalize-window", type=int, default=0,
                         help="Must match --local-normalize-window used when *training* "
-                             "the checkpoint being evaluated (default: 0 = off) — a "
+                             "the checkpoint being evaluated (default: 0 = off) -- a "
                              "representation choice, not an augmentation. Applies to "
                              "--spacetime-cnn.")
     parser.add_argument("--consensus-window", type=int, default=1,
@@ -1176,7 +1176,7 @@ def main():
                              "--consensus-radius in --consensus-min-agree (default: "
                              "all N) of the last N frames to be reported; its score "
                              "becomes the mean of the matched per-frame scores. No "
-                             "retraining needed — post-processes the detector's own "
+                             "retraining needed -- post-processes the detector's own "
                              "raw per-frame output. See _temporal_consensus_filter().")
     parser.add_argument("--consensus-min-agree", type=int, default=None,
                         help="Minimum number of the last --consensus-window frames a "
@@ -1185,15 +1185,15 @@ def main():
                         help="Match radius in metres for --consensus-window (default: 0.3).")
     parser.add_argument("--consensus-decay", type=float, default=0.7,
                         help="Per-frame recency weight decay for --consensus-window's "
-                             "score when --consensus-weighting=exp (default: 0.7 — "
+                             "score when --consensus-weighting=exp (default: 0.7 -- "
                              "weight(age)=decay**age, age=0 is the current frame). "
                              "1.0 = plain mean of matched scores; lower = more "
                              "recency-biased. Ignored when --consensus-weighting=linear.")
     parser.add_argument("--consensus-weighting", choices=["exp", "linear"], default="exp",
                         help="Shape of --consensus-window's recency weighting (default: "
-                             "exp). 'exp': weight(age)=decay**age — front-loaded discount, "
+                             "exp). 'exp': weight(age)=decay**age -- front-loaded discount, "
                              "and the only shape with a cheap O(1)-memory recursive update "
-                             "for a live deployment. 'linear': weight(age)=window-age — "
+                             "for a live deployment. 'linear': weight(age)=window-age -- "
                              "discount spreads evenly, no decay constant to pick.")
     parser.add_argument("--tracker", action="store_true",
                         help="LFE only: use the SimpleTracker (constant-velocity, "
@@ -1205,11 +1205,11 @@ def main():
                         help="SimpleTracker match gate in metres (default: 0.5).")
     parser.add_argument("--tracker-min-hits", type=int, default=3,
                         help="SimpleTracker: real matches needed before a track is "
-                             "reported at all (default: 3) — false-positive suppression.")
+                             "reported at all (default: 3) -- false-positive suppression.")
     parser.add_argument("--tracker-max-age", type=int, default=3,
                         help="SimpleTracker: consecutive missed frames a confirmed track "
                              "survives, coasting on its predicted position, before being "
-                             "dropped (default: 3) — false-negative recovery window.")
+                             "dropped (default: 3) -- false-negative recovery window.")
     parser.add_argument("--tracker-vel-alpha", type=float, default=0.5,
                         help="SimpleTracker velocity-estimate smoothing in (0,1] "
                              "(default: 0.5).")

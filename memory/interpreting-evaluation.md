@@ -1,6 +1,6 @@
 # Interpreting evaluation numbers
 
-*keywords:* wp-AUC, AP, zero-shot transfer, DROW-native, fine-tuned, precision, recall, false positive, eval-stride, headline metric, eval-r 0.3, dead vote head, matching radius hides, plateau, converged, epoch-to-epoch noise, training loss as the instrument
+*keywords:* wp-AUC, AP, zero-shot transfer, DROW-native, fine-tuned, precision, recall, false positive, eval-stride, headline metric, eval-r 0.3, dead vote head, matching radius hides, plateau, converged, epoch-to-epoch noise, training loss as the instrument, score calibration, temperature and bias, fixed threshold not comparable, --no-calibration
 
 By how much should a given accuracy or speed number be discounted, and why.
 The standing comparison against published SOTA is in [`performance-log.md`](performance-log.md), and individual runs and sweeps in [`../CHANGELOG.md`](../CHANGELOG.md); this file is about how to read either correctly.
@@ -283,6 +283,30 @@ With no true positives, precision is 0 at every threshold and recall has no deno
 The sweep is deliberate: a single operating point would be a choice presented as a measurement.
 
 `duration_s` is `n_frames * frame_period_s`, never the span from the first timestamp to the last: `transferred`'s person-free frames are interleaved with populated ones the split drops, so a span would bill the detector for time it was never asked about and understate its rate.
+
+## A replay prices a parameter under a frozen policy, so it only confirms where the policy cannot adapt (2026-10-28)
+
+Replaying a trained checkpoint at another setting is minutes where training an arm is hours, so it is the right way to bracket a question — and it answered the slot-capacity question **wrongly**.
+The replay put capacity 128 level with 256 (+2.25 against +2.26) with a cliff at 64; the trained arm scored **84.99% against 85.73%**, a 0.74 pp loss running the wrong way for adoption.
+Trained at 128 the model learns a *more conservative* policy (precision 68.7% → 74.1%, false positives 1.220 → 0.871, recall 87.4% → 81.2%), which no replay can see because it evicts under the already-trained policy.
+
+**The test to apply before trusting a replay**: can the trained model's policy adapt to this parameter?
+`sigma_m` reads only at inference, so a replay of it is as good as an arm.
+Capacity reshapes what is learned, so a replay of it is a bracket and nothing more.
+The replay still earned its eight minutes — it found the cliff — and the lesson is narrower than "do not trust replays".
+
+## A fixed-threshold row from a score-calibrated checkpoint is not comparable with one from an uncalibrated checkpoint (2026-11-04)
+
+`calibrate_rescore.py` fits a post-hoc `(temperature, bias)` on val and stores it in the stage-3 checkpoint, where `object_memory` reads it back.
+It is **monotone**, so AP, recall at matched false positives and every other rank-based number cannot move — which is exactly why it was safe to apply after the freeze.
+**Everything read at a fixed threshold does move**, and by a lot: writing the pair into the same three checkpoints changed their person-free phantom count by **-11.8% at threshold 0.3 and 8x at 0.9**.
+
+So the pairing to check before comparing two arms is which of them carries a fitted pair.
+The `official` runs on the frozen architecture do (`a71_freeze_s*`, since 2026-10-31); the `balanced` run does **not**, because `calibrate_rescore.py` loads val through `load_split` with no partition of its own and would fit on `official`.
+Comparing across that gap prices the calibration and reports it as whatever the arms were supposed to differ in.
+Two ways out, and only the first is free: `empty_scene.py --no-calibration` substitutes the identity `(1.0, 0.0)`, which is `ObjectMemory`'s own default and therefore *equal* to an uncalibrated arm rather than close to it; or fit the missing pair, which costs ~65 min a seed and a `--frog-mode` flag that script does not yet have.
+
+**Stage 2's candidates are unaffected** — the calibration lives in stage 3 and the candidate network was never touched — so a candidates-only comparison needs none of this.
 
 ## A number in a draft is not evidence that it was measured
 

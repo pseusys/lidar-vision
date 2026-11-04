@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the three-horizon detector (`docs/PROPOSAL.md` §8, §10) with the training budgets the three-memory design settled on.
+"""Train the three-horizon detector (`docs/PROPOSAL.md` section 8, section 10) with the training budgets the three-memory design settled on.
 
 `step1` -- stage 3 alone on saved LFE-Peaks candidates: detections down to a 0.01 score, the best 64 per frame, on every frame
 of FROG `official` train, val and test, cached once. Recordings play as parallel streams, trained in chunks with truncated
@@ -1872,6 +1872,65 @@ def replay_sort(split: Split, min_hits: int, match_radius: float = MATCH_RADIUS_
     return frames
 
 
+def partition_note(stage2: dict, memory: dict, scored_on: str) -> dict:
+    """Which partition each half was trained on, which is being scored, and whether those disagree.
+
+    A checkpoint written before `frog_mode` existed says nothing, and the only thing it can be is `official`.
+    `cross_partition` is true when the scoring partition differs from either half's, and also when the two
+    halves disagree with *each other* -- that second case is not an experiment, it is a mix-up, and it earns
+    the same loud note.
+    """
+    trained = [str(half.get("frog_mode") or "official") for half in (stage2, memory)]
+    return dict(scored_on=scored_on, trained_on=trained,
+                cross_partition=any(mode != scored_on for mode in trained) or trained[0] != trained[1])
+
+
+def score_checkpoint(args) -> None:
+    """Score a trained detector on a partition it was not trained on. No training of any kind.
+
+    Every number this project has for its own detector came from the training script's own test pass, which
+    scores the partition that run trained on -- so a `balanced` model and an `official` model could only be
+    compared across different frames. `balanced`'s test contains `official`'s whole (40,022 frames, verified),
+    so the comparison on identical frames was available and simply unreachable.
+
+    It runs the **same `evaluate`** the training path runs, deliberately: a second implementation of the metric
+    would give a number incomparable with the frozen 86.29%, which is the only reason to compute this one. The
+    stride defaults to 5 for the same reason -- that is what the frozen figure was measured at.
+    """
+    device, _ = detect_device()
+    stage2_checkpoint = torch.load(args.stage2, map_location="cpu")
+    memory_checkpoint = torch.load(args.memory, map_location=device, weights_only=False)
+    note = partition_note(stage2_checkpoint, memory_checkpoint, args.frog_mode)
+
+    print(f"scoring on FROG {args.frog_mode} {args.split}; checkpoints trained on "
+          f"{' and '.join(note['trained_on'])}", flush=True)
+    if note["cross_partition"]:
+        print("  ** CROSS-PARTITION SCORE: these frames are not the ones these weights were trained against.", flush=True)
+        print("  Deliberate here, and the reason this mode exists -- but never quote it beside a", flush=True)
+        print("  same-partition number without saying so (AGENTS.md rule 3).", flush=True)
+
+    split = load_split(args.split, args.limit_recordings, args.stage2, device, args.frog_mode)
+    print(f"{args.split}: {len(split.lengths)} recordings, {split.lengths.sum()} frames, "
+          f"{int(split.data.annotated.sum())} annotated", flush=True)
+    model = object_memory(memory_checkpoint, split.data.features.shape[-1]).to(device)
+    results = dict(partitions=note, test={})
+    for stride in args.test_strides:
+        results["test"][f"stride_{stride}"] = evaluate(model, split, device, stride, args.max_streams,
+                                                       evaluation_segments(split, 0, 0, 0),
+                                                       extra_radii=EXTRA_TEST_RADII_M)
+        c, m = (results["test"][f"stride_{stride}"][k] for k in ("candidates", "memory"))
+        print(f"{args.split}, every {stride} annotated frame: "
+              f"candidates AP {c['ap']:.2%} (0.3 m {c['ap_0.3m']:.2%}) P {c['precision']:.1%} "
+              f"R {c['recall']:.1%} FP {c['fp_per_frame']:.3f} FN {c['fn_per_frame']:.3f}", flush=True)
+        print(f"  memory AP {m['ap']:.2%} (0.3 m {m['ap_0.3m']:.2%}) P {m['precision']:.1%} "
+              f"R {m['recall']:.1%} FP {m['fp_per_frame']:.3f} FN {m['fn_per_frame']:.3f}  "
+              f"exchange rate {m['exchange_rate']:.2f}", flush=True)
+
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(results, indent=1), encoding="utf-8")
+    print(f"wrote {args.out}", flush=True)
+
+
 def run_ablations(args) -> None:
     device, _ = detect_device()
     angles = frog_laser_angles(720)
@@ -1907,6 +1966,11 @@ def run_ablations(args) -> None:
               f"FP {r['fp_per_frame']:.3f}  FN {r['fn_per_frame']:.3f}", flush=True)
     (args.out_dir / "step4_results.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
     print(f"wrote {args.out_dir / 'step4_results.json'}", flush=True)
+
+
+#: Which function runs each step. A table rather than an inline dict in `main`, so the wiring is readable and
+#: a test can assert it.
+STEPS = {"step2": train_calibration, "step3b": train_joint, "step4": run_ablations, "score": score_checkpoint}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -2079,6 +2143,22 @@ def build_parser() -> argparse.ArgumentParser:
     step3b.add_argument("--val-windows", type=int, default=16, help="val windows per evaluation, streamed together")
     step3b.add_argument("--val-window-s", type=float, default=60.0)
     step3b.add_argument("--val-warmup-s", type=float, default=30.0)
+    score = sub.add_parser("score")
+    # No training here, so none of the training flags apply. What it needs is a detector, a partition and a
+    # split -- and the partition is the point: it is normally *not* the one the checkpoints were trained on.
+    score.add_argument("--stage2", type=Path, required=True, help="the trained stages 1-2 whose candidates are scored")
+    score.add_argument("--memory", type=Path, required=True, help="step3a's stage 3, which rescores them")
+    score.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
+                       help="the partition to score ON, which may differ from the one trained on; a mismatch is "
+                            "reported in the output rather than refused, because that comparison is this mode's purpose")
+    score.add_argument("--split", choices=("train", "val", "test"), default="test")
+    score.add_argument("--test-strides", type=int, nargs="+", default=[5],
+                       help="score every Nth annotated frame, once per value; 5 by default because the frozen "
+                            "headline is a stride-5 number and a stride-1 answer would not be comparable with it")
+    score.add_argument("--max-streams", type=int, default=32)
+    score.add_argument("--limit-recordings", type=int, default=0)
+    score.add_argument("--out", type=Path, default=_HERE.parent / "results" / "score_results.json")
+
     step4 = sub.add_parser("step4")
     step4.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
                        help="FROG partition to run the ablations on; must match the one the checkpoints were "
@@ -2149,7 +2229,7 @@ def build_parser() -> argparse.ArgumentParser:
                             "inverted bottleneck. residual: two full convolutions with a GELU between, no depthwise "
                             "separation and no widening")
     step2.add_argument("--dropout", type=float, default=0.1, help="dropout on the head's input, 0.1 since 2026-10-06; 0 reproduces every result before, "
-                                                                 "`docs/RESEARCH.md` §5.4 intends 0.1 for this project's own architectures")
+                                                                 "`docs/RESEARCH.md` section 5.4 intends 0.1 for this project's own architectures")
     step2.add_argument("--checkpoint-every", type=float, default=0.0, help="epochs between checkpoints kept whatever they score, "
                                                                           "so test AP can be measured against training duration; 0 keeps only the best")
     step2.add_argument("--max-range-m", type=float, default=MAX_RANGE_M, help="the model's range: a reading that is missing, non-positive or at or "
@@ -2186,12 +2266,15 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    args.out_dir.mkdir(parents=True, exist_ok=True)
+    # Every training step writes a run directory; `score` trains nothing and writes one file, named by `--out`,
+    # which it creates itself. So the directory is made only for the steps that have one.
+    if hasattr(args, "out_dir"):
+        args.out_dir.mkdir(parents=True, exist_ok=True)
     keep_awake()
     # a ROCm process on Windows can hang in interpreter teardown, after success or failure alike, holding memory and blocking
     # the next run: always leave through os._exit, with the exit code the launcher checks
     try:
-        {"step2": train_calibration, "step3b": train_joint, "step4": run_ablations}.get(args.mode, train_memory)(args)
+        STEPS.get(args.mode, train_memory)(args)
     except BaseException:
         traceback.print_exc()
         sys.stdout.flush(), sys.stderr.flush()

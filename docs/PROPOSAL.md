@@ -102,6 +102,22 @@ free: those frames offer no true positive to find and can only cost precision, s
 comparable with an `official` one, and the like-for-like comparison is the extractable subset above. Measured
 on the published detectors, that difference is 5-6 points (`memory/performance-log.md`).
 
+**What training on them turned out to be worth, measured rather than argued.** Both detectors counted on the
+same 21,149 person-free frames of `balanced`'s test split -- all of them `frog_15-53`'s, a recording in
+neither detector's training set -- the one trained on `balanced` emits **21% fewer** stage-2 candidates per
+empty frame than the one trained on `official` (2.216 to 1.751 at threshold 0.3), and **35% fewer** on the
+frames where nobody has been in view for ten seconds, where a lingering memory of someone who just left
+cannot account for them. The effect grows with confidence, reaching 57% at threshold 0.9 beyond that horizon.
+
+**But the assembled detector's output is unchanged**, and the reason matters for how the contribution should
+be claimed: the object memory's filtering is *substitutive*. It removes 68% of the worse stage 2's candidates
+and 61% of the better one's, so the upstream gain arrives at the output as nothing measurable (0.710 against
+0.684, inside the run-to-run spread). Training on person-free frames therefore buys a demonstrably cleaner
+stage 2, at a cost of 1.4 points of person-class AUC on populated frames, and not a cleaner pipeline. The
+claim `balanced` supports is about **where** the false positives come from, and it is a strong one: every
+surviving phantom in both detectors is a stage-2 candidate the memory failed to suppress, never a detection
+the memory invented.
+
 ### 2.2 Current detectors
 
 | detector | how it works | uses time? | published FROG AP | in this repository |

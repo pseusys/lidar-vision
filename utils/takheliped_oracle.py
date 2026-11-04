@@ -8,7 +8,7 @@ in one frame but detected shortly before or after. That ceiling was measured on
 calibration network already detects more people, and a ceiling measured over a
 weaker detector's misses says nothing about what is left above a stronger one.
 
-`docs/PROPOSAL.md` §9 asks the question this script answers: of the recall that
+`docs/PROPOSAL.md` section 9 asks the question this script answers: of the recall that
 was *available* to memory above our own candidates, how much did stage 3
 actually take?
 

@@ -6,7 +6,7 @@ precision-target analysis).
 
 Motivation: the error breakdown showed false positives dominate for every
 model; the threshold sweep showed SpaceTimeCNN/LFE-Peaks have a favorable
-FP-for-FN trade at a stricter operating point, but LFE-PPN doesn't — its
+FP-for-FN trade at a stricter operating point, but LFE-PPN doesn't -- its
 precision/recall curve is shaped differently, so picking a different point on
 the *same* curve doesn't help. This sweeps the parameters that actually
 generate that curve in the first place:
@@ -17,11 +17,11 @@ generate that curve in the first place:
   the same sweep is `eval_nn_model(..., v2d_conf=...)`.)
 
   LFE-PPN: its own constructor already exposes `score_thresh` (minimum
-  objectness) and `nms_radius` (greedy NMS suppression radius) — no need to
+  objectness) and `nms_radius` (greedy NMS suppression radius) -- no need to
   touch internal code, they're already parameters.
 
 Loads the dataset once and loops over the grid in-process (each config is a
-fresh model/detector forward pass, not a fresh Python process) — much
+fresh model/detector forward pass, not a fresh Python process) -- much
 cheaper than N separate `evaluate.py` invocations for a small sweep.
 
   Both LFE detectors: the **range-aware** merge radius, `r(d) = a + b*d`
@@ -123,7 +123,7 @@ def main():
 
     # --- LFE-PPN: score_thresh x nms_radius -------------------------------
     if "lfe_ppn" not in args.skip:
-        print(f"\n{'='*100}\n  LFE-PPN — score_thresh x nms_radius sweep\n{'='*100}\n")
+        print(f"\n{'='*100}\n  LFE-PPN -- score_thresh x nms_radius sweep\n{'='*100}\n")
         print(f"  {'score_th':>9} {'nms_rad':>8} {'AUC':>7} {'Recall':>8} {'Prec':>8} "
               f"{'F1':>7} {'TP':>8} {'FP':>8} {'FN':>8}")
         best = None
@@ -189,7 +189,7 @@ def _range_aware_sweep(args, dataset, cfg, total_gt):
     if args.score_by == "operating-point":
         return _operating_point_sweep(args, dataset, cfg, models)
     for name, make in models.items():
-        print(f"\n{'='*100}\n  {name} — range-aware radius r(d) = a + b*d\n{'='*100}\n")
+        print(f"\n{'='*100}\n  {name} -- range-aware radius r(d) = a + b*d\n{'='*100}\n")
         raw = _cache_raw(make(), dataset, cfg, args.raw_score_floor)
         n_raw = sum(len(v) for v in raw.values())
         print(f"  cached {n_raw} raw centroids over {len(raw)} frames "
@@ -278,7 +278,7 @@ def _operating_point_sweep(args, dataset, cfg, models):
     """
     gt_by_frame = _gt_by_frame(dataset)
     for name, make in models.items():
-        print(f"\n{'='*104}\n  {name} — radius swept on Tier 0's quantities, "
+        print(f"\n{'='*104}\n  {name} -- radius swept on Tier 0's quantities, "
               f"score >= {args.op_thresh}\n{'='*104}\n")
         raw = _cache_raw(make(), dataset, cfg, args.raw_score_floor)
         n_frames = len(raw)

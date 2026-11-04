@@ -5,7 +5,7 @@ negatives?
 
 Motivation: before building any temporal-consensus mechanism (naive
 averaging, or a proper tracker), we need to know which error type actually
-dominates each detector's output — a false-positive filter and a
+dominates each detector's output -- a false-positive filter and a
 false-negative recovery mechanism are different pieces of machinery, and
 building the wrong one first is wasted effort. See docs/RESEARCH.md Section
 8's consensus subsection for the full discussion.
@@ -14,7 +14,7 @@ Method: reuses the AUC pipeline's own (recall, precision, threshold) curve
 (evaluate_auc(..., return_curves=True) / eval_lfe_model(..., return_curves=True))
 instead of a separate detection pass. Picks the best-F1 operating point on
 that curve, then backs out TP/FP/FN counts from (recall, precision, total_gt)
-— no new inference code, no new matching logic, just a different read of the
+-- no new inference code, no new matching logic, just a different read of the
 data every AUC number in this project's tables is already computed from.
 
   tp = round(recall * total_gt)

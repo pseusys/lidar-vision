@@ -7,14 +7,14 @@ use evaluate.py --drow / --drspaam to evaluate them.
 
 Trainable detectors
 -------------------
-  spacetime_cnn — SpaceTimeCNNDetector (2-D conv over N_beams×T grid)
+  spacetime_cnn -- SpaceTimeCNNDetector (2-D conv over N_beams x T grid)
 
 It is non-recursive (CNN only, no RNN/attention) and consumes raw, unaligned,
-single-channel range scans — see RESEARCH.md for why.
+single-channel range scans -- see RESEARCH.md for why.
 
 Eval-only
 ---------
-  algorithmic          — AlgorithmicDetector (rule-based; see evaluate.py)
+  algorithmic          -- AlgorithmicDetector (rule-based; see evaluate.py)
 
 All detectors consume raw-scan input (optionally rotation-aligned):
   aligned_raw_scan(scans_hist, odoms_hist)  ->  (T, N_beams, 1)  [default]
@@ -28,7 +28,7 @@ All detectors produce (default --head drow):
 With --head heatmap:
   heatmap : (N_beams, 1)  raw logit; sigmoid gives per-beam person probability.
   Decoded at eval time via scipy.signal.find_peaks(sigmoid(heatmap), height=0.3,
-  distance=5).  See RESEARCH.md §2.3 ("Alternative detection head") for rationale.
+  distance=5).  See RESEARCH.md section 2.3 ("Alternative detection head") for rationale.
 
 Odometry alignment (--align-scans, default: on)
 -----------------------------------------------
@@ -118,7 +118,7 @@ def detect_device():
     except ImportError:
         pass
 
-    print("No GPU found — using CPU.")
+    print("No GPU found -- using CPU.")
     return "cpu", False
 
 
@@ -229,12 +229,12 @@ def _setup_datasets(args):
     if args.dataset == "frog":
         from takheliped.datasets import FROG_Dataset, frog_laser_angles
         _mode = getattr(args, "frog_mode", "official")
-        print(f"Loading FROG train split ('{_mode}/{args.train_split}') …")
+        print(f"Loading FROG train split ('{_mode}/{args.train_split}') ...")
         train_ds = FROG_Dataset(split=args.train_split, mode=_mode,
                                 time_frame_size=_time_frame_size)
         val_ds = None
         if args.val_split:
-            print(f"Loading FROG val split ('{_mode}/{args.val_split}') …")
+            print(f"Loading FROG val split ('{_mode}/{args.val_split}') ...")
             val_ds = FROG_Dataset(split=args.val_split, mode=_mode,
                                   time_frame_size=_time_frame_size)
         cfg = SimpleNamespace(
@@ -246,12 +246,12 @@ def _setup_datasets(args):
         )
     elif args.dataset == "jrdb":
         from takheliped.datasets import JRDB_Dataset, jrdb_laser_angles
-        print(f"Loading JRDB split ('{args.train_split}') …")
-        print("  NOTE: JRDB requires manual download — see JRDB_Dataset docstring.")
+        print(f"Loading JRDB split ('{args.train_split}') ...")
+        print("  NOTE: JRDB requires manual download -- see JRDB_Dataset docstring.")
         train_ds = JRDB_Dataset(split=args.train_split)
         val_ds = None
         if args.val_split:
-            print(f"Loading JRDB val split ('{args.val_split}') …")
+            print(f"Loading JRDB val split ('{args.val_split}') ...")
             val_ds = JRDB_Dataset(split=args.val_split)
         cfg = SimpleNamespace(
             name="jrdb",
@@ -263,11 +263,11 @@ def _setup_datasets(args):
     else:
         from takheliped.datasets import DROW_Dataset
         from takheliped.utils.file_utils import DROW_TRAIN_SET, DROW_VALIDATION_SET
-        print("Loading DROW train set …")
+        print("Loading DROW train set ...")
         train_ds = DROW_Dataset(dataset=DROW_TRAIN_SET, time_frame_size=_time_frame_size)
         val_ds = None
         if args.val_split:
-            print("Loading DROW val set …")
+            print("Loading DROW val set ...")
             val_ds = DROW_Dataset(dataset=DROW_VALIDATION_SET, time_frame_size=_time_frame_size)
         cfg = SimpleNamespace(
             name="drow",
@@ -1639,11 +1639,11 @@ def train_model(args) -> dict:
     force_cpu = getattr(args, "force_cpu", False)
     if force_cpu:
         device, using_dml = "cpu", False
-        print("  [INFO] force_cpu=True — using CPU regardless of GPU availability.\n")
+        print("  [INFO] force_cpu=True -- using CPU regardless of GPU availability.\n")
     else:
         device, using_dml = detect_device()
         if using_dml:
-            print("  Note: DirectML — tensors moved to DML device via .to().\n")
+            print("  Note: DirectML -- tensors moved to DML device via .to().\n")
         else:
             print(f"  Device: {device}\n")
 
@@ -1713,7 +1713,7 @@ def train_model(args) -> dict:
         if val_ds is not None else None)
 
     n_params = sum(p.numel() for p in net.parameters())
-    print(f"Model: {args.detector}  —  {n_params:,} parameters\n")
+    print(f"Model: {args.detector}  --  {n_params:,} parameters\n")
 
     # LR scheduler
     schedule = getattr(args, "lr_schedule", "none")
@@ -1770,7 +1770,7 @@ def train_model(args) -> dict:
     )
 
     print(f"Training {args.detector} for {args.epochs} epoch(s), "
-          f"subsample={args.subsample:.0%} …\n")
+          f"subsample={args.subsample:.0%} ...\n")
 
     epoch_bar = tqdm(range(start_epoch + 1, start_epoch + args.epochs + 1),
                      desc="Epochs", unit="ep", dynamic_ncols=True)
@@ -1900,7 +1900,7 @@ def train_model(args) -> dict:
     saved_epoch = final_epoch
     if best_path is not None and best_path.exists():
         print(f"  Loading best checkpoint (epoch {best_epoch}, "
-              f"val wp-AUC={best_val_auc:.1%}) …")
+              f"val wp-AUC={best_val_auc:.1%}) ...")
         load_checkpoint(best_path, net)
         # Stamp the epoch these weights actually come from. The old code wrote
         # `epoch=final_epoch` regardless, so the dtime=10 run's checkpoint held
@@ -1912,7 +1912,7 @@ def train_model(args) -> dict:
     if val_ds is not None:
         n_val = sum(len(d) for d in val_ds.det_id)
         print(f"Computing final AUC on val set "
-              f"({min(n_val, FINAL_AUC_MAX_FRAMES):,} of {n_val:,} frames) …")
+              f"({min(n_val, FINAL_AUC_MAX_FRAMES):,} of {n_val:,} frames) ...")
         aucs = evaluate_auc(net, val_ds, cfg, eval_r=args.eval_r, device=device,
                             batch_size=args.batch_size, dtime=_dtime,
                             align_scans=_align_scans, history_mode=_history_mode,
@@ -2018,8 +2018,8 @@ def tune_model(args) -> dict:
         study_name=f"tune_{det}",
         sampler=optuna.samplers.TPESampler(seed=42),
     )
-    print(f"\nStarting Optuna study: {tune_trials} trials × {tune_epochs} epochs "
-          f"each for '{det}' …\n")
+    print(f"\nStarting Optuna study: {tune_trials} trials x {tune_epochs} epochs "
+          f"each for '{det}' ...\n")
     study.optimize(objective, n_trials=tune_trials, show_progress_bar=True)
 
     best = study.best_params
@@ -2128,19 +2128,19 @@ def main():
                         help="Fraction of frames per epoch (use 0.05 for quick dev)")
     parser.add_argument("--batch-size",  type=int,   default=4,
                         help="Frames per optimizer step; effective beam batch = "
-                             "batch_size × N_beams (default: 4)")
+                             "batch_size x N_beams (default: 4)")
     parser.add_argument("--no-frame-cache", dest="frame_cache",
                         action="store_false",
                         help="Recompute frame preprocessing on every access instead "
                              "of caching it in RAM across epochs. Trades training "
                              "time for memory (~2.6 GB for FROG's full train split "
-                             "in raw_scan mode) — use on RAM-constrained machines.")
+                             "in raw_scan mode) -- use on RAM-constrained machines.")
     # Architecture hyperparams (full-scan models only)
     parser.add_argument("--channels",        type=int, default=96,
                         help="Internal channel width (SpaceTimeCNN; default: 96, "
-                             "must be divisible by 3×8=24 for GroupNorm)")
+                             "must be divisible by 3x8=24 for GroupNorm)")
     parser.add_argument("--n-spatial-stages", type=int, default=3,
-                        help="Spatial inception stages 1–4 (SpaceTimeCNN; default: 3). "
+                        help="Spatial inception stages 1-4 (SpaceTimeCNN; default: 3). "
                              "Beam RF: 3->17, 4->49, 5->177, 6->689 beams.")
     # Odometry alignment
     parser.add_argument("--align-scans", dest="align_scans", action="store_true",
@@ -2166,9 +2166,9 @@ def main():
     parser.add_argument("--head", choices=["drow", "heatmap"], default="drow",
                         help="Detection head for full-scan models (default: 'drow'). "
                              "'drow': 4-class logits + vote-offset regression, same "
-                             "head as DROW/DR-SPAAM — enables direct comparison. "
+                             "head as DROW/DR-SPAAM -- enables direct comparison. "
                              "'heatmap': 1D Gaussian heatmap + BCE loss + peak "
-                             "detection decoding — simpler supervision, no vote "
+                             "detection decoding -- simpler supervision, no vote "
                              "accumulation. Use --heatmap-sigma to control peak width.")
     parser.add_argument("--heatmap-sigma", type=float, default=2.0,
                         help="Gaussian sigma in beam units for heatmap targets "
@@ -2189,7 +2189,7 @@ def main():
     parser.add_argument("--init-weights", type=Path, default=None,
                         help="Initialise model weights from a checkpoint (e.g. a "
                              "FROG-trained model) without touching optimizer state "
-                             "or epoch numbering — for fine-tuning on a new dataset "
+                             "or epoch numbering -- for fine-tuning on a new dataset "
                              "with a fresh optimizer/LR, unlike --resume.")
     parser.add_argument("--freeze-backbone", action="store_true", default=False,
                         help="With --init-weights: freeze every parameter except the "
@@ -2225,7 +2225,7 @@ def main():
     parser.add_argument("--tune-trials", type=int, default=30,
                         help="Number of Optuna trials (default: 30)")
     parser.add_argument("--tune-epochs", type=int, default=10,
-                        help="Epochs per trial — keep short (default: 10)")
+                        help="Epochs per trial -- keep short (default: 10)")
     args = parser.parse_args()
     args.val_split = args.val_split.strip() or None
 
@@ -2233,7 +2233,7 @@ def main():
     # AlgorithmicDetector: eval-only (not an nn.Module)
     # ------------------------------------------------------------------
     if args.detector == "algorithmic":
-        print("AlgorithmicDetector is not trainable — running eval only.")
+        print("AlgorithmicDetector is not trainable -- running eval only.")
         dataset, cfg = _setup_datasets(SimpleNamespace(
             dataset=args.dataset,
             train_split=args.train_split,

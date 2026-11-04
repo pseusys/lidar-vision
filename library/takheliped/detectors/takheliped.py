@@ -1,7 +1,7 @@
 ﻿"""Three-horizon streaming person detector (TAKHeLiPeD): per-beam input features, the single-frame calibration network, and the
 object memory.
 
-Design and reasoning in `docs/PROPOSAL.md` (Â§5.3 input, Â§5.4 calibration network). Stage 2 read one
+Design and reasoning in `docs/PROPOSAL.md` (§5.3 input, §5.4 calibration network). Stage 2 read one
 frame and its predecessors through a coarse temporal convolution until 2026-10-08, when it was measured end to end and dropped;
 that code is at commit e76aa94.
 Conventions: beam angle 0 is forward, counterclockwise positive, increasing with beam index;
@@ -102,7 +102,7 @@ def world_to_sensor(xy: Tensor, pose: Tensor) -> Tensor:
 
 @dataclass(frozen=True)
 class SlotRules:
-    """Fixed rules for creating, matching, replacing and retiring object slots (`docs/PROPOSAL.md` Â§5.5 and Â§6.3).
+    """Fixed rules for creating, matching, replacing and retiring object slots (`docs/PROPOSAL.md` §5.5 and §6.3).
 
     `latest_value` is the ablation of the design's value rule: a matched slot takes the candidate's score
     instead of accumulating towards certainty, so a person hidden for a moment no longer keeps their slot.
@@ -420,7 +420,7 @@ def _proximity(a: Tensor, b: Tensor, sigma_m: float) -> Tensor:
 
 
 class ObjectMemory(nn.Module):
-    """Stage 3, the short and long horizons (`docs/PROPOSAL.md` Â§5.5): object slots in world coordinates, learned matching of
+    """Stage 3, the short and long horizons (`docs/PROPOSAL.md` §5.5): object slots in world coordinates, learned matching of
     candidates to slots, exchange between slots, selective recurrence in real time, rule-based slot bookkeeping, candidate
     rescoring that starts silent. **Coasting -- a slot reporting a person no candidate covers -- was removed from the
     architecture on 2026-10-16** after its ablation measured it costing nothing and firing essentially never; `coast=True`
@@ -904,7 +904,7 @@ def _stage(channels: int, blocks: int, kernel_size: int, expansion: int, block: 
 
 
 class CalibrationNetwork(nn.Module):
-    """Stages 1-2 (`docs/PROPOSAL.md` Â§5.3-Â§5.4): one scan in, no state, no pose.
+    """Stages 1-2 (`docs/PROPOSAL.md` §5.3-§5.4): one scan in, no state, no pose.
 
     Per-beam input features read up to `max_range_m` (`sanitize_ranges`); a 1D U-Net of ConvNeXt blocks (widths `channels` at N, N/2
     and N/4 beams, bottleneck at N/8 sectors) with a global max aggregator and a 3-tap convolution across bottleneck sectors
@@ -951,7 +951,7 @@ class CalibrationNetwork(nn.Module):
         self.down = nn.ModuleList([nn.Conv1d(c0, c1, 2, stride=2), nn.Conv1d(c1, c2, 2, stride=2), nn.Conv1d(c2, c2, 2, stride=2)])
         # The whole-scan max, and the ablation of it. It is the one path by which a return at one end of
         # the field of view can reach the other end's logits: the U-Net's receptive field is wide but finite. Named as a
-        # defining feature of this architecture in `docs/RESEARCH.md` Â§5.2 and never tested until that ablation, which matters
+        # defining feature of this architecture in `docs/RESEARCH.md` §5.2 and never tested until that ablation, which matters
         # because the shape sweeps have since shown the widths flat and the block interchangeable, leaving this as the leading
         # unexplained part of stage 2's lead over LFE-Peaks.
         self.aggregator = aggregator

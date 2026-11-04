@@ -466,5 +466,38 @@ against 93.9% at 0.3. Both stay far below the 99.8% that real people score.
 
 ## 6. Other datasets
 
-Not yet written. `TODO.md` steps 0–3 cover FROG `balanced`, DROW, FROG→DROW zero-shot and JRDB. Each gets its own
-parameter table and its own notes here, beside this one rather than replacing it.
+### 6.1 FROG `balanced` — the same values, and the one place the run departed from them
+
+**The proposal for FROG `balanced` is section 5.1's table, unchanged.** Nothing was re-tuned for this partition and
+nothing in the evidence suggests anything should be. `balanced` re-deals the same six recordings of the same venue
+into different splits: the sensor, the 720-beam grid, the 270° field of view, the 10 m annotation range and the 40 Hz
+rate are all identical, so every parameter that section 5.1 justifies by the *dataset* carries over by construction,
+and every one it justifies by a tie was tied on data drawn from these same recordings. What `balanced` changes is the
+**composition** of each split — a fifth of its frames contain nobody — and composition bears on what a number means
+rather than on what width a convolution should be.
+
+This is a recommendation by transfer, and it was exercised rather than merely asserted: the two trained detectors'
+checkpoints record **identical** values for `dim` (64), `heads` (4), `recurrence` (minGRU), `slots` (256), slot
+exchange, learned matching and coasting (all off), the room frame, `label_sigma_m` (0.3), `label_radius` (0.6), the
+block (ConvNeXt), dropout (0.1) and the channel widths. The partition is the only deliberate difference, and the
+transferred recipe reached **82.49%** on `balanced`'s own test and **84.93%** on `official`'s own frames against the
+`official`-trained **86.29%** — so the values transfer at a cost of 1.36 pp attributable to the training split, not to
+a mis-set parameter.
+
+**One departure, recorded because it is in the run the numbers come from.** The `balanced` run trained stage 3 with
+`--chunk-s 1 10`, a 1 s → 10 s curriculum, where section 5.1 adopts a flat **10 s and no curriculum**. The adopted
+choice was adopted on a *tie* — the curriculum matches it on accuracy and costs about 24% more time — so this does
+not put the `balanced` figures on a different footing, but it does mean they were not produced by the table above in
+every respect. `utils/queue_balanced.py` keeps the flag as it ran, so a further seed reproduces these numbers rather
+than a near-miss of them; a fresh study on this partition should use the adopted `--chunk-s 10`.
+
+**What this section does not claim.** No parameter sweep has been run on `balanced`, so "the same values" is a
+transfer supported by one seed, not a measured optimum for this partition. If a sweep is ever run here, the two
+candidates worth moving first are the ones composition could plausibly touch: the beam target's `label_sigma_m` and
+the memory's `fade_time_s`, since a fifth of the frames now carry no person to spread a Gaussian over and no person
+for a slot to wait for.
+
+### 6.2 DROW, FROG→DROW zero-shot, JRDB
+
+Not yet written. `TODO.md` steps 1–3 cover them. Each gets its own parameter table and its own notes here, beside
+section 5's rather than replacing it.

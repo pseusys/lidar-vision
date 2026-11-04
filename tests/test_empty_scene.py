@@ -15,7 +15,14 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
-from empty_scene import coasting_share, frame_period, phantom_counts, since_person, time_since_person
+from inspect import signature
+
+from takheliped.detectors.takheliped import ObjectMemory
+
+from empty_scene import (
+    PEOPLE_FROM, build_parser, calibration_override, coasting_share, counted_frames, frame_period, load_person_free,
+    main, phantom_counts, populated_frames, since_person, time_since_person,
+)
 
 RADIUS_M = 0.3
 
@@ -258,3 +265,155 @@ class TestWhereThePhantomsComeFrom:
 
         assert share["from_coasting"] == 0
         assert share["coasting_share"] == 0.0
+
+
+class TestWhichPartitionItCounts:
+    """The script was written for one partition and hardcoded it, which made the comparison it exists to serve impossible.
+
+    `transferred` is the only partition whose **test** split is person-free, and its train and val splits are *identical to
+    `official`'s* -- so nothing trained on it has ever seen a room with nobody in it. `balanced` is the one partition with
+    person-free frames in **every** split, which makes the pair the experiment: the same script, the same recording's empty
+    frames, one detector that trained on empty rooms and one that did not.
+
+    Two things have to hold for that comparison to mean anything. The partition must reach the **loader** -- a job that
+    forgets it trains or scores somewhere else and succeeds anyway. And on a partition that interleaves them, only the
+    **person-free** frames may be counted: a detection on a populated frame can be a person, and counting it as a phantom
+    would hide the effect under the thing being measured.
+    """
+
+    @staticmethod
+    def _split(populated, recordings=1):
+        """A packed split whose labels say which frames hold a person, as a partition with frame rule `all` does."""
+        populated = np.asarray(populated, dtype=bool)
+        n = len(populated) // recordings
+        return SimpleNamespace(
+            offsets=np.arange(recordings) * n, lengths=np.full(recordings, n),
+            data=SimpleNamespace(gt_valid=populated[:, None], time=np.arange(len(populated)) * 0.025,
+                                 annotated=np.ones(len(populated), dtype=bool)))
+
+    def test_the_partition_and_the_split_are_both_flags(self):
+        flags = {action.dest: action for action in build_parser()._actions}
+
+        assert tuple(flags["frog_mode"].choices) == ("official", "transferred", "balanced")
+        assert tuple(flags["split"].choices) == ("train", "val", "test")
+
+    def test_the_defaults_are_what_every_published_row_was_measured_on(self):
+        """`transferred` test, 72,533 person-free frames: changing that default would silently restate published numbers."""
+        flags = {action.dest: action for action in build_parser()._actions}
+
+        assert flags["frog_mode"].default == "transferred"
+        assert flags["split"].default == "test"
+
+    def test_the_flag_reaches_the_loader(self, monkeypatch):
+        """The failure this guards is silent: a mode that does not arrive loads `official` and reports a clean run."""
+        seen = {}
+
+        def fake_load_split(name, limit, stage2, device, mode):
+            seen.update(name=name, limit=limit, stage2=stage2, device=device, mode=mode)
+            return self._split([True, False, False])
+
+        monkeypatch.setattr("empty_scene.load_split", fake_load_split)
+
+        load_person_free("val", "balanced", 2, "ckpt", "cpu")
+
+        assert seen["mode"] == "balanced"
+        assert seen["name"] == "val" and seen["limit"] == 2
+
+    def test_the_loader_also_hands_back_who_was_in_view(self, monkeypatch):
+        """The stale-memory split needs it, and it has to describe the partition just loaded rather than another one."""
+        monkeypatch.setattr("empty_scene.load_split",
+                            lambda *a, **kw: self._split([True, False, False, True]))
+
+        split, populated = load_person_free("test", "balanced", 0, "ckpt", "cpu")
+
+        assert populated.tolist() == [True, False, False, True]
+        assert len(populated) == int(split.lengths.sum())
+
+    def test_main_reads_the_partition_off_the_arguments(self):
+        """Asserted on the reference rather than by running it: `main` loads checkpoints and replays a dataset."""
+        assert "frog_mode" in main.__code__.co_names
+        assert "split" in main.__code__.co_names
+
+
+class TestWhereThePeopleAreRead:
+    def test_a_split_that_carries_its_own_people_is_read_from_its_labels(self):
+        """`balanced`'s frame rule is `all`, so its own annotations say which frames hold someone."""
+        split = TestWhichPartitionItCounts._split([True, False, False, True])
+
+        assert populated_frames(split, "balanced", "test", 0).tolist() == [True, False, False, True]
+
+    def test_only_the_person_free_only_split_needs_a_sibling(self):
+        """`transferred` test carries no annotations at all -- every frame holds nobody -- so when a person was last in
+        view cannot be read from it, and comes from the populated split over the same three recordings."""
+        assert PEOPLE_FROM == {("transferred", "test"): "val"}
+
+    def test_the_sibling_is_read_at_the_same_partition(self, monkeypatch):
+        asked = {}
+
+        class FakeDataset:
+            def __init__(self, split, mode, **kwargs):
+                asked.update(split=split, mode=mode)
+                self.scans = [np.zeros((4, 720))]
+                self.det_id = [[1, 3]]
+
+        monkeypatch.setattr("empty_scene.FROG_Dataset", FakeDataset)
+        split = TestWhichPartitionItCounts._split([False, False, False, False])
+
+        mask = populated_frames(split, "transferred", "test", 0)
+
+        assert asked == {"split": "val", "mode": "transferred"}
+        assert mask.tolist() == [False, True, False, True]
+
+
+class TestOnlyThePersonFreeFramesAreCounted:
+    def test_a_populated_frame_is_not_counted_as_a_phantom(self):
+        """On `balanced` the scored frames interleave both, and a detection on a populated one can be a person."""
+        index = np.array([0, 1, 2, 3])
+        populated = np.array([True, False, True, False])
+
+        assert counted_frames(index, populated, "balanced", "test").tolist() == [False, True, False, True]
+
+    def test_frames_are_selected_by_their_packed_position_not_their_order(self):
+        """`evaluate` plays recordings as parallel streams, so the scored frames arrive interleaved."""
+        index = np.array([7, 2, 5])
+        populated = np.zeros(8, dtype=bool)
+        populated[[2, 7]] = True
+
+        assert counted_frames(index, populated, "balanced", "val").tolist() == [False, False, True]
+
+    def test_a_person_free_split_keeps_every_frame_it_scored(self):
+        index = np.arange(5)
+
+        assert counted_frames(index, np.zeros(5, dtype=bool), "transferred", "test").all()
+
+    def test_a_partition_with_no_person_free_frame_is_refused_rather_than_reported_as_zero(self):
+        """`official` is 100% populated in every split. Counting there would print 0.000 phantoms per frame and read as
+        a result, when the truth is that the question was not asked."""
+        with pytest.raises(SystemExit, match="official"):
+            counted_frames(np.arange(3), np.ones(3, dtype=bool), "official", "test")
+
+
+class TestComparingACalibratedArmWithAnUncalibratedOne:
+    """Every row this script prints is read at a fixed threshold, and the two arms of the person-free experiment are
+    not on the same scale: `calibrate_rescore.py` fitted a temperature and bias into the `official` runs' stage 3 and
+    the `balanced` run has none. How much that matters was measured when the pair was written in -- the same
+    checkpoints' phantom count fell 11.8% at threshold 0.3 and rose 8x at 0.9 -- so comparing across it would price
+    the calibration and call it the training data. Stage 2 was never calibrated, so only the memory rows need this.
+    """
+
+    def test_the_calibration_can_be_ignored_so_both_arms_read_on_one_scale(self):
+        assert calibration_override(True) == {"calibration": (1.0, 0.0)}
+
+    def test_what_it_substitutes_is_the_identity_that_an_uncalibrated_checkpoint_already_gets(self):
+        """`(logit + bias) / temperature` with (1.0, 0.0) is the logit, and it is `ObjectMemory`'s own default --
+        which is what makes this equal to the uncalibrated arm rather than merely close to it."""
+        assert signature(ObjectMemory).parameters["calibration"].default == (1.0, 0.0)
+
+    def test_it_is_off_by_default_so_a_checkpoint_scores_as_it_was_published(self):
+        assert calibration_override(False) == {}
+        assert {action.dest: action for action in build_parser()._actions}["no_calibration"].default is False
+
+    def test_main_passes_the_override_rather_than_editing_the_checkpoint(self):
+        """The alternative -- stripping the key from the checkpoint -- would destroy a fitted pair that cost 55
+        minutes a seed, for a comparison that needs it only in memory."""
+        assert "calibration_override" in main.__code__.co_names

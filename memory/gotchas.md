@@ -40,11 +40,21 @@ Platform and environment traps that have cost real debugging time.
     it, so they run fine and nothing has ever complained; `ast.parse()` on text read as plain `utf-8` does **not**, and
     dies with `SyntaxError: invalid non-printable character U+FEFF`. Any tool here that reads source and parses it must
     use **`encoding="utf-8-sig"`**, which is correct for a BOM-less file too.
-  * **`docs/RESEARCH.md` holds double-encoded punctuation.** Its em dashes are stored as the three characters
-    U+00E2 U+20AC U+201D (the UTF-8 bytes of `-` re-encoded as if Latin-1), so a search string containing a real em
-    dash matches **nothing** in that file while looking identical on screen -- a console will render both the same way.
-    `README.md` and the `memory/` pages are clean. **Anchor edits to that file on ASCII-only substrings.** Repairing the
-    mojibake itself is unclaimed work, deliberately not bundled into an unrelated item.
+  * **`docs/RESEARCH.md` held double-encoded punctuation, and no longer does** (repaired 2026-11-04). Every non-ASCII
+    character in it had been stored as the two or three characters of its UTF-8 bytes read as cp1252 -- an em dash as
+    U+00E2 U+20AC U+201D -- so a search string containing a real em dash matched **nothing** in that file while looking
+    identical on screen, because a console renders both the same way. 447 sites across 224 lines, plus 8 in
+    `library/takheliped/detectors/takheliped.py`. The repair is the inverse round trip, `text.encode("cp1252")` then
+    `.decode("utf-8")`, and two things about it generalise to the next file this happens to:
+    - **cp1252's encoder refuses five bytes its decoder accepts** (0x81 0x8d 0x8f 0x90 0x9d), so a bare `encode` dies
+      part-way through. Map those five by hand. Here it was load-bearing: the diagrams' leftward arrows are E2 86 90.
+    - **A second round trip is not the check it looks like.** Repaired text holds real Greek and mathematical
+      characters that cp1252 cannot encode at all, so re-running the repair raises rather than returning the same
+      string. Check instead that **no signature remains** -- a lead character (U+00C2/C3/E2) followed by one that could
+      be a continuation byte -- and that the two files' **ASCII skeletons are identical**, which proves no word,
+      number or link moved and leaves only the character at each site to read.
+    The cause was an editor writing the file back after reading it as cp1252; both affected files also carried a BOM,
+    which is the tell. **If a file here contains `Â`, `Ã` or `â` followed by punctuation, it is this and not content.**
 
 - **This development host cannot build or run the ROS side at all** (verified 2026-10-30 at the owner's prompting).
   There is **no `docker`** on `PATH`, no daemon, and **none inside WSL either**; WSL2/Ubuntu is installed but has **no ROS**
@@ -83,6 +93,18 @@ Platform and environment traps that have cost real debugging time.
   Verified 2026-10-11 **after killing a 90-minute sweep to investigate it**, which is the cost this entry exists to
   spare. If the question is which thread count is fastest, sweep `--threads` and read the latency; the CPU/wall ratio answers
   a different question than it appears to.
+
+- **A test enforces the ASCII rule now, and which characters are fatal depends on the codepage** (2026-11-04).
+  `tests/test_console_ascii.py` walks all 165 of this project's own Python files and fails on a non-ASCII character
+  reaching `print()`, `write()`, `warn()`, an argparse `help=`/`description=`, or a `raise` message.
+  It reads the **syntax tree**, because an em dash in a docstring or comment is correct and the same character inside a
+  `print()` is a crash -- only the use distinguishes them -- and it reads sources with `utf-8-sig` for the four BOMs below.
+  **Including the module docstring**, because nearly every script here passes `description=__doc__`: that is console
+  output, and the argument is a *name*, so no search for string literals can see it. That form is what crashed
+  `render_video.py --help` (exit 1 after 2.4 KB, on `U+221D`, reproduced).
+  The codepage decides what fires: **cp1252 rejects only `U+221D`** of the characters found here, **cp850** rejects the
+  dashes, ellipsis and bullet too, and **cp437 -- the classic console default -- rejects all seven**.
+  So a string that is safe on this host raises on the next one, and the rule is not about this machine.
 
 - **`UnicodeEncodeError` on any non-ASCII character printed to the console.**
   Windows' default console codepage is cp1252, not UTF-8; a `→`, `✓`, or similar in a `print()` crashes mid-run, sometimes after the expensive part of the operation already succeeded (see `AGENTS.md` I3) — use ASCII (`->`, plain words) in anything printed here.

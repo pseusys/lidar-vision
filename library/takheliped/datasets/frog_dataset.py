@@ -339,7 +339,7 @@ def _ssl_open(url: str):
     # 3. Unverified — last resort
     print(
         "\n  WARNING: SSL certificate verification failed and certifi is not installed.\n"
-        "  Falling back to unverified HTTPS — install certifi to suppress this:\n"
+        "  Falling back to unverified HTTPS -- install certifi to suppress this:\n"
         "    pip install certifi\n"
     )
     ctx = ssl._create_unverified_context()
@@ -348,7 +348,7 @@ def _ssl_open(url: str):
 
 def _download_file(url: str, dest: Path) -> None:
     """Download *url* → *dest* with a progress bar, SSL-safe on Windows."""
-    print(f"  Downloading {dest.name} …", flush=True)
+    print(f"  Downloading {dest.name} ...", flush=True)
     with _ssl_open(url) as response:
         total = int(response.headers.get("Content-Length", 0))
         downloaded = 0

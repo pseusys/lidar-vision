@@ -38,6 +38,312 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 70: 67 console strings made ASCII, and one of them was already crashing `--help` (2026-11-04)
+
+*keywords: item 70, rule I3, UnicodeEncodeError, cp1252, cp437, render_video --help, test_console_ascii.py, description=__doc__, AST walk, U+221D*
+
+**`render_video.py --help` did not work on this machine.** It exited **1** after printing 2.4 KB of its help
+text, and the cause is rule I3 exactly: the docstring argparse prints contained `U+221D` (the proportionality
+sign, in `radius proportional to agnostic confidence`), and **cp1252 cannot encode it**. Reproduced directly
+under `PYTHONIOENCODING=cp1252` before and after. So this item was not the latent hygiene problem its row
+claimed -- one script's `--help` was broken, and nobody had run it.
+
+**Which characters are fatal depends on the codepage, and that is why the rest were invisible.** Measured:
+
+| codepage | rejects |
+| --- | --- |
+| cp1252 (this host's `sys.stdout.encoding`) | `U+221D` only |
+| cp850 | em dash, en dash, ellipsis, bullet, `U+221D` |
+| cp437 (the classic console default) | **all seven** characters found here |
+
+So every site was a real crash on a cp437 or cp850 console and all but one was silent on cp1252. A rule whose
+violations only fire on someone else's terminal is exactly the kind that needs a test rather than a habit.
+
+**67 sites fixed across 13 files** -- em dash to `--`, en dash to `-`, ellipsis to `...`, multiplication sign
+to `x`, section sign to `section `, bullet to `*`, `U+221D` to `proportional to`. Each was rewritten **by its
+own AST span**, not by a character sweep over the file: an em dash in a docstring or comment is correct and
+this rule does not reach it, so a blind replacement would have rewritten prose it has no business touching.
+The guard that nothing else moved is arithmetic -- the count of non-ASCII characters each file loses must
+equal the count the scan found in its console strings, or nothing is written.
+
+**`tests/test_console_ascii.py`, 19 tests, walks every one of this project's own 165 Python files** and fails
+on any non-ASCII character reaching `print()`, `write()`, `warn()`, an argparse `help=`/`description=`, or a
+`raise` message -- a traceback is printed with the same codepage as stdout, so an exception message is the one
+place a crash message can itself crash. It reads the syntax tree because only a string's *use* distinguishes
+a crash from correct prose, and it reads sources with `utf-8-sig` because four Python files here start with a
+BOM that `ast.parse` rejects. The gitignored `include/` tree is skipped: upstream Li2Former is GPL-3.0, not
+ours to edit, and scored as released.
+
+**Two things the first version of the test missed, both found by running the fixed scripts rather than by
+trusting it.** A per-line grep had counted 29 sites where the AST finds 52, because implicit concatenation
+folds `"a" "b" "c"` into one literal spanning three lines. And after all 52 were fixed, `--help` still printed
+non-ASCII from three scripts: nearly every script here passes `description=__doc__`, so **the module docstring
+is console output**, and the argument is the name `__doc__` rather than any text a literal search could see.
+That is the form the original `--help` crash took. Fifteen more sites, now covered by the test.
+
+## No training data has ever reached a split it was scored on, and the queue is drained of closed rows (2026-11-04)
+
+*keywords: leakage check, _MODES disjointness, selection exposure, extra_1553, rule 4b sweep, thirteen rows deleted, replay under a frozen policy*
+
+**Asked by the owner and answered from the data rather than the write-ups**: every cross-partition number
+reported here was checked against each checkpoint's own recorded `frog_mode` and `_MODES`' recording-to-split
+assignment. **No training leak anywhere.** The `balanced` arm is a detector trained from scratch on
+`balanced`'s own stage 2, not an `official` model reused -- and the two arms' checkpoints turn out to record
+**identical** values for every hyperparameter except the partition and `chunk_s`.
+
+| model | trained on | selected on | scored on | leak | selection overlap |
+| --- | --- | --- | --- | --- | --- |
+| `official`-trained | 11-36, 12-43 | 10-31, 14-57, 15-53 | `balanced` test (15-53, 16-41) | none | **15-53** |
+| `balanced`-trained | 12-43, 14-57 | 10-31, 11-36 | `balanced` test | none | none |
+| `balanced`-trained | 12-43, 14-57 | 10-31, 11-36 | `official` test (16-41) | none | none |
+
+The one overlap is **selection, not training**, and the frames do not even coincide: `official`'s val takes
+15-53's **populated** frames and the person-free comparison counts its **person-free** frames. No gradient
+ever saw 15-53. It favours the arm that comparison argues against, so the direction is safe, and it was
+already reported with the number.
+
+**Six tests now assert this off the table itself**, so it cannot be skipped when the dataset is absent, and
+the first version of them was wrong in two instructive ways. The unit has to be a `(file, recording)` pair,
+because one file holds two recordings 24.6 h apart and `balanced` sends them to different splits. And **a
+shared recording is not a shared frame**: `transferred` deliberately gives val and test the *same* three
+recordings under the `populated` and `empty` rules, which partition each recording's frames between them, so
+two splits may share a recording exactly when their frame rules are disjoint. Three mutations of `_MODES` --
+`balanced` test taking the official training file, `transferred` test losing its `empty` rule, `balanced` val
+taking the recording `balanced` trains on -- are all caught.
+
+**One departure from the adopted recipe, found the same way and kept rather than corrected.** The `balanced`
+run trained stage 3 with `--chunk-s 1 10`, a curriculum, where the adopted recipe is a flat 10 s with none.
+The adopted choice won on a *tie* (same accuracy, ~24% less time), so the figures stand -- but they were not
+produced by the parameter table in every respect. `queue_balanced.py` keeps the flag as it ran, with a test
+pinning it, so a further seed reproduces these numbers rather than a near-miss of them.
+
+**Housekeeping, rule 4b.** Thirteen closed rows deleted from the queue -- items 4, 7, 10, 15, 17, 22, 24, 25,
+34, 44, 49, 50 and 54 -- after checking each one's findings against `CHANGELOG.md`, `memory/` and `docs/`.
+Everything was carried. The one thing living *only* in history was item 50's evidence rule, so it moved to
+`memory/interpreting-evaluation.md` where the other discounting rules are: **a replay prices a parameter under
+a frozen policy, so it only confirms where the policy cannot adapt to the parameter.** The numbering is
+untouched and the gaps are deliberate, as `TODO.md` says at the top.
+
+## Item 26: person-free training frames cut stage 2's phantoms 21%, and the pipeline's output not at all (2026-11-04)
+
+*keywords: item 26, person-free negatives, empty room, 21149 frames, 2.216 to 1.751, -21.0%, -35.5% beyond fade, substitutive filtering, 0 coasted, queue_person_free.py, matched scale, sign reversal*
+
+**The hypothesis `balanced` exists to test, finally testable.** `official`'s train split is 100% populated and
+`transferred`'s train and val are *identical to it*, so no detector this project has trained had ever seen a
+room with nobody in it -- the standing explanation for stage 2 emitting ~2.1 phantoms per person-free frame.
+Both arms counted on the **same 21,149 person-free frames** of `balanced` test, all of them **15-53**'s since
+16-41 is 100% populated, and 15-53 is in *neither* arm's training set. 40 minutes, three jobs, all exit 0.
+
+| at threshold 0.3 | `official`-trained | `balanced`-trained | change |
+| --- | ---: | ---: | ---: |
+| **stage 2 candidates** | 2.216 | **1.751** | **-21.0%** |
+| frames holding at least one | 59.7% | 49.2% | -10.5 pp |
+| **stage 2, beyond the 10 s fade** | 1.788 | **1.153** | **-35.5%** |
+| whole detector | 0.710 | 0.684 | -3.8% |
+| whole detector, beyond the fade | 0.414 | 0.295 | -28.8% |
+| what the memory itself removes | -67.9% | -60.9% | -- |
+
+**The effect is real and it is in stage 2**, which is the stage that had never seen an empty room. The cut grows
+with the threshold -- -23.0% at 0.5, **-33.5%** at 0.9 -- and roughly doubles beyond the fade horizon
+(**-57.5%** at 0.9), the subset where a stale memory of someone who just left cannot explain it. Against the
+stage-2 column's three-seed spread of **sd 0.03**, a 0.465 move is about fifteen standard deviations.
+
+**And the assembled pipeline emits the same number either way, which is the honest headline.** -3.8% sits
+inside the whole-detector column's **sd 0.073 (11% relative)**, so it is not a result. The reason is the last
+row: **the memory's filtering is substitutive.** It removes 67.9% of the worse arm's candidates and 60.9% of
+the better arm's, so 21% upstream arrives downstream as nothing -- the better stage 2 is reached with the
+memory doing *less* work. At thresholds 0.2 and 0.1 the arms even cross, with `balanced` marginally higher.
+**For a robot reading the pipeline's output this is not yet a reason to train on `balanced`; for the paper's
+account of where the phantoms come from it is direct evidence.** Priced against item 69's **-1.36 pp** wp-AUC,
+the trade is a 21% stage-2 phantom cut for about a point and a half of accuracy.
+
+**Reading it the obvious way would have reversed the sign, and the run proves that rather than asserting it.**
+The `official` runs carry a fitted `(temperature, bias)` and the `balanced` run does not, and every row here is
+a fixed-threshold row. As published, the `official` arm reports **0.582** against the `balanced` arm's 0.684 --
+the person-free training reading **17.5% worse** instead of better. The third job measured that as-published
+row deliberately, and it reproduces the calibration's known behaviour on frames it was never fitted against:
+**-18.1%** at threshold 0.3 and **3.7x** at 0.9, against the -11.8% and 8x measured on `transferred`. The two
+`official` arms' candidate columns came out **bit-identical**, the control proving the override reaches stage 3
+and nothing else.
+
+**Two findings that came free.** **Coasting is 0 at every threshold in both arms**, so item 27's result --
+every person-free phantom is a stage-2 candidate the memory failed to suppress, never a memory invention --
+now holds on a second partition and for a detector trained on empty rooms. And the survivors **recur less**:
+83.8% against 85.1% within 0.3 m next frame, 77.1% against 82.5% beyond the fade, so what the training removed
+was disproportionately the persistent, furniture-like kind.
+
+**Caveats recorded with the numbers** (`memory/performance-log.md`): the `official` arm selected on 15-53's
+populated frames, since `official`'s val holds all three raw recordings -- venue exposure the `balanced` arm
+never had, which favours the arm this result argues against, so the direction is safe. One seed per arm, and
+the spreads quoted are `official` seeds' on `transferred`'s frames, so carrying their relative size here is an
+assumption.
+
+## Item 68: the person-free count can be taken on any partition, and the two arms were not on one scale (2026-11-04)
+
+*keywords: item 68, empty_scene.py, --frog-mode, --split, --no-calibration, PEOPLE_FROM, counted_frames, load_person_free, calibration_override, queue_person_free.py, person-free negatives, 2.62 phantoms*
+
+**`empty_scene.py` took no partition**, so the comparison it exists to serve could not be run. It now takes
+`--frog-mode` and `--split`, and four things were needed rather than the one flag the row anticipated:
+
+* **Where the people are read from depends on the partition.** `transferred`'s test split is person-free *by
+  construction* and carries no annotations at all, so when someone was last in view can only come from the
+  populated split over the same three recordings -- which is what the old code did unconditionally. Every
+  other partition's splits carry both, and answer it from their own labels, exactly rather than
+  reconstructed. `PEOPLE_FROM` holds the one exception as a table instead of a branch.
+* **Only person-free frames may be counted.** `evaluate` scores every annotated frame, which on `balanced` is
+  all of them. A detection on a populated frame may be a person, so counting it as a phantom would hide the
+  effect being measured underneath it. `counted_frames` selects the subset by **packed position**, since
+  `evaluate` plays recordings as parallel streams and the scored frames arrive interleaved.
+* **A partition with no person-free frame is refused, not reported as zero.** `official` is 100% populated in
+  every split, and `0.000 phantoms per frame` reads as a result when the truth is that the question was never
+  asked.
+* **The two arms were not on the same scale**, which is the finding this item turned up. Every row the script
+  prints is read at a **fixed threshold**, and `calibrate_rescore.py` fitted a temperature and bias into the
+  `official` runs' stage 3 that the `balanced` run has none of. Item 58 had already measured what that is
+  worth on these very checkpoints: **-11.8% at threshold 0.3 and 8x at 0.9**. Comparing across it would have
+  priced the calibration and reported it as the training data. `--no-calibration` substitutes the identity
+  `(1.0, 0.0)` -- `ObjectMemory`'s own default, so it is *equal* to an uncalibrated arm rather than close to
+  it -- as an override on the model, leaving both checkpoints untouched and the published rows reproducible.
+  Stage 2 was never calibrated, so the candidate rows compare as they are.
+
+**`utils/queue_person_free.py`** runs the comparison: both arms on `balanced` test's person-free frames, which
+all come from **15-53** since 16-41 is 100% populated -- a recording *neither* arm trained on. The `official`
+arm did select on 15-53's populated frames, since `official`'s val holds all three raw recordings; that favours
+the arm the run argues against, which is the safe direction. The cheap job runs first, so a wrong flag shows up
+in minutes rather than after a 110,846-frame cache build.
+
+**Tested**: 16 new tests in `tests/test_empty_scene.py` and 9 in `tests/test_person_free_queue.py`, 1,286
+passing in all. The red phase was an ImportError, which proves only that the names did not exist, so the
+claims were checked by **mutation instead**: nine mutations, one per claim -- the sibling table bypassed, the
+partition not reaching the loader, populated frames kept, a frame looked up by list position rather than
+packed position, the refusal removed, the default partition changed, the calibration override forced on, forced
+off, and dropped from `main` -- and **all nine were caught**.
+
+## Item 66: the research write-up's 447 corrupt characters, repaired (2026-11-04)
+
+*keywords: item 66, mojibake, double-encoded, cp1252, RESEARCH.md, BOM, U+FEFF, ASCII skeleton, sloppy cp1252, 0x90*
+
+**`docs/RESEARCH.md` was one cp1252/UTF-8 double encoding throughout**: a UTF-8 file read as cp1252 and
+written back as UTF-8, so every non-ASCII character was stored as the two or three characters of its own
+bytes. 447 sites across 224 lines, plus 8 in `library/takheliped/detectors/takheliped.py`. An em dash read
+`â€”`, so a search string containing a real em dash matched nothing in the file while looking identical on
+screen. Repaired by the inverse round trip, and three things about it are worth keeping
+(`memory/gotchas.md`):
+
+* **cp1252's encoder refuses five bytes its decoder accepts** (0x81 0x8d 0x8f 0x90 0x9d), so a bare
+  `text.encode("cp1252")` dies part-way through. Here one of the five was load-bearing: the architecture
+  diagrams' seven leftward arrows are E2 86 90.
+* **A second round trip is not the verification it looks like.** Repaired text holds real Greek and
+  mathematical characters that cp1252 cannot encode at all, so re-running the repair raises rather than
+  returning the same string.
+* **What was checked instead**: that no signature remains -- a lead character (U+00C2/C3/E2) followed by one
+  that could be a continuation byte -- and that the **ASCII skeletons of both files are identical before and
+  after**, which proves no word, number, link or line moved and leaves only the character at each site to
+  read. Those were then read as **35 distinct substitutions** rather than 224 lines: em and en dashes, 52
+  arrows, 43 multiplication signs, 31 section signs, 20 approximatelys, Greek, the minus sign, superscripts,
+  and the accents in Schröder, García-Fernández, Mušicki and Stanković.
+
+`docs/RESEARCH.md`'s BOM went with it -- no other markdown file here has one, so it belonged to the same
+event. The Python file kept its own: it is one of **four** Python sources with a BOM, a separate documented
+condition whose fix is for readers to use `utf-8-sig`, and removing one of the four would leave the hazard in
+place while making that page wrong.
+
+**The repair restored the intended characters rather than ASCII-ising them**, because `ARCHITECTURE.md`,
+`PAPER.md`, `PROPOSAL.md` and `README.md` all use real em dashes and none carried any corruption. Rule I3 is
+about what a **console** prints, and nothing prints this file.
+
+**Found while doing it, and not fixed here:** **29 lines across seven files** hold a `print()` or `help=`
+string containing non-ASCII punctuation -- 15 in `utils/train.py`, 6 in `render_video.py`, 3 in
+`nms_sweep.py`, 2 in `evaluate.py`, and one each in `train_all.py`, `ablation_zero_history.py` and
+`library/takheliped/datasets/frog_dataset.py`. That is the I3 hazard itself rather than an encoding artefact,
+and it is latent rather than firing: these scripts have run many times, so this console is evidently not
+cp1252 today. Filed in `TODO.md` rather than bundled in.
+
+## Item 69: the same model on the same frames, and 2.44 of the 3.80 points were composition (2026-11-04)
+
+*keywords: item 69, score subcommand, cross-partition, partition_note, 84.93, -1.36 pp, composition, balanced recipe trade, STEPS, stride 5*
+
+**`train_takheliped.py score`** scores a trained detector on a partition it was not trained on and trains
+nothing. It takes `--stage2 --memory --frog-mode --split`, **reuses the training path's own `evaluate`** --
+deliberately, because a second implementation of the metric would produce a number incomparable with the
+frozen 86.29%, which is the only reason to compute this one -- and defaults to **stride 5** for the same
+reason. `partition_note` records which partition each half was trained on, which is being scored, and whether
+those disagree; a mismatch is **printed loudly and stored in the output, never refused**, because here the
+mismatch is the purpose. Two halves disagreeing with *each other* counts as a mismatch too: that is not an
+experiment, it is a mix-up.
+
+**It settled item 67's open question in 7 minutes of CPU.** The `balanced`-trained pair on `official`'s own
+test split, 50,088 annotated frames:
+
+| trained on | scored on | stage 2 | whole detector | memory's gain |
+| --- | --- | ---: | ---: | ---: |
+| `official` (3 seeds, frozen) | `official` test | 82.8% | **86.29%** | +3.49 pp |
+| `balanced` (1 seed) | `official` test | **82.38%** | **84.93%** | +2.55 pp |
+| `balanced` (1 seed) | `balanced` test | 77.89% | 82.49% | +4.60 pp |
+
+**The recipe costs 1.36 pp; composition accounted for the other 2.44.** On `balanced`'s own test the gap read
+-3.80 pp. On identical frames it is **-1.36 pp** whole-detector and **-0.42 pp** for stage 2 -- the latter
+inside twice what three `official` seeds span. Two thirds of the apparent penalty was the 19.1% person-free
+frames, which offer no true positive and can only cost precision.
+
+**And the remaining 1.36 pp is a trade, not a loss.** Training on `balanced` means a fifth of the training
+frames contain nobody. It costs about a point and a half on a populated-only test split and buys the shallower
+degradation already measured: **-3.80 pp** across the composition change against LFE-Peaks' **-5.3** and
+LFE-PPN's **-6.1**. The memory's gain moves the same way and for the same reason -- **+4.60 pp** where empty
+frames exist, **+2.55 pp** where none do.
+
+**On seeds.** The direction and size are safe at one seed: 1.36 pp is six times the 0.22 pp spread of three
+`official` seeds. What one seed cannot do is bound `balanced`'s own spread, so quoting this row beside a
+three-seed row in a pre-print either says so plainly or spends ~11 h on seeds 1 and 2. That is a presentation
+decision now, not an open measurement.
+
+**One defect fixed on the way:** `main` called `args.out_dir.mkdir` for every step, and `score` writes a single
+file named by `--out`. It now makes the directory only for the steps that have one.
+
+**Tested:** 11 new tests, red first -- the subcommand's existence and flags, the stride default, the dispatch
+table, every branch of `partition_note` including a checkpoint that predates the field, and that the metric is
+not reimplemented.
+
+## The detector on FROG `balanced`: 82.49%, and it loses less to the composition than either baseline (2026-11-04)
+
+*keywords: balanced, item 67, 82.49, 77.89, memory +4.60 pp, composition caveat, LFE -5.3 -6.1, stride agreement, item 69, exit 1 teardown, one seed*
+
+**The first model ever trained on this partition.** `queue_balanced.py` end to end, 5.45 h: stage 2 in 46 min,
+stage 3 early-stopped at epoch 12 on patience with its best at epoch 4, then scored over all **110,846** test
+frames and again at stride 5 -- the two **agree to 0.01 pp** (82.4940% and 82.4766%), so the headline is not a
+sampling artefact. `stage3` ended **exit 1 with its declared output present at 04:56:11**, the runner's
+designed kill after a job lingers in ROCm teardown, and `chain DONE` followed at 05:06:26.
+
+| | `balanced` test | `official` test (frozen, 3 seeds) | difference |
+| --- | ---: | ---: | ---: |
+| whole detector, wp-AUC | **82.49%** | **86.29%** | **-3.80 pp** |
+| the same at 0.3 m | 81.37% | 85.19% | -3.82 pp |
+| stage 2 alone | 77.89% | 82.8% | -4.91 pp |
+| **the memory's contribution** | **+4.60 pp** | +3.49 pp | **+1.11 pp** |
+| FP/frame, whole detector | 1.327 (from 2.833) | 0.849-1.239 | -- |
+| memory cost | 5.29 ms/frame | 7.23 ms/frame | -- |
+
+**The -3.80 pp is not the finding; what it costs everyone else is.** The published pair crossed the same split
+change hours earlier: **LFE-Peaks -5.3 pp**, **LFE-PPN -6.1 pp**, this detector **-3.80 pp**. `balanced`'s test
+is 19.1% person-free, and a person-free frame offers no true positive to find, so it can only cost precision --
+part of all three drops is bought rather than earned. **This architecture loses the least of the three**, and
+the memory's contribution *grows* from +3.49 to +4.60 pp, which is what the design predicts: phantom
+suppression has more to do where more frames contain nobody. The operating point says the same thing -- false
+positives fall from 2.833 to **1.327** per frame, a 53% cut, on a split where a fifth of the frames can
+contribute nothing else.
+
+**On the owner's one-seed rule, and why the answer is not "run two more seeds".** The rule was: within about
+half a point of 86.29% means one seed sufficed, meaningfully outside means the other two have earned their
+GPU. -3.80 pp is outside. But seeds measure run-to-run spread, and nothing here suggests spread is the
+question: `official`'s own three seeds sit within 0.22 pp, and the two strides of this run agree to 0.01 pp.
+**Whether 82.49% and 86.29% differ for any reason beyond composition is answerable only on the same frames**,
+and `balanced`'s test contains `official`'s whole -- 40,022 frames, verified. So the cheap, decisive
+measurement is `TODO.md` **item 69**, a way to score a trained checkpoint on a partition it did not train on;
+two more seeds would reproduce a composition effect rather than test it. Recommended, and the owner's call.
+
+**Item 67 is closed** with its numbers, and the result is in `memory/performance-log.md` beside the published
+pair's. Coasting fired **0.000** times per frame here as on `official`, which is now true on both partitions.
+
 ## Why the FROG benchmark uses three of its six annotated recordings, from the paper itself (2026-11-04)
 
 *keywords: FROG paper, benchmark split, greatest attendance, maximizing person annotations, empty lists excluded, Table 1, PROPOSAL 2.1, balanced contribution, 26.2 Hz corrected, Amodeo*

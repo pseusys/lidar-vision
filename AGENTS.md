@@ -198,6 +198,7 @@ Redirect to a file, then read the file.
 **I3. ASCII only in anything printed to a console.**
 *Because:* a Unicode arrow (`→`) in a progress-print crashed `_download_file()` with `UnicodeEncodeError` on Windows' default cp1252 console, after a 189 MB file had already fully downloaded, and an earlier `--help`-text crash had the identical root cause.
 Use `->` instead of `→`, plain words instead of check marks.
+**`tests/test_console_ascii.py` enforces this** across every one of this project's Python files since 2026-11-04 — including the module docstring, since nearly every script passes `description=__doc__` to argparse — so a violation now fails the suite rather than someone's terminal. Its failure message names the ASCII replacement for each character it finds.
 
 **I4. Don't spend more than one workaround attempt on a DirectML crash before considering it an environment limit, not a code bug.**
 *Because:* `Li2FormerDetector` training hit three separate DirectML crash modes (allocator OOM at batch_size=2, an access violation, a segfault at batch_size=1) across in-process and subprocess attempts, and no code-side fix resolved any of them — the eventual conclusion was a driver/version limitation of `torch-directml==0.2.5.dev240914`, not a bug in this repo.

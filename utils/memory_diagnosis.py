@@ -38,7 +38,7 @@ bookkeeping on a candidate cache twice, with each stamped interval and with trai
 velocity state against a reference that never divides by one interval: its displacement over at least `--window-s`.
 
 `--slot-rules` needs no trained model either. `manage_slots`' association gate and fade time need no
-retraining to change (`docs/PROPOSAL.md` §6.3), so they are swept first: for each pair, how often a live slot stands on an
+retraining to change (`docs/PROPOSAL.md` section 6.3), so they are swept first: for each pair, how often a live slot stands on an
 annotated person, how many slots match a candidate, how much the memory churns, and -- when a slot is lost and something
 reappears where it stood -- how long the gap was. The last one prices what a slot's state would have to survive.
 

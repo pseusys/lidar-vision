@@ -4,7 +4,7 @@ Fine-tune the FROG-trained proposed architectures on DROW, instead of
 training DROW from a random init.
 
 Motivation: DROW-native training from scratch (checkpoints_drow/) overfits
-almost immediately — spacetime_cnn's val_loss gets worse every epoch after
+almost immediately -- spacetime_cnn's val_loss gets worse every epoch after
 epoch 1, because DROW's train split has ~17.8x fewer person-annotation
 instances than FROG's (17,665 frames x 1.35 people/frame vs 108,356 frames x
 3.93 people/frame). Initialising from the FROG checkpoint lets the model

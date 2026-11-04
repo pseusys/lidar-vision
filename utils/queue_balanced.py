@@ -69,6 +69,11 @@ JOBS = [
              "--seed", "0", "--out-dir", str(STAGE2), "--resume")),
     Job(name="stage2_avg", outputs=(STAGE2 / AVERAGED,), needs=("stage2",),
         cli=("average_checkpoints.py", str(STAGE2))),
+    # `--chunk-s 1 10` is a **departure** from the adopted recipe, which is a flat 10 s with no curriculum
+    # (`docs/ARCHITECTURE.md` section 5.1), and it is kept rather than corrected: it is what produced the
+    # recorded 82.49% / 84.93%, so a further seed of this run has to match it or it is measuring two things.
+    # The adopted choice won on a *tie* -- the curriculum matches it on accuracy and costs ~24% more time --
+    # so the figures stand; a fresh study on this partition should use `--chunk-s 10`.
     Job(name="stage3", outputs=(STAGE3 / "step3a_results.json",), needs=("stage2_avg",),
         cli=("train_takheliped.py", "step3a", "--frog-mode", "balanced",
              "--stage2", str(STAGE2 / AVERAGED), *FROZEN,
