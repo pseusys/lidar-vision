@@ -20,11 +20,19 @@ Sources are read with `utf-8-sig`, because four Python files here start with a b
 which are GPL-3.0, are not ours to edit, and are scored as released (`memory/dos-and-donts.md`).
 """
 import ast
+import sys
+from argparse import ArgumentParser
+from importlib import import_module
 from pathlib import Path
 
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
+
+if str(REPO / "utils") not in sys.path:
+    sys.path.insert(0, str(REPO / "utils"))
+if str(REPO / "library") not in sys.path:
+    sys.path.insert(0, str(REPO / "library"))
 
 #: This project's own Python. Named rather than globbed from the repository root so that a new directory has
 #: to be added here deliberately, and so the count below means something.
@@ -185,3 +193,48 @@ class TestTheScannerSeesWhatItClaimsTo:
         """So a failure tells the next reader what to write, instead of only that something is wrong."""
         for character, replacement in ASCII_FOR.items():
             assert ord(character) > 126 and replacement.isascii()
+
+
+class TestEveryHelpTextRenders:
+    """The other way `--help` fails on this machine, and it was failing at HEAD when this was written.
+
+    `argparse` expands a help string through `help % params`, so a literal per cent sign in it is read as a
+    format specifier: `"cost 24% of training time"` raised `TypeError: %o format: an integer is required, not
+    dict` and `train_takheliped.py step1 --help` exited 1 after printing most of its text. The ASCII walk above
+    cannot see it, because every character involved is ASCII -- what is wrong is the escaping, and the only
+    thing that tells you is rendering the text.
+
+    Rendering is also all this needs: `format_help()` is what `--help` calls, so a parser that formats here
+    cannot crash there.
+
+    `train.py` and `evaluate.py` are reached only by name: both build their parser inside `main()`, so there is
+    nothing to call here, and their help text is covered by the ASCII walk above alone.
+    """
+
+    def _parsers(self):
+        for script in ("train_takheliped", "empty_scene", "train", "evaluate"):
+            module = import_module(script)
+            if not hasattr(module, "build_parser"):
+                continue
+            parser = module.build_parser()
+            yield script, parser
+            for group in parser._subparsers._group_actions if parser._subparsers else ():
+                for name, sub in getattr(group, "choices", {}).items():
+                    yield f"{script} {name}", sub
+
+    def test_every_parser_and_subcommand_formats_its_help(self):
+        formatted = {}
+        for name, parser in self._parsers():
+            formatted[name] = parser.format_help()          # raises on an unescaped per cent sign
+        assert set(formatted) >= {"train_takheliped", "train_takheliped step1", "train_takheliped step2",
+                                  "train_takheliped step3a", "train_takheliped step3b", "train_takheliped step4",
+                                  "train_takheliped score"}, sorted(formatted)
+        for name, text in formatted.items():
+            assert text.isascii(), name
+
+    def test_an_unescaped_per_cent_sign_is_what_this_catches(self):
+        """The red half, pinned: the guard has to fail on the exact text that was in the file."""
+        parser = ArgumentParser()
+        parser.add_argument("--chunk-s", help="the 1 s warm-up tied and cost 24% of training time")
+        with pytest.raises(TypeError):
+            parser.format_help()

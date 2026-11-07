@@ -38,6 +38,943 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The 0.5 deg deficit is a figure rather than a bound, and it is 1.02 pp: the mis-ranked window cost 0.44 pp of candidates and nothing after the memory (2026-11-06)
+
+*keywords: item 73 figure not bound, item 85 closed, frog_half_stage3_fixed_s0, window 0.50-2.00, 85.28 vs 86.30, candidates 82.18, memory lift 3.10 vs 3.51, -1.02 pp, 0.44 pp window cost, memory_ms_per_frame host load, queue_half_corrected DONE*
+
+**The chain finished at 21:15 after 6.22 h.** `half_stage3_fixed` ran 25 epochs, best val 81.43% at epoch 17,
+stopped by patience 8; exit 1 with `step3a_results.json` present, which is this runner's success. Exactly one
+thing differed from the arm it replaces -- the averaging window, 0.50-1.00 -> 0.50-2.00, chosen by a ranking on
+the run's own 0.5 deg val split -- with the seed, the chunk length and the frozen memory all kept. The candidate
+cache key changed with the weights (`averaged-1793937517` -> `averaged-1793973747`), so the candidates were
+re-inferred rather than reused.
+
+| | 0.25 deg, 3 seeds | **0.5 deg, correct window** | 0.5 deg, mis-ranked window |
+| --- | ---: | ---: | ---: |
+| **whole detector, wp-AUC** | **86.30%** (sd 0.16) | **85.28%** (**-1.02 pp**) | 85.42% (-0.88 pp) |
+| the same at 0.3 m | 85.20% | 84.16% (-1.04 pp) | 84.35% (-0.85 pp) |
+| candidates (averaged stage 2) | 82.79% (sd 0.10) | **82.18%** (-0.61 pp) | 81.74% (-1.05 pp) |
+| **the memory's contribution** | **+3.51 pp** (sd 0.12) | **+3.10 pp** | +3.69 pp |
+| FP/frame, AP-optimal | 0.95 | 1.183 | 1.271 |
+| candidate FP/frame | -- | 2.536 | 2.914 |
+
+**Against the run it replaces, the defect was worth half a point of stage 2 and nothing after it.** Candidates
+rose **+0.44 pp**, which is exact rather than noisy -- the candidate column is a deterministic function of the
+stage-2 weights, and nothing else in the two runs differs. The whole detector moved **-0.14 pp**, inside the
+headline's 0.31 pp seed spread. The pre-registration asked for "a few tenths of a point at most" and got 0.14 at
+the figure that matters, 0.44 at stage 2 against the 0.32 pp of stage-2 val it was predicted from: the right
+magnitude, slightly under-predicted.
+
+**Against the headline, the deficit grew, and the "upper bound" framing was wrong.** 85.28% against 86.30% is
+**-1.02 pp** where the bound said 0.88. Calling it a bound assumed a better stage 2 propagates to a better whole
+detector; it does not. Stage 2's deficit nearly halved (-1.05 -> -0.61 pp) while the whole detector's grew by
+0.14. **"Under a point" becomes "about a point",** measured on the correctly ranked arm, still one seed against
+three.
+
+**And the memory's contribution reverses, which is the finding worth keeping.** It is **+3.10 pp** at 0.5 deg
+against **+3.51** at full resolution -- below, where the mis-ranked arm appeared to show +3.69, above. The
+mechanism is headroom: fixing the window cut candidate false positives 2.914 -> 2.536 per frame and lifted
+candidate precision 49.4% -> 52.8%, after which the memory removed less because less was left (its own FP
+1.271 -> 1.183 at unchanged recall, 88.3% -> 88.2%). So **the memory's lift is not a stable statistic for
+comparing arms**: it moved 0.59 pp between two runs differing only in stage-2 weights, while the whole detector
+moved 0.14. What survives is weaker than what was written this morning -- at half the beams the memory still adds
+about **3 pp**, within half a point of its full-resolution lift, and one seed per arm cannot say which side it
+falls on.
+
+**`memory_ms_per_frame` is a host-load figure, and these two runs prove it.** The same architecture at the same
+slot count reads **3.58 ms** in the morning run and **5.22 ms** in the evening one, 46% apart, because the host
+was slower throughout the second: 596 s against 398 s for an identical epoch. Two arms' GPU milliseconds are not
+comparable even to each other unless they ran back to back, which is why the CPU protocol exists.
+
+**Changed:** `memory/performance-log.md` (the 0.5 deg section rewritten around the corrected arm, with the
+mis-ranked one kept beside it as the defect's price), `memory/gotchas.md` (what one wrong window pick cost, and
+that it does not bound a result in the obvious direction; `stage2_probe.py` recorded there as the remaining
+instance), `memory/interpreting-evaluation.md` (the same-architecture ms/frame spread),
+`docs/PROPOSAL.md` (section 5.3's blockquote and section 6.1's `angular_resolution_deg` row now say "about a
+point"), `TODO.md` (item 85's row and block deleted under rule 4b), and
+`tests/test_half_corrected_queue.py`, whose pre-launch guard -- the stale averaged checkpoint must be absent --
+stopped being true the moment the chain ran, and is now stated as the invariant instead: the live averaged
+checkpoint must never be byte-identical to the superseded one, which holds before the re-average and after it.
+
+---
+
+## Decimation is dearer on the CPU, not cheaper; two of three averaging windows confirmed; and the 35 s chunk arm hits the host memory ceiling (2026-11-06)
+
+*keywords: item 85 results, item 76 blocked, item 73 bound tightened, CPU latency 0.5 deg slower, stage2 8.41 vs 10.29 ms, rerank confirmed drow balanced, frog half window moved, bad allocation chunk-s, tokens streams depth, 2.52x per epoch, queue_half_corrected*
+
+**The resolution question now has its cost half, and it answers the opposite of the prediction.** Four threads,
+2,000 scans, batch 1, both arms back to back on an idle host:
+
+| phase | 0.25 deg | **0.5 deg** | difference |
+| --- | ---: | ---: | ---: |
+| stage 2 | 8.41 ms (p99 9.35) | **10.29 ms (p99 12.12)** | **+1.88 ms, +22%** |
+| decode | 1.34 ms | 1.26 ms | -0.08 ms |
+| memory | 5.99 ms | 5.89 ms | -0.10 ms |
+| **total** | **15.76 ms (p99 17.24)** | **17.46 ms (p99 19.82)** | **+1.70 ms, +11%** |
+
+**Halving the beams made stage 2 22% slower.** The prediction written into the queue was that this is where
+decimation pays, since half the beams should be roughly half the convolution; it is wrong. Decode and memory are
+flat as expected -- the memory runs over 256 candidate slots and never sees a beam -- so the entire move is stage
+2's. The likeliest cause is thread efficiency, a 360-beam tensor failing to fill four threads and paying the same
+per-operation overhead over less work, with the p99 degrading further than the median (+2.77 against +1.88) fitting
+that; one and eight threads would settle it and nothing here establishes the cause. **So both halves of the
+resolution trade agree: 0.5 deg costs 0.88 pp of accuracy and 11% more CPU time.** Both still fit FROG's 25 ms
+budget, so it is a margin question -- but there is no version of this in which decimating to a common angular
+spacing is the cheap option.
+
+**Two of the three mis-ranked averaging windows are confirmed, and the third moves by very little.**
+
+| run | ranked wrongly on | chose | ranked correctly on | chooses | verdict |
+| --- | --- | --- | --- | --- | --- |
+| `drow_stage2_s0` | FROG val (50.67%) | 1.00-2.00 | DROW val (20.58%) | 1.00-2.00 | **confirmed** |
+| `balanced_stage2_s0` | `official` val (78.04%) | 1.00-2.00 | `balanced` val (79.26%) | 1.00-2.00 | **confirmed** |
+| `frog_half_stage2_s0` | 0.25 deg (64.50%) | 0.50-1.00 | 0.5 deg (76.98%) | **0.50-2.00** | **moved** |
+
+The DROW headline is the one that mattered most and it is clean: the window a DROW-val ranking picks is the window
+it already had. **And the one that moved bounds its own damage.** The correct ranking spans **0.45 pp** across all
+six windows (76.53 to 76.98) where the mis-ranked one fell monotonically from 64.50 to 61.73 -- the mismatch
+signature, now shown against its own corrected baseline. The window actually used scores 76.66 against the chosen
+76.98, so that arm was handed weights **0.32 pp** of stage-2 val short of the best, and the 0.88 pp resolution
+deficit is loose by a few tenths at most. `queue_half_corrected.py` is re-running its stage 3 on the correct
+window, one variable changed and the seed kept, to replace the bound with a figure.
+
+**The 35 s chunk arm does not fit this host.** `RuntimeError: bad allocation` inside `loss.backward()` twice --
+epoch 6, then epochs 7-8 after `--resume` -- which is a *host* failure, not a device one, with the GPU at 1.1 GB
+and the machine at ~5.3 GB free of 16 GB before anything starts. It is the ceiling already on record from
+2026-09-21, reached sooner: the token budget is held constant (`streams = tokens // length`), so a longer chunk
+trades streams for depth and holds a sequential graph 3.5x longer through one backward.
+
+**And the budget was wrong by more than the crash.** Fewer streams means less parallelism per iteration, so the
+same frames per epoch cost **2.52x** the wall clock -- 1,147 s against 456 s. The 35 s arm was queued at ~7 h; it
+is **11.5 h** to the epoch its 10 s twin peaked at and **14 h** to run out its patience. A long-chunk arm has to
+be budgeted from `streams`, never by scaling the 10 s figure.
+
+**Its partial curve says nothing, and is reported as nothing.** Eight epochs landed: neck and neck with the 10 s
+arm through epoch 5 (36.45% against 35.09% val), behind at 6-8 (34.16% against 39.14%). The 10 s arm's best was
+**47.43% at epoch 36** and it gained 8.3 pp after epoch 8, so eight epochs is far too early to read either way.
+Item 76 is **not** answered and is not partly answered.
+
+**Changed:** `memory/performance-log.md` (the CPU table; the upper bound now bounded),
+`memory/gotchas.md` (the chunk-length host ceiling, with the streams/depth/wall-clock table),
+`memory/keywords.md`, `utils/queue_half_corrected.py` and `tests/test_half_corrected_queue.py` (new),
+`TODO.md`.
+
+**Two skip traps caught by `--list`, both the same shape.** The runner skips a job whose declared output already
+exists, so the three `--rank-only` jobs read as done against the old `averaging.json` (fixed by giving a
+rank-only pass its own file, which also preserves the evidence that diagnosed the defect), and `half_avg` read as
+done against the old averaged checkpoint -- which would have retrained stage 3 on the **wrong** weights and
+produced a duplicate of the run it was meant to correct. The superseded checkpoint is kept as
+`step2_calibration.averaged.window0.50-1.00.pth`, byte-identical, so the published 85.42% keeps its input, and a
+test now asserts the live file is absent before this chain runs.
+
+---
+
+## Half the beams cost 0.88 pp, and none of it is the memory's: FROG at 0.5 deg, end to end (2026-11-06)
+
+*keywords: item 73 done, item 85 open, beam-stride 2, angular resolution priced, 85.42 vs 86.30, memory lift 3.69 vs 3.51, PROPOSAL 5.3 resampler, decimation does not speed inference, stage 3 ms per frame three seeds, upper bound averaging defect, handling queue DONE*
+
+**The chain finished at 10:49 after 5.85 h.** `frog_half_stage3` ran 33 epochs, best val 81.86% at epoch 25,
+against the headline seed's 33 epochs and 81.94%. Exit 1 with `step3a_results.json` present, which is this
+runner's success.
+
+| | 0.25 deg, 3 frozen seeds | **0.5 deg, 1 seed** | difference |
+| --- | ---: | ---: | ---: |
+| **whole detector, wp-AUC** | **86.30%** (86.13 / 86.31 / 86.44, sd 0.16) | **85.42%** | **-0.88 pp** |
+| the same at 0.3 m | 85.20% | 84.35% | -0.85 pp |
+| candidates (averaged stage 2) | 82.79% (sd 0.10) | 81.74% | -1.05 pp |
+| **the memory's contribution** | **+3.51 pp** (sd 0.12) | **+3.69 pp** | **+0.18 pp** |
+| recall at each arm's own threshold | 95.1% | 95.3% | +0.2 pp, at equal FP |
+
+**The deficit is entirely stage 2's, and the memory partly repairs it.** Stage 2 loses 1.05 pp and the whole
+detector only 0.88, because the memory is worth **more** at half the resolution, not less: +3.69 pp against
++3.51, slightly outside the headline's seed spread. **The stage this project is proposed on does not degrade when
+the input is decimated** -- which is the opposite of the worry that motivated the measurement, since the memory
+has half as many beams to localise a slot from.
+
+**And it is an upper bound,** because the decimated arm carried the averaging defect found this morning and the
+headline did not: its window was ranked at 0.25 deg. A correctly ranked window can only help it. One seed against
+three, too, so "about a point" is the honest reading until a second seed exists.
+
+**What it says about `docs/PROPOSAL.md` §5.3.** The proposal resamples every scan to one fixed angular spacing so
+a kernel covers the same angle on any sensor, and §6.1 leaves the exact value "to confirm". At **half** FROG's
+spacing the whole detector loses under a point. So **the resampler is a real but small effect rather than the
+requirement the proposal assumed**, and a sensor at half FROG's resolution is usable without one. It does not
+settle the cross-*sensor* case the resampler exists for, where beam index stops meaning the same physical angle at
+all -- that is DROW and JRDB, not a decimated FROG.
+
+**Decimation does not make inference cheaper where this project measures it.** `step3a` times the decimated arm's
+stage 3 at **3.58 ms/frame** against the headline's **5.03 / 3.55 / 3.59** -- identical to two of the three seeds,
+because the memory runs over 256 candidate slots and never sees a beam; the 5.03 is seed 0's outlier and reading
+the saving off it alone would have invented a 29% speed-up that is not there. What does halve is **training**: 37 s
+against 50 s for a stage-2 epoch, 397 s against 582 s for a stage-3 one. **Where decimation should pay at
+inference is stage 2 on the CPU, and that number does not exist yet** -- it needs the matched interleaved sweep,
+not a GPU figure, and without it the resolution question has an accuracy answer and no cost answer.
+
+**Also reported at a different operating point, not a better one.** The two arms' AP-optimal thresholds differ
+(0.136 against ~0.073), so the decimated arm's higher recall (88.3% against 84.8%), lower precision (68.1% against
+73.2%) and exchange rate of 12.1 against 6.8 are a different point on its own curve rather than a cleaner trade.
+The like-for-like pair is the own-threshold row: 95.3% recall against 95.1% at the same false-positive rate.
+
+**Changed:** `memory/performance-log.md` (the resolution section), `memory/gotchas.md` (the averaging trap, as the
+general shape: a helper handed a run's directory inherits none of the flags that produced it),
+`memory/keywords.md`, `docs/PROPOSAL.md` (§5.3 now says the assumption has been measured once),
+`TODO.md` (item 73 closed; items 81, 82 and 73's rows and blocks deleted under rule 4b, now that this file carries
+them; item 85 gains a second reason).
+
+---
+
+## FROG at 0.5 deg costs nothing at stage 2, and the averaging script was ranking windows on the wrong dataset (2026-11-06)
+
+*keywords: item 73 stage 2, item 85, beam-stride 2, angular resolution, average_checkpoints beam stride, averaging window wrong val, frog_laser_angles 720 hardcoded, drow_stage2_s0 averaged on FROG val, balanced averaged on official val, resampler not required, 82.80 is candidates not whole detector*
+
+**Halving FROG's angular resolution costs nothing measurable at stage 2.** One `official` chain retrained on every
+second beam -- 360 beams over 180 deg, 45 sectors, no padding -- scores **81.35%** test AP against the three 0.25 deg
+seeds' **81.26%** (81.26 / 81.71 / 80.81, sample sd 0.45 pp), on the same 50,088 frames and 153,655 people at every
+annotated frame. It is not trading operating point for area either: FP/frame 2.214 against their 2.808 mean at recall
+91.1% against 91.7%, so it sits on the same curve. A stage-2 epoch costs 37 s against 50 s and a stage-3 epoch 397 s
+against 582 s, **-32%**. On the stage-3 val split the averaged decimated candidates read **77.16%** against the
+headline's **77.46%**.
+
+**That is the first evidence on `docs/PROPOSAL.md` §5.3's resampler, and so far it argues the resampler was a theory
+rather than a requirement.** Stage 3 is what can still overturn it -- the memory has half as many beams to localise a
+slot from, and its contribution is the 3.49 pp this architecture is proposed on -- so the conclusion is provisional
+until the whole-detector number lands.
+
+**The 0.25 deg headline is two figures, 3.49 pp apart, and only one of them is the whole detector:** candidates
+**82.80%**, whole detector **86.29%**. A 0.5 deg stage-3 number read against 82.80% would be measured against stage 2
+and flatter itself by 3.5 pp. This is the column substitution `AGENTS.md`'s third rule exists for, and it was
+reaching for the wrong column again this morning.
+
+**A defect found while reading the chain's own logs.** `utils/average_checkpoints.py` hardcodes
+`frog_laser_angles(720)` and calls `load_frames("val")` on its default spec, so it builds the network at FROG
+`official`'s 0.25 deg geometry and ranks every candidate window on FROG `official` val -- **whatever the run was
+trained on**. It takes no `--dataset`, no `--frog-mode` and no `--beam-stride`. Once the aggregator is off the
+network is fully convolutional over beams, so the wrong beam count loads silently and the mis-scored run looks
+disappointing rather than broken.
+
+It surfaced because the decimated run chose its window on **64.50%** where the eleven FROG runs before it landed
+between 75.78% and 78.04%, and chose the *earliest* window where every other FROG run chose a later one -- with the
+six scores falling monotonically in window width, which is a resolution mismatch's signature rather than a
+preference. Three recorded runs are touched, by increasing severity: `balanced_stage2_s0`, ranked on `official` val;
+`frog_half_stage2_s0`, ranked at 0.25 deg; and **`drow_stage2_s0`, where a DROW network was ranked on FROG val** and
+the 50.67% it printed is a zero-shot transfer score. That last one feeds the DROW headline.
+
+**It is bounded, and the bound is why nothing was stopped.** Only the *choice* is wrong: each window's weights are a
+legitimate mean of that run's checkpoints, the trained arm is untouched, and no recorded test number is recomputed by
+fixing it. On the one run ranked correctly the six windows span 1.0 pp against averaging's own +0.66 pp, so a wrong
+pick costs a fraction of a pp of stage 2 -- and the 0.30 pp candidates gap on the stage-3 val split is the
+independent evidence that this particular wrong pick cost little. But "chosen on val" is not true as written for
+three runs, which is cheap to make true: queued as item 85, ~20 lines and ~2 min per run.
+
+**Changed:** `TODO.md` (item 73's stage-2 reading and the two columns named; item 85 added to the register with its
+own block).
+
+---
+
+## The handling results: the range limit cost 1.6 pp, and the ignore region moved the operating point rather than the curve (2026-11-06)
+
+*keywords: item 81 result, item 82 result, 29.59% vs 29.45%, FP -34.4%, exchange rate 72.0, recall -4.8 pp, AP flat, decalibration at a fixed threshold, 47.65% within 10 m, 1.64 pp, 159 of 1976 people past 10 m, 8% of the gap, val 65.5% non-pedestrian confound, item 84 strengthened*
+
+**Both cheap arms of the handling queue reported within half an hour of launch, and together they shrink the
+"it is our own handling" hypothesis rather than confirming it.**
+
+**Item 82: the 10 m column, and the unrestricted column reproduced item 72 exactly** -- 46.01% at stride 1,
+45.36% at stride 5, candidates 23.45%, FP 2.417, exchange rate 47.15, every digit, because `score` calls the
+identical `evaluate` that produced them. That check is what makes the restricted figure a column on the right
+row rather than a number from a neighbouring protocol. DROW test, stride 1, whole detector:
+
+| reading | people | **AP** | precision | recall | FP / frame |
+| --- | --- | --- | --- | --- | --- |
+| 29.99 m, the headline | 1,976 | 46.01% | 20.5% | 76.6% | 2.417 |
+| within 10 m, labels truncated | 1,817 | 46.58% | 19.4% | 78.7% | 2.451 |
+| **within 10 m, labels and detections** | 1,817 | **47.65%** | 20.6% | 78.6% | 2.265 |
+
+**The comparable reading is the third** -- a 10 m-trained baseline cannot represent a position past its own
+limit -- and it prices the owner's range decision at **1.64 pp**, which is **8% of the 20.5 pp deficit** to
+DROW3. The two readings differ by only 1.07 pp, so the far false positives the headline is charged for come to
+0.186 per frame: the model is not spraying votes into the 20 m of empty space past DROW's furthest label that
+the limit handed it. **159 of 1,976 test people lie past 10 m (8.0%)**, confirming the figure the decision was
+made on, and recall *rises* when they go (76.6% -> 78.7%), so those people are disproportionately the missed
+ones. Decision 1 of 2026-11-04 is answered, and the answer is that it changes nothing material.
+
+**Item 81: the ignore region bought precision and spent recall, at flat AP.** 13 minutes, against the headline
+stage 2 on the identical recipe and limit:
+
+| | headline | ignore regions | delta |
+| --- | --- | --- | --- |
+| **AP** | 29.45% | **29.59%** | **+0.14 pp** |
+| precision | 8.2% | **11.4%** | +3.2 pp |
+| recall | 90.6% | 85.8% | **-4.8 pp** |
+| FP / frame | 8.279 | **5.431** | **-34.4%** |
+| FN / frame | 0.076 | 0.116 | +53% |
+
+**The pre-registered expectation half-held.** It said precision would move and recall would not; precision
+moved and recall did not hold. 2.848 false positives per frame went away for 0.040 false negatives, an
+**exchange rate of 72.0** against the **47.15** item 72 measured for the memory itself -- so by this project's
+own yardstick the trade is favourable. **But the AP is flat, and AP is the threshold-free summary**: +0.14 pp
+is inside this curve's epoch-to-epoch noise. What the mask moved is **where the model sits on its curve, not
+the curve's area**. Fewer negatives in the loss raises `pos_weight`, which shifts the score distribution, and
+precision-up/recall-down at the fixed 0.3 threshold is the decalibration signature already on record for FROG
+and for item 72's stage 3.
+
+**So training DROW's wheelchairs and walkers as background is not what costs the 20 pp at stage 2.** It costs
+false positives -- a real defect, a smaller claim, and one the 2026-11-05 entry had bounded at 1.05 objects per
+frame on the scoring side. The unbounded training-side cost it warned about does not show up as accuracy.
+
+**A confound named rather than buried.** Val best AP fell 28.05% -> 23.65% while test AP held, and early
+stopping selects on val -- so the checkpoint behind this test number was chosen by a signal the arm itself
+changed, and the arm ran 3.25 epochs longer to a lower train loss (0.157 against 0.243). The splits are not
+interchangeable here either: val is **65.5%** non-pedestrian against test's 56.4%, so the mask covers more of
+it. Both arms ran one protocol, so the comparison stands; a second seed is what would settle the val drop.
+
+**What follows.** **Item 84 is strengthened and is now the untested half of the same question:** ignoring an
+object discards the information that it is there, where a multi-class head uses it, and the cheap treatment has
+turned out to move the operating point rather than the ranking. And one stage-3 question stays open -- the
+memory's job *is* removing false positives (7.699 -> 2.417 on item 72), so whether a stage 2 handing it 34%
+fewer produces a better whole detector cannot be read off a stage-2 AP. That 7 h run stays gated on item 84, so
+it is spent on the better of the two treatments rather than on the first one tried.
+
+**Changed:** `TODO.md` (items 81 and 82's results, both register rows struck through), `CHANGELOG.md`. Results
+in `results/drow_within_10m.json` and `checkpoints_three_horizon/drow_stage2_ignore_s0/step2_results.json`.
+
+---
+
+## The handling queue: an ignore region, a restricted scoring pass, and a FROG arm that cannot be invalidated (2026-11-06)
+
+*keywords: item 81 built, item 82 built, item 73 running, ignore-other-classes, ignore_beams, compute_loss ignore, other_detections, FrameSplit other_polar, eval-max-range-m, restrict_to_range, restricted_columns, two readings, queue_drow_handling, beam-stride every stage, commands.md step3a max-range-m fixed*
+
+**Three jobs, two of which needed code, launched at 04:12 as `utils/queue_drow_handling.py`.** The shape of the
+queue is the decision in it: the two cheap arms run first, and **no DROW stage 3 is queued at all**. The
+ignore region and the swappable multi-class head are two treatments of the same defect, so one 7 h stage 3 on
+whichever wins costs a third of one stage 3 each. The window that leaves empty is filled by the FROG 0.5 deg
+chain, which is the only live row nothing in the DROW chain can invalidate -- it trains on FROG and is scored
+on FROG.
+
+**Item 81, the ignore region.** The beams a wheelchair or a walker covers now leave the classification term,
+neither positive nor negative, which is the standard handling for a class present in the scene and absent from
+the labels. What landed:
+
+| | |
+| --- | --- |
+| `DatasetSpec.other_detections` | the annotation files a dataset holds past the person class: `("det_wc", "det_wa")` on DROW, `()` on FROG. Stage 2 had only ever opened `.wp` |
+| `FrameSplit.other_polar` | those objects per annotated frame, empty on a one-class dataset so the training loop never asks which dataset it is on |
+| `ignore_beams` | the region, built out of **`make_targets` itself** -- same radius, same geometry -- so a beam is ignored exactly where it would have been a positive. A second implementation of that neighbourhood would drift from the one the targets use, and the two agreeing is the point |
+| `compute_loss(..., ignore=)` | **selects** the kept beams rather than weighting them, so the reduction and `pos_weight` stay exactly what they were on the beams that remain |
+| `--ignore-other-classes` | `step2`'s alone: it is the only stage that builds per-beam targets |
+
+**Three things are pinned by tests because they must not move.** The **vote** term never consults the mask --
+an ignored beam has no person centre to regress towards, so masking localisation there would mask a target that
+was never set. `pos_weight`'s **positive** count is untouched, because it is a count of annotated people.
+And **FROG is bit-identical**: an empty mask takes the unmasked path by construction, so a one-class dataset
+reproduces its numbers bit for bit rather than to a rounding error. The mirror augmentation mirrors the objects
+too, since the mask is built from bearings and an unmirrored object silences the beams on the wrong side.
+
+**Item 82, the restricted column, and the reason it is a scoring pass.** `score --eval-max-range-m 10` scores
+**the frames the replay already produced**. Restricting the candidates before the memory sees them would change
+what competes for a slot, which measures a different detector rather than restricting this one's score -- so
+`restrict_to_range` takes `evaluate`'s own `frames_out` and `score_detections` runs again over it. The
+unrestricted column comes out of the same pass, which is the check that the restricted one is a column on the
+right row: it must reproduce 46.01% at stride 1 and 45.36% at stride 5, and `score` calls the identical
+`evaluate` that produced them.
+
+**Both readings are reported, because the decision does not name one**, and the gap between them is the price
+of the 29.99 m choice. Truncating the **labels** alone still charges the detector for every vote it places
+further out. Truncating the **detections** too is what a 10 m-trained baseline does by construction, since it
+cannot represent a position past its own limit -- so that is the reading a published 10 m figure may be set
+beside, and `memory/interpreting-evaluation.md` now says so. A frame left with nothing in it is kept either
+way: it is the denominator of false positives per frame, so dropping it would deflate the rate rather than
+restrict it.
+
+**Item 73 needed no code**, `--beam-stride 2` already existed -- but it needed saying that **every stage of the
+chain carries the flag**. Unlike `--max-range-m`, which shapes the network and is restored from the checkpoint,
+`--beam-stride` is read off the command line by `dataset_spec`, so a stage that omits it trains at 0.25 deg on
+0.5 deg weights and nothing objects.
+
+**A defect found in the docs while writing them up.** `memory/commands.md` carried
+`step3a --dataset drow --max-range-m 29.99 --stage2 <averaged>` as the DROW command -- the exact invocation that
+stopped the previous chain three times in nine seconds, since `--max-range-m` is `step2`'s flag alone. Anyone
+following the page would have reproduced the failure. Fixed, with the reason beside it.
+
+**The queue's own tests are where the previous chain's lesson lives.** That chain died because its test
+asserted the range limit's **presence as a string** and so passed while the command could not start.
+`tests/test_drow_handling_queue.py` parses every job through `train_takheliped.py`'s own parser, and carries
+the failing argv as a test of the guard itself. It also pins that each job declares the file its subcommand
+writes **last** -- the runner kills a child 600 s after a declared output appears, and a job naming an early
+file is a job cut off mid-work, which silently dropped a whole baseline method once.
+
+**Tests:** 1,487 pass, ruff clean on both configs. 20 new in `tests/test_ignore_regions.py`, 14 in
+`tests/test_eval_range.py`, 28 in `tests/test_drow_handling_queue.py`. One of them earned its place
+immediately: `first_recordings` rebuilds a `FrameSplit` and the new field was not carried through it, which the
+suite caught rather than a run doing so. **Nothing was invalidated** -- both flags default off, the loss is
+bit-identical with no mask, the candidate cache key is unchanged and its byte-compatibility test still passes,
+and every existing checkpoint reloads.
+
+**Changed:** `utils/train.py` (the `ignore` argument), `utils/train_takheliped.py` (the spec field, the frame
+split, `ignore_beams`, `restrict_to_range`, `restricted_columns`, both flags, the training loop, `score`),
+`utils/queue_drow_handling.py` (new), `tests/test_ignore_regions.py` / `tests/test_eval_range.py` /
+`tests/test_drow_handling_queue.py` (new), `tests/test_train_takheliped.py` (the three `FrameSplit`
+constructions), `memory/commands.md`, `memory/interpreting-evaluation.md`, `TODO.md`.
+
+---
+
+## Three decisions: both head normalisations, a class-agnostic memory, and DROW stays native-only (2026-11-06)
+
+*keywords: item 84 decided, softmax and sigmoid arms, class-agnostic memory, cand_features carries the class channel, label stability limitation, item 74 parked, item 80 parked, transfer regimes parked, native-only, adaptivity is not transfer, item 73 re-justified, item 37 last defence parked*
+
+**Decision 1: `multiclass` takes its normalisation as a parameter, not a decision.** Both arms run --
+**`softmax`**, which is DROW's own and makes the published comparison exact, and **`sigmoid`**, which makes
+`binary` a strict special case so a one-class run is numerically identical and a binary checkpoint loads into a
+multi-class network with the extra columns zeroed. ~15 minutes each on DROW stage 2, reported side by side, and
+on a tie the standing rule takes `softmax` as the published mechanism. It also sharpens the FROG regression
+test: `sigmoid` at one class must reproduce **82.80% numerically**, not closely.
+
+**Decision 2: the object memory stays class-agnostic**, because persistence is class-independent and the
+project's claim is about the memory, so it is held still while the head varies. **The owner's reasoning that
+the slot vector can carry class information anyway was checked rather than assumed, and it holds.** The memory
+is not fed a bare score: each candidate arrives as `cand_features`, a pool of **stage 2's own decoder features**
+over the beams that voted for it (`joint_step` in `utils/train_takheliped.py`), which under a `multiclass` head
+are precisely the features the class logits are computed from. The channel exists by construction and needs no
+widening. What is not automatic is pressure -- a class-agnostic rescoring target keeps class-correlated features
+only where they help persistence, which is the intended behaviour.
+
+**And one limitation follows, recorded now rather than discovered later:** a class-agnostic memory cannot
+temporally smooth a **class label**. Two objects in one place share one persistence score and the class is
+decided by the head on the current frame alone, so a label flickering between wheelchair and pedestrian stays
+flickering. `wp-AUC` cannot see this -- it scores one class at a time -- so it would surface only in a
+label-stability or confusion measure, and per-class slot state is the fix if it ever matters.
+
+**Decision 3: the DROW cell is native-only. Items 74 (zero-shot) and 80 (fine-tuned) are parked.** The owner's
+reason is that DROW differs from FROG enough that what the architecture does when *genuinely* trained on it is
+the question worth answering, and **item 72 already is that run** -- trained from scratch, no pre-existing
+weights, 46.01% wp-AUC. There was never anything to postpone to get it. What the two parked rows would have
+added is the transfer spread, at ~13 h plus the `step3a --init` code, and two arguments say not now:
+
+| | |
+| --- | --- |
+| **the baseline is about to move** | every transfer number is read against the native arm, and the native arm is measurably mishandled -- 56.4% of DROW's test objects trained as background, and no gradient crossing an annotation gap. Items 81, 84 and 76 all move it |
+| **the answer is already known and is about the data** | zero-shot won outright over fine-tuning for all three superseded architectures, driven by DROW's 17.8x smaller effective training set. That finding stays quotable as a property of **DROW's training-set size**, which is how it was always argued, and must **not** be restated as a property of TAKHeLiPeD, which has no measurement behind it |
+
+**The distinction this protects, now written into `memory/interpreting-evaluation.md`:** the **A** in TAKHeLiPeD
+is about the parameters -- and, after item 84, the output head -- adapting to a dataset, which is a from-scratch
+property. **It was never a claim that one set of weights transfers.** The blank zero-shot and fine-tuned columns
+are a decision, and the page now says so, so the next session does not re-queue them as unfinished work.
+
+**Two consequences worth stating.** Parking item 74 parks **item 37's last defence**: the dt-aware recurrence has
+still only ever been fed a 1%-spread constant and a rate change is the only test of it, so that mechanism now
+stands unverified -- a small stake, since `selective` is the bespoke cell minGRU already replaced on a 0.52 pp
+tie. And **item 73 (FROG at 0.5 deg) stays live on its own merit**: it was those rows' source model, but it is
+also the only thing that prices `docs/PROPOSAL.md` section 5.3's resampler before JRDB's 1091 beams arrive, which is
+what now pays for its 6 h.
+
+**Changed:** `TODO.md` (item 84's two decisions and its cost, items 74 and 80 moved to the register's parked
+group with triggers, item 73 re-justified, item 82's rationale un-coupled from 74), `memory/interpreting-evaluation.md`
+(the three-regime section now states the native-only decision and separates adaptivity from transfer), `CHANGELOG.md`.
+
+---
+
+## How much of DROW's gap is ours: 56% of what it annotates is not a pedestrian (2026-11-05)
+
+*keywords: DROW gap, 46.01% vs 66.5%, harness-consistent comparison, class mix, wheelchair 1970, walker 581, trained as background, ignore-regions, item 81, item 82, item 84, swappable head, cutout sample efficiency, 450x*
+
+**Asked by the owner after item 72 landed: is the architecture really ~20 pp worse than DROW3, DR-SPAAM and
+Li2Former, or are we mishandling DROW? Both, and this entry separates them.**
+
+**The gap is real, and the right figure is -20.5 pp rather than -24.3.** Comparing 46.01% against *published*
+numbers mixes pipelines. This project also scores **DROW3's own published weights at 66.5%** and
+**DR-SPAAM's at 69.08%** through this same harness, and item 71 verified that DROW3's 71.7% is the identical
+quantity `_prec_rec_2d` computes -- person class, test split, 0.5 m radius. So like for like, one pipeline, one
+metric: ours **46.01%** against DROW3's **66.5%** (-20.5 pp) and DR-SPAAM's **69.08%** (-23.1 pp). Neither the
+metric nor the citation explains it.
+
+**One large part of it is our own handling.** Counted from the raw `.wp` / `.wc` / `.wa` files:
+
+| | pedestrian | wheelchair | walker | **not pedestrian** |
+| --- | --- | --- | --- | --- |
+| train | 23,910 | 14,455 | 2,047 | **40.8%** |
+| val | 3,102 | 5,678 | 219 | **65.5%** |
+| test | **1,976** | **1,970** | **581** | **56.4%** |
+
+**On DROW's test split there are as many wheelchairs as pedestrians.** The trainer reads `det_wp` only, so each
+of those 2,551 objects is a knee-height, person-shaped return that the loss teaches as **background** and the
+metric scores as a **false positive** when the network finds it anyway. A person in a wheelchair is a person.
+The scoring cost is bounded -- 1.05 objects per test frame, so up to 14% of the candidates' 7.699 FP/frame and
+**43% of the memory's 2.417** -- but the training cost is not: 40.8% of the train split's annotated objects
+carry a contradictory target on the one shape the network exists to recognise. `DatasetSpec` has recorded all
+three classes since 2026-11-05 and printed them in every parameter table while the targets only ever used the
+first, so this is a choice nobody examined rather than a defect in the code.
+
+**And one part is structural, which belongs in the write-up as a limitation rather than a thing to tune.** DROW3
+and DR-SPAAM are **cutout** detectors: they classify one window per beam, so DROW's 17,665 annotated frames give
+them roughly **450 x 17,665 ~ 7.9 M** training examples where a full-scan network gets **17,665**. That is a
+450x difference in gradient samples, it is exactly where a full-scan architecture should lose, and it should
+lose most on the smallest dataset. It is also the strongest argument for items 74, 78 and 80, all three of
+which attack effective dataset size rather than the architecture.
+
+**Three items follow, two of them agreed the same day and one of them owed.**
+
+| # | what | why it is separate |
+| --- | --- | --- |
+| **81** | ignore-regions: mask wheelchair and walker beams out of the **classification loss** | changes the **targets**; costs no new weights and must leave FROG bit-identical |
+| **82** | report the **10 m-restricted** column beside the 29.99 m figure | **owed**: decision 1 of 2026-11-04 asked for it and it was never produced. Evaluation only |
+| **84** | a **swappable decision head**, `binary` (today's) and `multiclass` | changes the **architecture**; the owner's proposal, and it absorbs item 81's original second arm |
+
+**Item 84 is the one with a claim attached.** The **A** in TAKHeLiPeD is adaptivity, and until now that meant
+only that the *parameters* are carried to a new dataset by changing values. The **output structure** never
+adapted: a dataset whose labels this architecture cannot express is a limit on the claim, and DROW is that
+dataset. Making the head a named option the spec selects is the same move `--block`, `--input-features` and
+`--vote-frame` already made for the stem and the encoder, and the vote regression stays shared across classes
+because that is DROW's own `conv_cls (n_cls)` + `conv_reg (2)` shape rather than something invented here. **Two
+design questions are open and recorded rather than guessed**: softmax over classes (faithful to the baseline)
+against independent sigmoids (makes `binary` a strict special case, so a binary checkpoint loads with the extra
+columns zeroed), and whether the object memory stays class-agnostic -- which I argue it should, since
+persistence is class-independent and the project's claim is about the memory, so it should be held still while
+the head varies.
+
+**Item 83, a DROW-specific kernel arc, stays proposed and was not taken up.** `k = 7` spans 3.5 deg on DROW
+against 1.75 on FROG -- 61 cm against 31 cm at 10 m -- but the four-shape-knob sweep already varied `k` from 5
+to 11 on FROG and found every arm inside the control's range, which is weak evidence against the whole idea.
+
+**Changed:** `memory/dataset-properties.md` (the class-mix section and its keywords), `TODO.md` (item 72's
+reading of the gap, items 81-84, the register), `CHANGELOG.md`. Also closed out item 72's run: the staged
+`tests/test_candidate_cache_io.py` ran once the machine freed -- one of its own assertions was wrong, since `ds`
+is a cell variable rather than a local and `co_varnames` does not list it -- and **1,425 tests pass**, ruff
+clean on both configs.
+
+---
+
+## Item 72: the DROW cell, and the memory is worth 6.5x more there than on FROG (2026-11-05)
+
+*keywords: item 72, DROW-native, 46.01%, 23.45%, +22.56 pp, candidates averaged nms-mean, own threshold 0.1358, 93.88% recall matched FP, exchange rate 47.15, rescore shift, DROW baselines floor, prediction held, 44 epochs, burst windows 7.5 s*
+
+**The headline DROW cell exists.** One seed, 44 epochs, 5.6 h, DROW test at the 29.99 m sensor limit, stride 1
+(every annotated frame: 2,428 frames, 1,976 people):
+
+| | candidates | **whole detector** | delta |
+| --- | --- | --- | --- |
+| **wp-AUC, `d = 0.5`** | 23.45% | **46.01%** | **+22.56 pp** |
+| wp-AUC, `d = 0.3` | 19.93% | 41.58% | +21.65 pp |
+| stride 5, `d = 0.5` | 24.42% | 45.36% | +20.94 pp |
+| FP / frame | 7.699 | **2.417** | -69% |
+| FN / frame | 0.078 | 0.190 | +143% |
+
+**The prediction written into `TODO.md` before the run took its "substantially more" branch.** It said a
+FROG-sized +3.5 pp would mean the memory does nothing DROW-specific, and substantially more would mean the
+architecture's distinguishing half carries a dataset its calibration half cannot. The gain is **+22.56 pp
+against FROG's +3.49 -- 6.5x**. Taken with item 75, which ruled out capacity in both directions on the same
+afternoon, the account is now complete: DROW's ceiling was never stage 2's size, it was stage 2's **ranking**.
+At 90.4% recall and 8.7% precision the calibration network finds nearly every person and cannot order them, and
+ordering is the memory's job. FROG conceals this because its stage 2 is already precise.
+
+**At matched false positives the memory dominates, and the recall column is decalibration rather than loss.** At
+its own operating point -- threshold **0.1358**, which lands it on the candidates' own 7.699 FP/frame -- it
+reaches **93.88% recall against 90.38%** with **0.0498 false negatives against 0.0783, 36% fewer missed
+people**. Exchange rate **47.15**. The rescoring head shifts candidates covering a person down **-1.656** logits
+against **-0.282** for the rest: the same whole-distribution shift measured on FROG, so the shared 0.3 threshold
+is set for a distribution this model does not have.
+
+**One comparison this result must not be read as.** Stage 2's own run reported **29.45%** on the same 2,428
+frames, *above* the 23.45% candidate figure here. Not a regression -- two measurements differing in two
+variables at once: stage 2 scored **its best checkpoint through its own vote decoder**, where the candidates are
+the **averaged** checkpoint through the **NMS top-64 candidate decoder** the cache is keyed on
+(`...averaged-...-nms-mean...`). The memory's contribution is the within-run column only, same weights, same
+decoder, same frames. Quoting 46.01% against 29.45% would invent 16 pp of gain and attribute it to the memory.
+
+**It does not clear DROW's published baselines, and that was the stated expectation.** 46.01% against DROW3
+**71.7%**, DR-SPAAM **70.3%** and Li2Former **76.4%** is 24.3 pp below the weakest. The cell is a floor and a
+mechanism result, not a competitive one, and `TODO.md` recorded that expectation before the run so it could not
+be read generously afterwards.
+
+**The ceiling has a measured cause that is not the architecture.** DROW annotates in bursts of 20 over 7.5 s
+with 24 s of nothing between them, and the slots fade in 10 s, so **no gradient in this run crossed an
+annotation gap**. The +22.56 pp was earned inside isolated 7.5 s windows -- a fraction of the horizon this
+project argues for. That makes item 76's chunk-length arms (now 35 s and 65 s, the first lengths that reach a
+second burst) the direct follow-up and the most interesting rows left on the DROW list.
+
+**The run also cost three attempts and two code fixes to start at all**, both in the candidate cache rather than
+the model; the entry above this one has them. Of the four stage-3 epochs' worth of val history, the best landed
+at epoch 36 (47.43% val) and the curve read as plateaued twice before resuming -- noise of +-2 pp between
+adjacent epochs, larger than the gaps between successive bests, so adjacent-epoch slope is not a usable signal
+on this dataset.
+
+**Changed:** `TODO.md` (item 72's result and its condition, the register row), `CHANGELOG.md`. Results in
+`checkpoints_three_horizon/drow_stage3_s0/step3a_results.json`.
+
+---
+
+## DROW annotates in bursts of 20 with 24 s gaps, and stage 3's candidate cache needed 3.4 GB to write 1.7 GB (2026-11-05)
+
+*keywords: annotation bursts, 890 bursts, 20 per burst, 400 scans, 31.5 s, burst period, supervision per chunk, item 76 arms 35 s 65 s, fade time 10 s, no gradient crosses a gap, candidate cache MemoryError, pickle.dumps, write_candidate_cache, read_candidate_cache, decode_split_candidates, pack concatenate, 1.775 GB, 41 GB stale caches*
+
+**DROW's annotations are not uniform, and the uniform reading was load-bearing.** `dataset-properties.md` has
+said *"5.0% -- every 5th scan, 0.39 s apart"* since the page was written, and those two halves contradict each
+other: every 5th scan is 20%, not 5%. Measured from the raw `.wp` ids, both describe something real and neither
+describes it:
+
+| | train | val | test |
+| --- | --- | --- | --- |
+| annotations | 17,665 | 3,919 | 2,428 |
+| **bursts** | **890** | **199** | **122** |
+| annotations per burst, median | **20.0** | 20.0 | 20.0 |
+| gap inside a burst | **5 scans**, 95.4% of all gaps | 5 | 5 |
+| burst span | **95 scans = 7.5 s** | 95 | 95 |
+| **burst to burst** | **400 scans = 31.5 s** | 400 | 400 |
+
+**20 annotations at every 5th scan over 7.5 s, then ~24 s of nothing, repeating** -- identical in all three
+splits, so it is the annotators' procedure rather than an artefact. Every 5th scan is right *inside* a burst,
+5.0% is right globally, and the global figure is 5.18% because the gaps take three quarters of each recording.
+
+**This changed item 76's arms before they were run, which is the point of having queued them with a condition.**
+It had `--chunk-s 20` and `30` against the adopted 10 s. The burst period is 31.5 s, so 10 s is 0.32 of a
+period, 20 s is 0.64 and 30 s is **0.95** -- all three sit inside one burst, and lengthening the chunk to 30 s
+buys unannotated frames rather than supervision. **35 s is the first length that reaches a second burst** (1.11
+periods) and 65 s reaches about three. The arms are now 35 s and 65 s. The item's stated deficit was wrong too:
+a 10 s chunk carries about **6** annotated frames and at most 20, against FROG's ~400, so the deficit per
+rollout is ~60x and not the 16x computed from the uniform assumption.
+
+**And a structural fact about what DROW can reward.** The 24 s gap exceeds the slots' 10 s fade time, so a slot
+spawned in one burst is retired before the next begins: **no gradient on DROW ever crosses an annotation gap**,
+and every rollout is one isolated 7.5 s observation whatever the chunk length. The headline DROW figure
+therefore measures the memory over 7.5 s windows, not the tens of seconds this project's thesis is about. That
+is a property of DROW's labelling rather than of the architecture, and it belongs beside the number whenever it
+is quoted.
+
+**Separately, stage 3 could not start at all, and the cause was the cache rather than the model.** Attempts 1
+and 2 each decoded for ~57 minutes and raised `MemoryError` in `load_split`. The candidate cache holds one
+entry per frame of the **whole split**, not per annotated frame, so DROW's train split is 341,147 entries --
+**1,774,982,813 bytes measured on disk**, dominated by `features` at `[frames, 64, C]` `float16`. Two defects,
+both at full cache size:
+
+| where | what it needed |
+| --- | --- |
+| `pickle.dumps(...)` then `write_bytes` | the entire byte string beside the arrays: **2x** |
+| `pickle.loads(path.read_bytes())` | the same on the way back, so a write that squeezed through would fail on the next read |
+| `pack`'s `np.concatenate` per field | a second full copy, **unavoidable**, which is what made the peak 3.4 GB either way |
+
+`write_candidate_cache` and `read_candidate_cache` now stream through an open file (64 KB frames), at the
+default protocol, so **the bytes are unchanged and every existing FROG cache still loads**. And
+`decode_split_candidates` holds the raw dataset in its own frame, which dies before `pack` allocates -- 614 MB
+of scans plus the network closure that `load_split` used to keep alive across the peak for nothing.
+
+**Verified on the real run, not by argument**: attempt 3 built both caches (train 341,147 frames in 3,879 s,
+val 74,745 in 779 s), survived `pack` with 1.75 GB of host commit headroom against a 1.775 GB allocation, and
+reached its first epoch. Measured headroom rose 1,403 -> 1,750 MB across the write, which is the dataset being
+released. `tests/test_candidate_cache_io.py` pins the round trip's dtypes, byte-identity with the old writer,
+that neither end can reach the whole-buffer calls, and that `load_split` no longer holds the dataset --
+**written but not yet run**, since the suite imports torch and the chain holds the machine.
+
+**JRDB will meet this wall again** and halving the peak will not be enough: `pack`'s second copy has to go,
+which means keeping the per-recording arrays and gathering windows on demand. Its consumers only index by
+absolute frame, so it is contained work -- now a prerequisite on register row A63.3 rather than a surprise.
+
+**Found while looking**: `utils/.takheliped_cache/` holds **41.2 GB in 66 files**, keyed by checkpoint, so every
+superseded stage 2 left its caches behind -- 9.9 GB under `network-a59`, 7.5 GB under `network-step2`'s
+September `-limit-silenced` keying for an architecture that no longer loads, 5.8 GB under `network-a60` for a
+convolution that was removed. Pure derived data, each file rebuildable from its checkpoint at ~1 h, so nothing
+was deleted without the owner's word.
+
+**Changed:** `utils/train_takheliped.py` (`write_candidate_cache`, `read_candidate_cache`,
+`decode_split_candidates`), `tests/test_candidate_cache_io.py` (new), `memory/dataset-properties.md` (the burst
+section, the corrected cell, keywords), `TODO.md` (item 76's arms and its corrected arithmetic, item 72's
+reading, A63.3's prerequisite), `CHANGELOG.md`.
+
+---
+
+## Item 75: DROW's score is not capacity-limited, and a queue flag that no test could see (2026-11-05)
+
+*keywords: item 75, DROW capacity, 29.45%, 24.55%, 26.32%, val decay, train/val gap, two arms agree, precision 8.2%, recall 90.6%, queue_drow --max-range-m step3a, unrecognized arguments, parse the argv not the string, network_shape max_range_m*
+
+**Item 72's stage 2 on DROW is 29.45% wp-AUC** (test, `d = 0.5`, person class, 2,428 frames, 1,976 people, 29.99
+m limit, 960,323 parameters, 11.6 minutes, early-stopped at epoch 8.48). FROG's is 82.80%. The gap is not the
+story; the **operating point** is: 8.279 false positives per frame at **8.2% precision and 90.6% recall**, where
+on FROG stage 2 is the precise half and the memory adds 3.5 pp on top.
+
+**Item 75 ran as a pre-flight check rather than a follow-up, and that decision paid.** Both arms, one seed each:
+
+| arm | parameters | test wp-AUC | val peak | decay from peak | train loss, end |
+| --- | --- | --- | --- | --- | --- |
+| headline (32, 64, 128), dropout 0.1 | 960,323 | **29.45%** | 28.05% | **-2.26 pp** | 0.243 |
+| (16, 32, 64) | 243,875 | 24.55% | 23.58% | -0.69 pp | 0.305 |
+| dropout 0.3 | 960,323 | 26.32% | 23.19% | **-0.22 pp** | 0.303 |
+
+**Both arms reduce the overfitting signature and both lose accuracy, in the same order.** They attack it by
+unrelated means, so their agreement is the evidence that makes one seed readable -- the role item 78 was
+queued to play as a third lever. **The conclusion rules out both readings the arm existed to separate**: not
+"the architecture does not carry", since the same 960,323 parameters reach 82.80% on FROG, and not "too much
+model for 17.8x less data", since less model is worse on test and fits the training set less well too. The val
+decay is real and is not what caps the score.
+
+What is left is ranking, which promotes stage 3 from the expected +3.5 pp to the interesting half of the
+result: the object memory is a precision mechanism, it cut FROG's person-free false positives 72%, and DROW is
+where that should pay most rather than least. Written into `TODO.md` item 72 before stage 3 ran, so the
+outcome cannot be read generously either way.
+
+**The chain then stopped on a flag, nine seconds into a 6-7 h job.** `queue_drow.py` passed
+`--max-range-m 29.99` to every job, and `step3a` has no such option: three attempts, each exit 2 in three
+seconds, `unrecognized arguments`. It is a **`step2` flag by design** -- the limit shapes the network, so
+`network_shape` reads `max_range_m` back out of the checkpoint that `--stage2` names, and stage 3 inherits
+DROW's 29.99 m with the weights (verified on the averaged checkpoint: `max_range_m 29.99`, `dataset drow`).
+Dropping it changes nothing about the run.
+
+**`tests/test_drow_queue.py` asserted the flag was present and passed**, which is the lesson. Every assertion
+in that file matched flags as *text*, so a flag the subcommand does not have reads as present and correct.
+Three new tests close it by **parsing each job's argv with the trainer's own `build_parser()`** -- the
+assertion that an argv is a command rather than a string -- plus one that fails on the exact argv that stopped
+the chain, and one pinning that stage 3 still gets the limit from `network_shape` so nobody re-adds the flag to
+fix a problem that is not there. The guard was written first and reproduced the failure before the fix.
+
+**It cost nothing but the restart**: the gate, stage 2 and both arms had already finished and `run_queue` skips
+them, so the relaunch at 11:29 runs stage 3 alone.
+
+**Changed:** `utils/queue_drow.py` (`DROW` split into the dataset and `LIMIT`), `tests/test_drow_queue.py`
+(+3 tests, one parametrised assertion narrowed to the three `step2` jobs), `TODO.md`, `CHANGELOG.md`.
+**1,414 tests pass**, ruff clean on both configs.
+
+---
+
+## One register of open work, item 80, and 1,542 lines of closed queue deleted (2026-11-05)
+
+*keywords: TODO restructure, open register, gate excludes condition, item 80, fine-tuned regime, step3a --init, three regimes, A49 stale parameter table, A22 A23 merged, rule 4b, two numbering series, A37 vs item 37, PeTra cited only, history ablation moved*
+
+**`TODO.md` was 2,134 lines, and 29 of its 48 sections carried no open work.** Rule 4b says a finished row goes once
+`CHANGELOG.md` carries its entry, and it had not been applied in bulk since the queue was started. The cost was
+not length: **open work was hiding under DONE headings.** A47 said "timing the streaming form is the open
+remainder" inside a section headed DONE; A40 said "left open deliberately: the 0.30 m default has not moved"
+inside one headed DONE; A48 carried an unexplained drop from 4.20 to 2.58 in a numbered list whose other five
+items were finished. None of the three was visible from the section titles, and the three running-order tables
+that were visible listed items that had closed weeks earlier.
+
+**The register replaces them.** One table at the head of §A, one row per open item, four columns that the old
+layout had nowhere to put:
+
+| column | what it is for |
+| --- | --- |
+| *gate* | what must land first. It replaces three running-order tables that each held part of the dependency graph and disagreed about item 78 |
+| *excludes* | what the row is **not**. Every duplicate this restructure merged had the shape "two items that sound like one", so the column exists to keep them apart once merged |
+| *condition* | the rule that decides the outcome, or the trigger that starts it, written before the run so a result cannot be read generously afterwards |
+| *cost* | unchanged, and now beside the gate rather than three sections away |
+
+Twenty-seven open rows in four groups: the dataset chain (items 72-80 and A63.3-A63.5), eleven single
+measurements the closed items left behind, writing and the owner's four decisions, and the parked sections with
+their triggers.
+
+**Four ideas existed in two places each, and the merge is the substantive half of this.** Each pair was one
+idea written twice against two different architectures, so the two copies had drifted:
+
+| idea | was | now |
+| --- | --- | --- |
+| beam-roll / beam-index shift | §D DROW idea 1 **and** item 78 | item 78; §D's copy deleted |
+| frame-to-frame difference channels | §S's A22 (`--diff-channels`) **and** §D DROW idea 2 | §D idea 2, which absorbed A22 |
+| local range normalisation | A39 **and** §D DROW idea 3 | register row A39, built on Cartesian input after A42 |
+| class imbalance / `pos_weight` | §S's A23 **and** §D DROW idea 6 | §D idea 6, which absorbed A23 |
+| capacity sized for DROW | §B's row **and** item 75 | item 75, running |
+| JRDB's prerequisites | §C **and** A63 step 3 | register row A63.3; §C holds only what blocks it |
+
+**One row removed outright**: §B asked for `FullScanTCN` and `TemporalUNet` retrained at real-odometry
+`dtime=5`, and both detectors were retired on 2026-10-31.
+
+**Two findings only this queue held, moved before anything was deleted**, which is rule 4b's precondition and
+the reason the deletion took a reading pass rather than a grep. The **four-way history ablation** -- full 67.1%,
+shuffled 66.6%, frozen 63.0%, zeroed 42.0%, the measurement the project was reorganised around on 2026-09-10 --
+appeared in no other file; `memory/performance-log.md` footnote 3 named it and carried only the 63.0%. It is now
+that footnote in full. **A32b's four-cell validity table** -- which comparisons across training data are
+confounded and which are not -- is a rule for reading a result rather than a task, and is now a section of
+`memory/interpreting-evaluation.md`. PeTra's status (cited only, no implementation and no weights here, so not a
+failed attempt) became footnote 13 of the accuracy table, beside the numbers it qualifies.
+
+**A49's per-dataset parameter table was stale in a way that only showed when it was read end to end**: it gave
+FROG as 26.2 Hz two lines above the measurement correcting it to 40.01 Hz, and DROW as 225 deg where the code
+says 224.5. `DatasetSpec` has printed and stored that table since 2026-11-05, so there is now one source and the
+prose one is gone. Four other sentences in A63 contradicted the record and are fixed: step 0 still said nothing
+had ever been run on `balanced` (it ran 2026-11-03/04, and the two retracted LFE figures came back at exactly
+59.8% and 63.5%), step 1 still said three seeds against the owner's decision of one, step 2 still said 12.5 Hz
+for a dataset measured at 12.70, and item 75's cost still summed three arms after item 78 moved out of the
+queue.
+
+**Item 80, the fine-tuned regime, added on the owner's call.** `memory/interpreting-evaluation.md` states three
+regimes a DROW number can be quoted in -- zero-shot, native, fine-tuned -- with a spread of 2x or more between
+them, and says a number quoted without its regime is close to meaningless. Items 72 and 74 produce two of the
+three. Item 80 produces the third: DROW training initialised from item 73's decimated-FROG weights, stage 2
+through the existing `step2 --init` and stage 3 through a `step3a --init` that is the ten lines of code this
+item owes. **The prior is against it** -- zero-shot beat fine-tuning outright for all three superseded
+architectures -- so a **win** is the informative outcome, and §D's frozen-backbone variant becomes its fallback
+arm rather than a separate idea. It ranks 6th of 8 on the DROW list's value/decisiveness axes, gated on item 73
+like item 74.
+
+**Two numbering series, now stated.** `A<n>` numbers the items opened before 2026-10-10, a bare `item <n>` the
+FROG pre-print list and everything after. **`A37` and `item 37` are different items** and both are cited here --
+A37 is the LFE-PPN re-run list, item 37 the dt-aware mechanism's robustness screen. Numbers are never renumbered
+(`AGENTS.md` rule 4b), so the collision is documented rather than resolved, and a citation meaning the older
+series writes the `A`.
+
+**Deleted:** A32, A32b, A32c, A32d, A33, A34, A35, A36, A37, A38, A40, A41, A42, A43, A44, A45, A47, A49, A50,
+A51, A52, A55, A56, A57, A58, A59, A60, A61, the A33-A36 funnel block, the §A preamble's six status quotations
+and the three running-order tables. **2,134 lines to 592.** Every one of those sections has its entry in this
+file; A51's 536 lines and A50's 155 were the two largest, with 20 and 8 keyword lines here between them.
+
+**Changed:** `TODO.md`, `memory/performance-log.md` (footnote 3 in full, footnote 13 new),
+`memory/interpreting-evaluation.md` (the four-cell rule). No code, no tests, no number re-measured.
+
+---
+
+## A62: the detector is dataset-agnostic, and DROW's 450 beams needed more than the U-Net padding (2026-11-05)
+
+*keywords: A62, dataset-agnostic, DatasetSpec, parameter_table, --dataset, --beam-stride, 450 beams, 57 sectors, sector_index, free_range_profile reshape, dt_average_frames, 32 intervals, missing_return_m, rated_range_m, corrupt labels 316-716 m, evaluate.py --split drow, argparse per cent crash, queue_drow*
+
+**The trainer now states which dataset it read instead of assuming one.** `utils/train_takheliped.py` named
+`FROG_Dataset` and `frog_laser_angles(720)` in six places and derived its sector count from a literal 720, so
+`--dataset drow` was not a thing a run could ask for. One frozen `DatasetSpec` per source now carries every
+parameter that is a property of the data rather than the model -- beams, field of view, spacing, rate, range
+limit, sensor rated range, annotated share, people per annotated frame, classes, dt window -- and
+`parameter_table` prints it at the head of every run and stores `dataset` and `beam_stride` in every
+checkpoint, beside the `frog_mode` added for the same reason. FROG is the default throughout, so every command
+and every number measured before the flags existed is reproduced by the unchanged command.
+
+**The beam padding had to reach past stage 2's U-Net, which is the part the first piece of this port missed.**
+Three `Conv1d(2, stride=2)` halvings do not divide DROW's 450, and padding the U-Net's input fixed only the
+decoder's shape mismatch. Two other places compute sector geometry from the raw beam count:
+
+| site | what 450 beams did to it |
+| --- | --- |
+| `free_range_profile` | `reshape(B, 57, 450 // 57)` -- raised outright, `shape '[1, 57, 7]' is invalid for input of size 450` |
+| `render_prior`, `visibility_feature` | a sector 7.89 beams wide where the bottleneck's is 8, so the prior was drawn into a neighbouring sector from the one whose evidence produced it, by up to half a sector at the ends |
+
+Both now read the **padded** axis through one `sector_index`: a sector is `BEAM_DIVISOR` beams of the real
+spacing, and the first begins where the left pad does. **On FROG this is the expression that was always
+computed, to the bit** -- checked, not asserted: identical sector width and an identical index over 200,001
+bearings at 720, 360 and 48 beams, an identical `free_range_profile` on 720, an unchanged cache filename, and
+the existing 50,088-frame candidate cache read back in 0.7 s rather than rebuilt.
+
+**The dt averaging window stays in frames, and that is a measurement rather than an exemption from principle
+9.** `DT_AVERAGE_FRAMES = 32` was FROG's stamp bunching, and A62 assumed DROW's rounding needed a different
+window. Measured on twelve real DROW files, the running average's error against each file's own mean period
+is **0.5-0.9% at 32 intervals**, 1.7% at 10 and 2.1% at 8, where a *single* stamped interval costs **36%**
+(0.05 s read for a 0.0787 s period). Restating the window in seconds is what would hurt: FROG's 32 frames are
+0.80 s, and 0.80 s of DROW is 10 frames, which triples the error. What is being averaged out is a defect of
+the stamping mechanism, counted in frames, so frames is the unit -- now stated per dataset rather than shared.
+
+**`DROW_Dataset` is owed a split argument and nothing else.** It took a directory path, which the trainer
+cannot supply by split name, so `DROW_SPLITS` and `split=` now serve both loaders with one call shape. It is
+*not* owed `missing_return_m`: across train, val and test, DROW holds **no non-finite and no non-positive
+reading**, writing a missing return as a finite value at the sensor limit (29.96-29.99 m). With the owner's
+29.99 m limit, `sanitize_ranges` maps the 29.99 marker onto "nothing within range" on its own and
+`voting_beams` lets no such beam cast a vote -- so the limit the owner chose for the labels' sake also happens
+to be the one that makes the marker self-cancelling.
+
+**Four labels are dropped as corrupt, and the rule is the sensor's range, not the run's.** DROW carries
+annotations at 316, 352, 498 and 716 m, all in train, in a care facility with a 30 m SICK S300
+(`results/scan_anomalies_drow.json`). A vote regressed towards one is a target the beam it sits on cannot
+reach. `rated_range_m` removes them -- 23,910 train labels to 23,906 -- while keeping the 2,809 real people
+between 10 m and 19 m that the 29.99 m decision exists to keep. On FROG it is a **measured** no-op: its labels
+stop at exactly 10.00 m in all three splits, and its 153,655 test labels are unchanged.
+
+**The DROW loader was verified against the real files, not a synthetic fixture** (`AGENTS.md` rule 4). Scan
+and annotation counts match the documented table exactly in all three splits -- 341,147 / 74,745 / 48,131
+scans and 17,665 / 3,919 / 2,428 annotated -- and stage 2 runs 450 beams in and 450 out with a 57-sector
+profile. The decimated FROG chain reads at 360 beams and is every second beam of the full grid (confirmed with
+`equal_nan=True`: FROG writes 3.4 M non-finite readings per test split, so a plain `array_equal` on raw FROG
+scans is always `False` and says nothing).
+
+**Two things found on the way that were not part of the port.**
+
+* **`evaluate.py --dataset drow` ignored `--split` and always loaded the test set**, and its help text said so
+  rather than fixing it. Harmless while every DROW number quoted here was a test number; a silent wrong answer
+  the moment a val split is used to select a checkpoint that is about to be scored.
+* **`train_takheliped.py step1 --help` and `step3a --help` crashed on this machine** -- exit 1 after most of
+  the text, `TypeError: %o format: an integer is required, not dict` -- because three help strings carried a
+  literal per cent sign and `argparse` expands help through `help % params`. This is item 70's failure in a
+  form item 70's test cannot see, since every character involved is ASCII: what was wrong was the escaping.
+  `tests/test_console_ascii.py` now formats every parser and subcommand, which is what `--help` itself calls.
+
+**One risk priced before it could be read as a result.** `beam_features` emits metres and `ConvNeXtBlock`
+carries its input forward on an un-normalised residual path, so a 29.99 m limit puts three times FROG's scale
+into the network. Measured on 256 real annotated frames with the adopted widths at a fixed seed: the initial
+logit spread rises from sd 0.167 to 0.301 and the extreme beam from 1.07 to 3.78, against a saturation line
+around 4. Real, bounded, not a blocker -- and the first thing to look at if DROW's stage 2 plateaus early.
+
+**`utils/queue_drow.py` arms what this unlocks**: the headline stage 2 at the adopted recipe, the two capacity
+arms beside it, and the headline stage 3 last. The arms run **before** the 6-7 h stage 3 rather than after its
+result, because they are a pre-flight check on that stage 2 -- 17,665 annotated frames make each about a
+quarter of an hour, and a DROW figure far below FROG's 86.29% otherwise carries two readings permanently.
+
+**Changed:** `utils/train_takheliped.py` (the spec, the table, `--dataset`, `--beam-stride`, `partition_tag`,
+`unlearnable_labels`, the six call sites), `library/takheliped/detectors/takheliped.py` (`pad_beams_to`,
+`sector_index`, `free_range_profile`), `library/takheliped/datasets/drow_dataset.py` (`DROW_SPLITS`, `split=`),
+`utils/evaluate.py`, `utils/queue_drow.py` (new), `tests/test_dataset_spec.py` (new, 28 tests),
+`tests/test_drow_queue.py` (new, 23 tests), `tests/test_dataset_agnostic.py` (+4), `tests/test_console_ascii.py`
+(+2), and `memory/dataset-properties.md`. **1,381 tests pass**, ruff clean on both configs, every subcommand's
+`--help` renders as pure ASCII with exit 0.
+
+---
+
+## Item 71: the DROW3 "overshoot" was a mis-citation, and the reproduction undershoots by 5.2 pp (2026-11-04)
+
+*keywords: item 71, DROW3, overshoot rule, 61.9%, 71.7%, final-WNet3xLF2p-T5-odom.rot-trainval-50ep, Beyer 2018 Fig. 4, DROW3x + validation, DR-SPAAM 70.3, dr_spaam_e40, published cell provenance, DROW column*
+
+**The item asked whether the DROW harness is wrong. It is not, and the thing that is wrong is our own citation.**
+`DrowDetector` measures **66.5%** wp-AUC on DROW test, and this repository had set that against a published
+**61.9%** since 2026-09-10 — a +4.6 pp overshoot, which under the standing rule in `memory/performance-log.md`
+means the harness is broken, and which was logged twice as "a known harness overshoot that predates this analysis"
+without ever being read. It was queued on 2026-11-04 as the gate on the whole DROW column, because both earlier
+overshoots of that size were real defects: LFE-Peaks' +2.1 pp was `_merge_nearby` reading the paper's circle
+*diameter* as a radius, and +9.7 pp was train/test contamination.
+
+**The weights name their own configuration, and that is what settled it.** `library/setup.py` downloads
+
+    final-WNet3xLF2p-T5-odom.rot-trainval-50ep.pth.tar
+
+from the DROW v2 release: late fusion (`LF2p`), five scans (`T5`), **odometry rotation correction** (`odom.rot`),
+trained on **train + validation** (`trainval`). Beyer et al., *Deep Person Detection in 2D Range Data*, publish
+exactly that model as the **"DROW3x + validation"** curve of Fig. 4 — person class, test split, 0.5 m evaluation
+radius, the same quantity `_prec_rec_2d` computes, since that function is a direct port of their own evaluation
+code. It scores **71.7% AUC** (peak-F1 70.5, EER 69.5). Their train-only model, the same paper's Table II
+late-fusion-plus-odometry row, is **68.1%**.
+
+| row | AUC | is it ours? |
+| --- | --- | --- |
+| `No time` (T=1) | 59.4 | no |
+| Late fusion + fixed location | 67.0 | no |
+| **Late fusion + odom correction (DROW3x)** | **68.1** | the same model, trained on train only |
+| **DROW3x + validation** | **71.7** | **yes — this is what `trainval` means** |
+| DROW3x, agnostic evaluation | 76.4 | no, and this one is the any-class column |
+
+**61.9% matches no row of any primary source.** Not the DROW v2 paper (59.4 / 63.0 / 63.7 / 64.6 / 65.9 / 67.0 /
+68.1 for the person class across its temporal-fusion table, 71.7 and 76.4 in Fig. 4), not the DR-SPAAM paper's
+Table I (59.4 / 67.0 / 68.1 for DROW as published, 66.6 / 67.9 for their own re-implementation), and not the
+`2D_lidar_person_detection` repository (65.9). The nearest values anywhere are **61.5** and **61.4**, which are the
+*peak-F1* and *EER* — not the AUC — of the `T=1, no time` row. That is a different quantity of a different
+configuration, which is precisely the substitution `AGENTS.md` rule 3 exists to stop, and it is the second time a
+column of this table has been read off the wrong statistic.
+
+**So the overshoot rule never fired on DROW.** 66.5% against 71.7% is a **−5.2 pp undershoot**, and an undershoot
+has innocent explanations the rule explicitly allows: the merge radius we had to choose ourselves, the decoding, the
+frame sample. The direction changes how the whole DROW column is read — every detector in it goes through one
+pipeline that now appears to cost somewhere between 1 and 5 pp, so **our own DROW numbers will be depressed by the
+same pipeline and the comparison between them stays fair**, while any absolute figure quoted out of that column is a
+floor rather than a match. That is a materially better position than the one the item feared, and it required no
+GPU.
+
+**A second cell is uncited, and it is left open rather than guessed.** The DR-SPAAM DROW cell read **69.6%**, and
+that matches no row either: the DR-SPAAM paper's Table I reports **70.3** AP at 0.5 m on the test split, while the
+later repository reports **72.3** for a *retrained* model. We download `dr_spaam_e40.pth` from the older
+`DR-SPAAM-Detector` release, but `DrSpaamDetector` uses the **56-point** cutouts of the later one, so the two
+candidates cannot be separated by reading the filename the way DROW3's was. The consequence is concrete: the
+streaming reproduction's gap is **−1.2 pp** (against 70.3) or **−3.2 pp** (against 72.3), not the **−0.52 pp**
+recorded on 2026-10-10, which was measured against the unsourced number. Queued as the provenance audit of every
+`published` cell rather than settled by picking the flattering one.
+
+**Changed:** `memory/performance-log.md` (both DROW cells now carry the configuration they were published at, the
+legend says a published cell must, and the reproduction section is rewritten around the undershoot),
+`memory/dataset-properties.md` (footnote 1 described the overshoot as a property of the data), and the
+"61.9% floor" that `memory/interpreting-evaluation.md` and `memory/detector-architectures.md` both used to bound
+Li2Former's ~30% plateau — it is a 71.7% floor, and Li2Former's plateau is still under half of it.
+`docs/RESEARCH.md`'s DR-SPAAM fix narrative quoted "the paper's reported 69.6-72%" twice and now quotes the sourced
+range; its claim that 68.1% landed "right in" that range is corrected, since it lands just under 70.3%.
+
+**No measurement was re-run and none needed to be.** Nothing in this entry moves a number this project produced:
+66.5%, 68.1% and 69.08% are what they were. What moved is what they are read against.
+
+---
+
 ## Item 70: 67 console strings made ASCII, and one of them was already crashing `--help` (2026-11-04)
 
 *keywords: item 70, rule I3, UnicodeEncodeError, cp1252, cp437, render_video --help, test_console_ascii.py, description=__doc__, AST walk, U+221D*

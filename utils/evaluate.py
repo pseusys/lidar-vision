@@ -135,8 +135,8 @@ def _load_dataset(args):
         )
     else:
         from takheliped.datasets import DROW_Dataset
-        print("Loading DROW test set ...")
-        ds = DROW_Dataset(time_frame_size=time_frame_size)
+        print(f"Loading DROW dataset (split='{args.split}') ...")
+        ds = DROW_Dataset(split=args.split, time_frame_size=time_frame_size)
         cfg = SimpleNamespace(
             name="drow",
             angles_fn=laser_angles,
@@ -1066,7 +1066,7 @@ def main():
                         help="Dataset to evaluate on (default: drow)")
     parser.add_argument("--split",   choices=["test", "train", "val"],
                         default="test",
-                        help="Dataset split (default: test; DROW always uses test)")
+                        help="Dataset split (default: test)")
     parser.add_argument("--frog-mode",
                         choices=["official", "transferred", "balanced"],
                         default=None,

@@ -1,6 +1,6 @@
 # Interpreting evaluation numbers
 
-*keywords:* wp-AUC, AP, zero-shot transfer, DROW-native, fine-tuned, precision, recall, false positive, eval-stride, headline metric, eval-r 0.3, dead vote head, matching radius hides, plateau, converged, epoch-to-epoch noise, training loss as the instrument, score calibration, temperature and bias, fixed threshold not comparable, --no-calibration
+*keywords:* wp-AUC, AP, zero-shot transfer, DROW-native, fine-tuned, native-only, regimes parked, adaptivity is not transfer, restricted range column, 10 m column, eval-max-range-m, two readings, precision, recall, false positive, eval-stride, headline metric, eval-r 0.3, dead vote head, matching radius hides, plateau, converged, epoch-to-epoch noise, training loss as the instrument, score calibration, temperature and bias, fixed threshold not comparable, --no-calibration, confounded comparison, four-cell design, hold training data constant, static control
 
 By how much should a given accuracy or speed number be discounted, and why.
 The standing comparison against published SOTA is in [`performance-log.md`](performance-log.md), and individual runs and sweeps in [`../CHANGELOG.md`](../CHANGELOG.md); this file is about how to read either correctly.
@@ -115,6 +115,12 @@ this host is the RX 9060 XT. Quoting it as a cost figure silently reports a GPU 
 measurements differ by more than a factor of two for exactly this reason -- **4.65 ms on the GPU against 9.14 ms on four
 CPU threads** -- and the memory is the *larger* half of the CPU total while being the smaller half of the GPU's.
 
+**It does not even compare two runs of the same architecture.** The FROG 0.5 deg arm and its corrected twin
+(2026-11-06) are the same model at the same slot count, trained hours apart on this host, and their
+`memory_ms_per_frame` reads **3.58 ms** and **5.22 ms** -- 46% apart -- because the host was slower throughout the
+second run: 596 s against 398 s for an identical epoch. The figure tracks whatever else the machine was doing, so
+two arms' GPU milliseconds are not comparable even to each other unless they ran back to back.
+
 **The protocol to use instead** is the matched one, which every row of the speed table shares: `tracking_baselines.py latency
 --device cpu --threads 4`, 2,000 consecutive FROG test scans, batch 1, median and p99 against the real 25 ms frame period.
 The budget restatement also settled the thread count that matters: scaling **saturates at two**, so "two CPU cores" is the deployment
@@ -150,6 +156,51 @@ Every architecture in `detector-architectures.md` has been evaluated on DROW in 
 The counterintuitive, load-bearing finding: **zero-shot transfer wins outright over both other regimes, for every one of the three proposed architectures.**
 This is a genuine result, not a bug — DROW's much smaller effective training set (next section) means "more DROW-specific training" does not currently mean "better on DROW."
 Quoting a DROW number without saying which of the three regimes produced it is close to meaningless; the spread between them is 2x or more for every architecture tested.
+
+**TAKHeLiPeD's DROW cell is native-only, deliberately (owner, 2026-11-06).** It has exactly one of the three regimes and the other two are parked, so the blank columns are a decision rather than unfinished work:
+
+- **What exists** is the DROW-native cell -- trained from scratch on DROW, no FROG weights anywhere in it. That is the measurement the owner asked for, on the grounds that DROW differs from FROG enough (12.70 Hz against 40.01 Hz, 0.5 deg against 0.25, 450 beams against 719, and a scene that is 56% not-pedestrian) that what the architecture does when *genuinely* trained on it is the question worth answering.
+- **Why the other two are parked.** Both are read against the native arm, and the native arm is known to be mishandled: more than half of DROW's annotated objects are trained as background, and the annotation bursts are further apart than the memory's fade, so no gradient crosses an annotation gap (`dataset-properties.md`). A regime comparison against a baseline that is about to move measures the baseline's defects, not the regime.
+- **What that costs.** The zero-shot/fine-tuned spread is the project's own load-bearing finding above, and it stays sourced from the three **superseded** architectures rather than from this one. So the finding may be quoted as a property of *DROW's training-set size*, which is how it was always argued, but **not** as a property of TAKHeLiPeD -- that version of the claim has no measurement behind it and must not be written as though it does.
+
+A `wp-AUC` for the adaptivity claim is a separate thing from a transfer number, and this is where they are easy to confuse: the **A** in TAKHeLiPeD is about the *parameters and now the output head* adapting to a dataset, which is a from-scratch property. It was never a claim that one set of weights transfers.
+
+## A restricted-range column has two readings, and only one of them is comparable to a baseline
+
+Added 2026-11-06, with the 10 m column the owner's first decision of 2026-11-04 asked for.
+
+Scoring a 29.99 m run "inside 10 m" is not one number. Truncate the **labels** alone and the detector is still charged for every vote it places further out, which is the honest cost of having been given 20 m of space past the furthest DROW label to place votes in. Truncate the **detections** too and the comparison becomes like-for-like against a 10 m-trained baseline, which cannot represent a position past its own limit at all. Both are reported, because the gap between them *is* the price of the range choice, and **the second is the one a published 10 m figure may be set beside**.
+
+Two things make this a scoring question rather than a run:
+
+- **The memory must replay every candidate it was trained to see.** Dropping the far ones before the replay changes what competes for a slot, so it measures a different detector rather than restricting this one's score. `score`'s `--eval-max-range-m` therefore scores the frames the replay already produced (`restrict_to_range`), and the unrestricted column comes out of the same pass as a check that the restricted one is a column on the right row.
+- **A frame with nothing left in it is still a frame.** It is the denominator of false positives per frame, so dropping it would deflate the rate rather than restrict it.
+
+## A comparison across training data measures two things at once, and the fix is a four-cell design
+
+Moved here from `TODO.md`'s A32b on 2026-11-05, because it is a rule for reading a comparison rather than a
+task to run.
+
+The published baselines were trained on `official` -- populated frames only, no empty scene ever seen. So
+training our own model on `balanced` and setting it against LFE-as-published measures **architecture and
+training data together**, and in the flattering direction: the whole person-free false-positive advantage
+could come from having trained on person-free frames, with the architecture contributing nothing.
+
+| comparison | valid? |
+| --- | --- |
+| ours (`official`-trained) against LFE as published, on `official` | yes -- matched data |
+| ours (`balanced`-trained) against LFE as published, on `balanced` or `transferred` | **no** -- confounded |
+| ours (`balanced`-trained) against a static control also trained on `balanced` | yes |
+| ours (`balanced`) against ours (`official`), on the same evaluation | yes -- isolates the **data** effect |
+
+Row 4 is the one this project can run without porting anything, and it has been run: person-free training
+cuts stage 2's phantoms 21% and leaves the output unchanged (`CHANGELOG.md`, 2026-11-04). Row 3 needs a
+retrainable static control, which is what the LFE PyTorch port in `TODO.md` is for; until it exists,
+`docs/PAPER.md` states the confound as a limitation rather than claiming row 2.
+
+**Separating the two effects is itself a result**: *how much of empty-scene robustness comes from seeing
+empty scenes, and how much from architecture?* is unanswered for this task, and only the four cells answer
+it.
 
 ## DROW's numbers are structurally handicapped by annotation coverage, not by being a harder dataset
 
@@ -205,7 +256,7 @@ And do **not** try to recover a decode convention by fitting localisation residu
 
 **A dead regression head is the limiting case, and Li2Former's own released network is the worked example -- but the lesson is not the one a per-beam estimate predicts** (2026-11-01). Their `reg_head` ends in `nn.ReLU()`, which their own left-right-flip augmentation drives into its dead zone within two epochs: `pred_reg` becomes identically 0, the gradient through the clamp is exactly 0, and `loss_reg` goes bit-stable (`utils/diagnose_vote_head.py` proves it; `memory/detector-architectures.md` has the mechanism). Every detection is then placed at its own beam's measured point.
 
-Inverting the frozen loss through their AFM puts the typical vote magnitude at only **~0.19 m**, well inside a 0.5 m gate, which **predicts that the loss is nearly free at `d = 0.5`. That prediction is wrong, and the correction is the point:** the votes are consumed by a *clustering* step before anything is matched, and zero votes never converge -- the per-person votes stay smeared across the surface the beams hit, so one person yields several detections instead of one peak and the false positives take the precision. Measured on DROW over nine of twelve epochs: **val** wp-AUC converges near **29.7%** and **train** near **38.5%**, against a 61.9% floor for DROW3 and a published 76.4%. (An earlier reading of this same run put the plateau at 25.7% / 34.1% from two epochs and was withdrawn; the four-point and training-loss standards that replaced it are in the run-to-run spread section above.)
+Inverting the frozen loss through their AFM puts the typical vote magnitude at only **~0.19 m**, well inside a 0.5 m gate, which **predicts that the loss is nearly free at `d = 0.5`. That prediction is wrong, and the correction is the point:** the votes are consumed by a *clustering* step before anything is matched, and zero votes never converge -- the per-person votes stay smeared across the surface the beams hit, so one person yields several detections instead of one peak and the false positives take the precision. Measured on DROW over nine of twelve epochs: **val** wp-AUC converges near **29.7%** and **train** near **38.5%**, against a 71.7% floor for DROW3 and a published 76.4%. (An earlier reading of this same run put the plateau at 25.7% / 34.1% from two epochs and was withdrawn; the four-point and training-loss standards that replaced it are in the run-to-run spread section above.)
 
 So: a per-beam distance argument prices the matching step only, and underestimates a broken vote head badly. What a 0.5 m gate *does* hide is a decoder that is systematically off, which is the LFE-PPN case above. For either, **check the head directly rather than inferring it from a plausible loss curve or a plausible headline number** -- this curve rose for nine epochs and the total loss fell throughout, with three quarters of that loss a frozen constant the whole time -- and report `d = 0.3` alongside `d = 0.5` whenever the spatial head has not been verified.
 

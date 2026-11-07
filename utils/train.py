@@ -541,12 +541,21 @@ def build_cutout(input_mode: str, scans_hist, odoms_hist, n_beams: int, angles,
 
 def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
                  labels: torch.Tensor, vote_targets: torch.Tensor,
-                 vote_weight: float = 0.02, soft_labels: torch.Tensor = None):
+                 vote_weight: float = 0.02, soft_labels: torch.Tensor = None,
+                 ignore: torch.Tensor = None):
     """
     logits       : (N, C)  raw class logits; C=4 for multi-class, C=1 for binary
     votes        : (N, 2)  predicted vote offsets
     labels       : (N,)    int64 target class indices  (0=bg, 1=wc, 2=wa, 3=wp)
     vote_targets : (N, 2)  target vote offsets
+    ignore       : (N,)    bool, beams that leave the classification term entirely -- neither positive nor
+                           negative. The standard handling for a class present in the scene and absent from
+                           the labels, and on DROW that is most of what is annotated: 56.4% of its test
+                           objects are wheelchairs or walkers, trained as background until this existed.
+                           Kept beams are selected rather than weighted, so the reduction and `pos_weight`
+                           stay exactly what they were on the beams that remain. **The vote term does not
+                           consult it**: an ignored beam has no person centre to regress towards, so masking
+                           localisation there would mask a target that was never set.
 
     Binary mode (C=1, e.g. Li2Former): any non-background beam is treated as
     positive; loss is binary cross-entropy with class-balanced pos_weight.
@@ -558,8 +567,11 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
     balance as well as the target; and with `soft_labels=None` this function is bit-identical to what produced every
     stage-2 number on record.
     """
-    n_pos = int((labels > 0).sum())
-    n_neg = int((labels == 0).sum())
+    # An empty mask takes the unmasked path deliberately, so a one-class dataset -- FROG, where nothing is
+    # ever ignored -- reproduces its numbers bit for bit rather than to a rounding error.
+    keep = None if ignore is None or not bool(ignore.any()) else ~ignore
+    n_pos = int((labels > 0).sum() if keep is None else ((labels > 0) & keep).sum())
+    n_neg = int((labels == 0).sum() if keep is None else ((labels == 0) & keep).sum())
     if soft_labels is not None and logits.shape[-1] != 1:
         raise ValueError("soft_labels is a binary target, so it needs C=1 logits, not "
                          f"{logits.shape[-1]} classes")
@@ -571,9 +583,10 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
             torch.tensor([float(n_neg) / float(n_pos)], device=logits.device)
             if n_pos > 0 and n_neg > 0 else None
         )
-        l_class = F.binary_cross_entropy_with_logits(
-            logits.squeeze(-1), binary_labels, pos_weight=pos_weight
-        )
+        scores, scored = logits.squeeze(-1), binary_labels
+        if keep is not None:
+            scores, scored = scores[keep], scored[keep]
+        l_class = F.binary_cross_entropy_with_logits(scores, scored, pos_weight=pos_weight)
     else:
         if n_pos > 0 and n_neg > 0:
             pos_weight = float(n_neg) / float(n_pos)
@@ -581,7 +594,8 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
             weight[1:] = pos_weight
         else:
             weight = None
-        l_class = F.cross_entropy(logits, labels, weight=weight)
+        l_class = F.cross_entropy(logits if keep is None else logits[keep],
+                                  labels if keep is None else labels[keep], weight=weight)
 
     pos_mask = labels > 0
     if pos_mask.any():

@@ -903,6 +903,70 @@ def _stage(channels: int, blocks: int, kernel_size: int, expansion: int, block: 
     return nn.Sequential(*(BLOCKS[block](channels, kernel_size, expansion) for _ in range(blocks)))
 
 
+#: The U-Net halves the beam axis three times, so a scan whose beam count this does not divide cannot come back
+#: up the decoder: `Conv1d(2, stride=2)` floors on the way down while `interpolate` doubles on the way up, and the
+#: skip connection they meet at is a beam wider. FROG's 720 and a FROG scan decimated to 0.5 deg (360) divide;
+#: **DROW's 450 does not**, and it raised rather than degraded until 2026-11-04.
+BEAM_DIVISOR = 8
+
+
+def padded_beam_count(n: int) -> int:
+    """The smallest beam count at or above `n` the U-Net's halvings divide. `n` itself wherever it already does."""
+    return -(-n // BEAM_DIVISOR) * BEAM_DIVISOR
+
+
+def sector_count(n: int) -> int:
+    """How many bottleneck sectors `n` beams make -- what the memory's prior is drawn at, and what a candidate
+    cache is keyed on. FROG's 720 gives 90, which is why every stored cache keeps reading."""
+    return padded_beam_count(n) // BEAM_DIVISOR
+
+
+def beam_pad(n: int) -> Tuple[int, int]:
+    """How many beams to add at each end, split as evenly as the shortfall allows.
+
+    Evenly, because `--mirror` reflects a scan about its centre and lopsided padding would make that augmentation
+    asymmetric -- the one place where which end the extra beams sit at is observable.
+    """
+    extra = padded_beam_count(n) - n
+    return extra // 2, extra - extra // 2
+
+
+def pad_beams_to(x: Tensor, width: int) -> Tensor:
+    """`x`, whose last axis is a beam grid, widened to `width` by repeating its end beams, centred.
+
+    **Returns `x` itself when it is already that wide**, which is the guarantee that keeps every FROG number: on
+    720 beams this is not merely value-preserving but identity, so the tensor reaching the U-Net is the one that
+    always reached it.
+
+    Replicate rather than zero: a zero range is a surface at the sensor's own origin, which is person-shaped, while
+    repeating the end beam is exactly what every convolution in the network already does at its boundary.
+    """
+    extra = width - x.shape[-1]
+    if extra <= 0:
+        return x
+    left = extra // 2
+    return pad(x.reshape(-1, 1, x.shape[-1]), (left, extra - left), mode="replicate").reshape(*x.shape[:-1], width)
+
+
+def pad_beams(x: Tensor, n: int) -> Tensor:
+    """`x`, whose last axis is `n` beams, widened to the count the U-Net's three halvings divide."""
+    return pad_beams_to(x, padded_beam_count(n))
+
+
+def sector_index(bearing: Tensor, angles: Tensor, sectors: int) -> Tensor:
+    """Which bottleneck sector a bearing falls in, read on the **padded** beam grid stage 2 convolves.
+
+    Both the width and the origin come off the padded axis: a sector is `BEAM_DIVISOR` beams of the real spacing,
+    and the first one begins where the left pad does, `beam_pad` beams before the first real beam. Where the
+    halvings already divide the beam count the pad is empty and this is the expression that was always computed --
+    FROG's 720 over 90 sectors is eight beams either way, to the bit. On DROW's 450 it moves every boundary by
+    three beams, which is what keeps the memory's prior over the sectors whose evidence produced it.
+    """
+    spacing = angles[1] - angles[0]
+    width = spacing * padded_beam_count(len(angles)) / sectors
+    return ((bearing - (angles[0] - beam_pad(len(angles))[0] * spacing)) / width).floor().long()
+
+
 class CalibrationNetwork(nn.Module):
     """Stages 1-2 (`docs/PROPOSAL.md` §5.3-§5.4): one scan in, no state, no pose.
 
@@ -990,8 +1054,16 @@ class CalibrationNetwork(nn.Module):
         lifted = self.stem(x)
         if self.gather is not None:
             lifted = self.gather(lifted, sanitize_ranges(ranges, self.max_range_m))
-        skips, bottom = self._encode(lifted, prior)
-        return self._decode(self.context(bottom), skips)
+        # The beam axis is padded to the U-Net's divisor here, after the per-beam features, so stage 1 still reads
+        # the real angles and the real neighbours; the padding is a property of the decoder's arithmetic and is
+        # cropped back off below, leaving nothing of it visible to any caller.
+        n = lifted.shape[-1]
+        left, _ = beam_pad(n)
+        skips, bottom = self._encode(pad_beams(lifted, n), prior)
+        logit, votes, features = self._decode(self.context(bottom), skips)
+        if left or features.shape[-1] != n:
+            logit, votes, features = logit[:, left:left + n], votes[:, left:left + n], features[..., left:left + n]
+        return logit, votes, features
 
 
 def fold_legacy_calibration(state: dict) -> dict:
@@ -1046,7 +1118,7 @@ def free_range_profile(ranges: Tensor, sectors: int, max_range_m: float = MAX_RA
     Readings that mean "nothing within range" go through `sanitize_ranges` first, so a missing return reads as empty space
     rather than as the closest obstacle in its sector -- the opposite of what a raw minimum would say.
     """
-    clean = sanitize_ranges(ranges, max_range_m)
+    clean = pad_beams_to(sanitize_ranges(ranges, max_range_m), sectors * -(-ranges.shape[-1] // sectors))
     return clean.reshape(clean.shape[0], sectors, clean.shape[-1] // sectors).amin(dim=-1)
 
 
@@ -1058,8 +1130,7 @@ def visibility_feature(slot_xy: Tensor, free_range: Tensor, angles: Tensor, sect
     0 -- nothing known rather than either. This is the evidence the coasting head was missing: it must tell a
     genuinely occluded person from a slot that is simply wrong, and until now it saw nothing of the current scan at all.
     """
-    width = (angles[1] - angles[0]) * len(angles) / sectors
-    index = ((atan2(-slot_xy[..., 0], slot_xy[..., 1]) - angles[0]) / width).floor().long()
+    index = sector_index(atan2(-slot_xy[..., 0], slot_xy[..., 1]), angles, sectors)
     inside = (index >= 0) & (index < sectors)
     seen = free_range.gather(1, where(inside, index, zeros_like(index)))
     margin = (seen - slot_xy.norm(dim=-1)) / scale
@@ -1069,8 +1140,7 @@ def visibility_feature(slot_xy: Tensor, free_range: Tensor, angles: Tensor, sect
 def render_prior(slot_xy: Tensor, value: Tensor, person: Tensor, alive: Tensor, angles: Tensor, sectors: int) -> Tensor:
     """The memory drawn onto stage 2's bottleneck sectors, `[B, 2, S]`: per sector, the largest value and the largest person
     probability among live slots whose detection-frame position `[B, K, 2]` falls in it; slots outside the field of view draw nothing."""
-    width = (angles[1] - angles[0]) * len(angles) / sectors
-    index = ((atan2(-slot_xy[..., 0], slot_xy[..., 1]) - angles[0]) / width).floor().long()
+    index = sector_index(atan2(-slot_xy[..., 0], slot_xy[..., 1]), angles, sectors)
     inside = alive & (index >= 0) & (index < sectors)
     target = where(inside, index, zeros_like(index))
     empty = zeros(slot_xy.shape[0], sectors, device=slot_xy.device, dtype=slot_xy.dtype)

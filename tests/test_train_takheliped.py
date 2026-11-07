@@ -21,7 +21,7 @@ from train import make_targets
 from train_takheliped import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, clip_state_grad, coast_targets, decode_votes, evaluate, evaluation_segments,
     FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
-    DT_AVERAGE_FRAMES, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, matched_person_xy, coasting_hits, exponential_schedule, network_shape, select_test_weights, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
+    FROG, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, matched_person_xy, coasting_hits, exponential_schedule, network_shape, select_test_weights, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
     union_decode,
 )
 
@@ -149,7 +149,8 @@ class TestNetworkCandidates:
         def split(scans):
             people = [np.array([[3.0, phi]])] * 3
             xy = [np.array([[-3.0 * np.sin(phi), 3.0 * np.cos(phi)]])] * 3
-            return FrameSplit(scans, np.zeros((3, 3), np.float32), np.zeros(3, np.int64), np.arange(3), people, xy, np.arange(3) / 40.0)
+            return FrameSplit(scans, np.zeros((3, 3), np.float32), np.zeros(3, np.int64), np.arange(3), people, xy,
+                              [np.zeros((0, 2))] * 3, np.arange(3) / 40.0)
 
         want = evaluate_calibration(net, split(at_limit), np.arange(3), "cpu", 3)
         got = evaluate_calibration(net, split(missing), np.arange(3), "cpu", 3)
@@ -181,7 +182,8 @@ class TestNetworkCandidates:
         scans = np.stack([np.full(48, 3.0), np.full(48, np.inf)]).astype(np.float32)      # a wall, then nothing within range
         people = [np.array([[3.0, phi]]), np.array([[net.max_range_m, phi]])]
         xy = [np.array([[-r * np.sin(phi), r * np.cos(phi)]]) for r in (3.0, net.max_range_m)]
-        split = FrameSplit(scans, np.zeros((2, 3), np.float32), np.zeros(2, np.int64), np.arange(2), people, xy, np.arange(2) / 40.0)
+        split = FrameSplit(scans, np.zeros((2, 3), np.float32), np.zeros(2, np.int64), np.arange(2), people, xy,
+                           [np.zeros((0, 2))] * 2, np.arange(2) / 40.0)
         assert evaluate_calibration(net, split, np.arange(2), "cpu", 2)["recall"] == pytest.approx(0.5)     # only the wall's person is found
 
 
@@ -956,7 +958,7 @@ class TestFramePeriods:
             free_range=np.full((n, 8), MAX_RANGE_M, np.float16))
         split = pack([seq])
         got = gather(split, np.zeros((1, n), dtype=int), np.arange(n)[None], "cpu")["dt"][0].numpy()
-        assert got == pytest.approx(frame_periods(seq.time, np.array([0]), np.array([n]), DT_AVERAGE_FRAMES).astype(np.float32))
+        assert got == pytest.approx(frame_periods(seq.time, np.array([0]), np.array([n]), FROG.dt_average_frames).astype(np.float32))
 
 
 class TestJointFrameLoss:
@@ -1294,7 +1296,8 @@ class TestFirstRecordings:
     def test_keeps_whole_leading_recordings_with_only_their_annotations(self):
         split = FrameSplit(scans=np.arange(10, dtype=np.float32).reshape(5, 2), poses=np.zeros((5, 3), np.float32), start=np.array([0, 0, 2, 2, 2]),
                            annotated=np.array([1, 3, 4]), people_polar=[np.ones((1, 2)), np.zeros((0, 2)), np.ones((2, 2))],
-                           people_xy=[np.ones((1, 2)), np.zeros((0, 2)), np.ones((2, 2))], time=np.arange(5) * 0.04)
+                           people_xy=[np.ones((1, 2)), np.zeros((0, 2)), np.ones((2, 2))],
+                           other_polar=[np.zeros((0, 2))] * 3, time=np.arange(5) * 0.04)
         first = first_recordings(split, 1)
         assert first.scans.shape == (2, 2) and first.start.tolist() == [0, 0] and first.time.tolist() == pytest.approx([0.0, 0.04])
         assert first.annotated.tolist() == [1] and len(first.people_polar) == 1 and len(first.people_xy) == 1

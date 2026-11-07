@@ -121,6 +121,12 @@ python train_takheliped.py step2 --input-features lfe | --channels 8 16 32   # l
 python train_takheliped.py step2 --batch 8 --max-epochs 5 --min-epochs 5 --schedule exponential --lr 1e-3 --min-lr 1e-6 --weight-decay 0 --select last   # ladder R: DR-SPAAM's protocol; tests the last weights, kept as step2_calibration.last.pth beside the best
 python coarse_e2e.py                                                            # the coarse convolution's verdict: the six E13 detectors' AP, AP@0.3, recall at a shared FP budget and first-second recall, and drop/keep for the coarse convolution; re-scores from its saved frames, since the coarse checkpoints no longer load (code at e76aa94)
 python average_checkpoints.py ../checkpoints_three_horizon/<run> [...]         # stage 2's weight averaging (recipe since 2026-10-06): val-chosen window of a `--checkpoint-every 0.25` run -> <run>/step2_calibration.averaged.pth (~2 min per run)
+# PASS THE RUN'S OWN DATASET FLAGS. Until 2026-11-06 this script ranked every window on FROG `official` val
+# whatever the run trained on, and three runs chose their window on the wrong data (`memory/gotchas.md`).
+python average_checkpoints.py ../checkpoints_three_horizon/<run> --dataset drow        # ranked on DROW val
+python average_checkpoints.py ../checkpoints_three_horizon/<run> --beam-stride 2       # ranked at 0.5 deg
+python average_checkpoints.py ../checkpoints_three_horizon/<run> --frog-mode balanced  # ranked on `balanced` val
+python average_checkpoints.py ../checkpoints_three_horizon/<run> --dataset drow --rank-only   # re-rank and report only: writes averaging.rank_only.json, leaves the averaged checkpoint (and the old averaging.json) alone
 python train_takheliped.py step1        # stage 3 on cached LFE-Peaks candidates, the memory in isolation (dropped from the plan 2026-09-15)
 ```
 
@@ -390,3 +396,54 @@ No linter is configured yet for this project's own Python (`library/`, `utils/`)
 
 - Windows Git Bash: redirect long-running command output to a file and read the file, never `tail`/truncate it unread (`AGENTS.md` I2) — this project's training/evaluation logs are routinely tens of MB and hours long.
 - `make` targets assume a POSIX shell (`SHELL = /bin/bash` in the Makefile) — run them from Git Bash, not PowerShell directly.
+
+## Another dataset
+
+The dataset is a flag, and it defaults to `frog`, so every command on this page is unchanged by its existence.
+
+```bash
+# DROW, natively, at its own sensor limit -- the two values the dataset sets, and nothing else.
+# `--max-range-m` is **step2's flag alone**: it shapes the network, so `network_shape` restores it from the
+# stage-2 checkpoint and `step3a` rejects it. Passing it there stopped a chain three times in nine seconds.
+python train_takheliped.py step2  --dataset drow --max-range-m 29.99 --no-aggregator --label-sigma-m 0.3
+python train_takheliped.py step3a --dataset drow --stage2 <averaged> --chunk-s 10
+
+# FROG read at DROW's 0.5 deg spacing: every second beam, 360 of them, 45 sectors. Unlike the range limit
+# this one **is** every stage's flag, because `dataset_spec` reads it from the command line rather than
+# from the checkpoint -- so a stage that omits it trains at 0.25 deg on 0.5 deg weights and nothing objects.
+python train_takheliped.py step2  --beam-stride 2 ...
+python train_takheliped.py step3a --beam-stride 2 --stage2 <averaged> ...
+
+# Stop training the non-person classes as background: the beams a wheelchair or a walker covers leave the
+# classification loss, neither positive nor negative. Stage 2's alone, and a no-op on a one-class dataset.
+python train_takheliped.py step2 --dataset drow --max-range-m 29.99 --ignore-other-classes
+
+# Score a finished run a second time against a restricted label set, without retraining or replaying twice.
+# Prints and stores both readings: labels truncated alone, and labels with the far detections dropped too.
+python train_takheliped.py score --dataset drow --stage2 <averaged> --memory <step3a best> \
+    --eval-max-range-m 10 --test-strides 1 5 --out ../results/drow_within_10m.json
+
+# the whole DROW chain, with the two stage-2 arms that make its number readable
+python queue_drow.py --list
+python queue_drow.py
+
+# the handling queue: the 10 m column, the ignore-region arm, and the FROG 0.5 deg chain beside them
+python queue_drow_handling.py --list
+python queue_drow_handling.py
+
+# the resolution-cost queue: the CPU timing the resolution answer was missing, the three re-ranks, and DROW's
+# first chunk length that spans a second annotation burst. The timing jobs run first because the protocol is an
+# idle host, so nothing touching the GPU may precede them.
+python queue_resolution_cost.py --list
+python queue_resolution_cost.py
+
+# the CPU sweep, told which sensor it is timing -- without --beam-stride it feeds a 360-beam network 720 beams
+python tracking_baselines.py latency --device cpu --threads 4 --frames 2000 --beam-stride 2     --stage2 <0.5 deg averaged> --memory <0.5 deg step3a best> --out ../results/latency_resolution_half
+```
+
+Every run prints its dataset's parameter table before it loads anything, and stores `dataset` and
+`beam_stride` in each checkpoint. A run whose range limit cannot represent some of its labels says so, with
+the count and the furthest one -- which is the only warning that a forgotten `--max-range-m` on DROW is
+training against 8% of its labels blind.
+
+`evaluate.py --dataset drow` honours `--split` as of 2026-11-05; before that it always loaded the test set.

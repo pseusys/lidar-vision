@@ -67,8 +67,10 @@ JOBS = [
     Job(name="stage2", outputs=(STAGE2 / "step2_results.json",),
         cli=("train_takheliped.py", "step2", "--frog-mode", "balanced", *RECIPE,
              "--seed", "0", "--out-dir", str(STAGE2), "--resume")),
+    # The partition is not decoration: without it the windows are ranked on `official` val, which is what
+    # happened to this run's first averaging (`memory/gotchas.md`).
     Job(name="stage2_avg", outputs=(STAGE2 / AVERAGED,), needs=("stage2",),
-        cli=("average_checkpoints.py", str(STAGE2))),
+        cli=("average_checkpoints.py", str(STAGE2), "--frog-mode", "balanced")),
     # `--chunk-s 1 10` is a **departure** from the adopted recipe, which is a flat 10 s with no curriculum
     # (`docs/ARCHITECTURE.md` section 5.1), and it is kept rather than corrected: it is what produced the
     # recorded 82.49% / 84.93%, so a further seed of this run has to match it or it is measuring two things.

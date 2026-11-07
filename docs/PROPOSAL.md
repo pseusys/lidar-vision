@@ -327,6 +327,8 @@ Nothing between the blocks is exotic; the combination is what is new for this ta
 
 Scans are first resampled to one fixed angular spacing, so a convolution kernel covers the same angle on any sensor. Each beam then gets 11 numbers:
 
+> **What that spacing is worth has now been measured once.** A chain retrained on every second FROG beam -- half the proposal's spacing, same sensor -- loses about a point of whole-detector accuracy (1.02 pp, one seed against three), and the object memory still adds about 3 pp there rather than closing the gap. So the resample is a real but small effect rather than a prerequisite, and a sensor at half this resolution is usable without one. It does not settle the cross-*sensor* case this step exists for, where beam index stops corresponding to the same physical angle; that needs DROW and JRDB. Numbers in `memory/performance-log.md`.
+
 | numbers | count | meaning |
 | --- | --- | --- |
 | distance | 1 | how far away; objects look smaller when far |
@@ -412,7 +414,7 @@ Replayed on every frame of the FROG test recording, with candidates down to a sc
 
 | setting | meaning | default | reasoning | needs retraining |
 | --- | --- | --- | --- | --- |
-| `angular_resolution_deg` | fixed angular spacing every scan is resampled to | the training sensor's (FROG) | the same kernel then covers the same angle on every sensor; exact value to confirm (§15) | no |
+| `angular_resolution_deg` | fixed angular spacing every scan is resampled to | the training sensor's (FROG) | the same kernel then covers the same angle on every sensor; **halving it on FROG costs about a point** (§5.3), so the exact value matters less than §15 assumed | no |
 | `panoramic` | whether the scan covers a full circle and wraps around | per sensor | a partial field of view must not wrap | no |
 | `max_range_m` | distances beyond this are clipped | 10.0 | no annotated person in the FROG test recording is further away | no |
 | `median_window_deg` | width of the neighbourhood for the median-distance channel | ~11 | the angular width of a person at 4 m, the median distance to a person; to tune | no |

@@ -1,6 +1,6 @@
 # Gotchas
 
-*keywords:* encoding, unicode, cp1252, BOM, U+FEFF, utf-8-sig, mojibake, CRLF, DirectML, venv, python3, ABI mismatch, pip install -e, JRDB, torch_utils, set_num_threads, OMP_NUM_THREADS, spin-wait, CPU time vs wall time, docker, ROS, launch-docker-local, WSL
+*keywords:* bad allocation, std::bad_alloc, host memory not GPU, chunk-s host memory, tokens streams depth, long chunk wall clock, average_checkpoints flags, averaging window wrong val, frog_laser_angles hardcoded, beam-stride helper scripts, re-scoring a checkpoint needs its flags, encoding, unicode, cp1252, BOM, U+FEFF, utf-8-sig, mojibake, CRLF, DirectML, venv, python3, ABI mismatch, pip install -e, JRDB, torch_utils, set_num_threads, OMP_NUM_THREADS, spin-wait, CPU time vs wall time, docker, ROS, launch-docker-local, WSL
 
 Platform and environment traps that have cost real debugging time.
 
@@ -253,3 +253,117 @@ Platform and environment traps that have cost real debugging time.
 - **`.venv` is not a self-contained interpreter — its `pyvenv.cfg` points `home` at `C:\Users\...\AppData\Local\Programs\Python\Python312`.**
   A process can end up running under that base path instead of `.venv\Scripts\python.exe` while still executing this project's code — observed three separate times now (a duplicate DR-SPAAM eval process; a duplicate `train.py --dtime 5` process, killed 2026-09-10; a third unrelated pair on a scratchpad script from a different session, same day), always as an exact command-line duplicate holding real CPU time under the base install's path — if `ps`/Task Manager shows two copies of the same script, check whether one is the base install before assuming it's unrelated, and kill both PIDs, not just the one matching the path you expected.
   Frequent enough now to treat as a standing property of how background processes get launched here, not a one-off fluke — still not root-caused to an exact trigger.
+
+## A longer BPTT chunk buys host memory pressure, not just more frames per rollout
+
+`RuntimeError: bad allocation` inside `loss.backward()` is a **host** allocation failure -- MSVC's
+`std::bad_alloc`, not a device OOM, which reports `HIP out of memory` and the size it wanted. The machine has
+16 GB with a 5 GB page file and routinely sits at **~5.3 GB free with nothing of this project running**, so the
+margin is thin and a long stage-3 run is the thing that finds it (first recorded 2026-09-21, `a51_d1_sensor_s1`,
+3.5 h in).
+
+**`--chunk-s` is the knob that walks into it.** The token budget is held constant -- `streams = tokens // length`
+with `--tokens 1048` -- so a longer chunk does not raise frames per iteration; it trades streams for depth. On
+DROW at 78.8 ms per frame:
+
+| `--chunk-s` | frames | streams | tokens | s per epoch | outcome |
+| ---: | ---: | ---: | ---: | ---: | --- |
+| 10 (adopted) | 127 | 8 | 1,016 | 456 | 44 epochs, finished |
+| 35 | 444 | 2 | 888 | **1,147 (2.52x)** | `bad allocation` at epoch 6, then 8 |
+
+**Two separate costs, and the second one is easy to miss when budgeting.** Depth at fixed tokens means a
+sequential graph 3.5x longer held through one backward, which is where the host allocation goes. And **fewer
+streams means less parallelism per iteration**, so the same frames per epoch cost **2.5x the wall clock** -- a 7 h
+estimate for the 35 s arm was really 11.5 h to the epoch its 10 s twin peaked at, and 14 h to run out its
+patience. Budget a long-chunk arm from `streams`, never by scaling the 10 s figure.
+
+**It survives `--resume` but does not finish under it.** Each relaunch re-reads the resume file and gets a couple
+more epochs before failing the same way -- 6 epochs, then 2 -- which looks like progress and is not a path to a
+finished run when the arm needs ~36. Treat a repeat `bad allocation` at a longer chunk as the ceiling it is: free
+host memory first, or do not run that chunk length on this host.
+
+## A script that takes the run directory but not the run's flags will score it on the wrong dataset
+
+`utils/average_checkpoints.py` picks stage 2's weight-averaging window by scoring each candidate window on val. It
+takes the run directory and nothing else -- no `--dataset`, no `--frog-mode`, no `--beam-stride` -- and inside it
+hardcodes `frog_laser_angles(720)` and `load_frames("val")` on the default spec. So it builds the network at FROG
+`official`'s 0.25 deg geometry and ranks every window there, **whatever the run was trained on**.
+
+It cannot fail loudly. Once the aggregator is off, the calibration network is fully convolutional over beams, so a
+360-beam state dict loads into a 720-angle network without a shape error and simply scores badly. A DROW network
+loads the same way and is ranked on FROG frames.
+
+Three runs were ranked wrongly before this was noticed on 2026-11-06, in increasing severity: `balanced_stage2_s0`
+on `official` val rather than `balanced`; `frog_half_stage2_s0` at 0.25 deg rather than 0.5; and `drow_stage2_s0`,
+where a **DROW** network was ranked on **FROG** val and the 50.67% it printed is a zero-shot transfer score.
+
+**The tell is the printed val figure against its peers.** Eleven FROG runs landed between 75.78% and 78.04%; the
+decimated one printed **64.50%** and picked the *earliest* window where every other FROG run picked a later one,
+with all six window scores falling monotonically in window width. A smoother average degrades further when it is
+fed the wrong beam spacing, so that monotonic fall is the signature -- a genuine preference does not look like that.
+
+**Only the choice is wrong, not the weights.** Each window's checkpoint is a legitimate mean of that run's
+checkpoints, and no recorded test number is recomputed by fixing this -- the trained arms never consulted the
+ranking. On the one run ranked correctly the six windows span 1.0 pp, against averaging's own +0.66 pp, so a wrong
+pick costs a fraction of a point of stage 2.
+
+**What one wrong pick cost, measured.** The one run whose window moved was retrained on the correct window with
+nothing else changed (2026-11-06): candidate test AP rose **+0.44 pp** (81.74 -> 82.18) and the whole detector
+moved **-0.14 pp** (85.42 -> 85.28), inside seed noise. So a wrong pick is worth about half a point of stage 2 and
+nothing measurable after the memory -- but it does **not** bound a result in the direction one would guess. That
+arm's deficit against its full-resolution headline *grew*, 0.88 -> 1.02 pp, when its stage 2 improved
+([`performance-log.md`](performance-log.md)), so "a better stage 2 can only help the number" is not a safe
+inference.
+
+**The general shape of the trap:** a helper that takes a run's *directory* inherits none of the flags that produced
+it, and every flag the trainer grows afterwards is one more thing the helper silently gets wrong. Anything that
+re-scores a checkpoint has to be handed the same flags its training ran with, or read them back out of the
+checkpoint the way `network_shape` does for the range limit.
+
+**There was a second instance, and it had not bitten yet.** `tracking_baselines.py`'s `run_latency` -- the CPU
+sweep that produces the `ms/frame` this project is judged on -- hardcoded the same 720-beam grid, loaded
+`FROG_Dataset(split="test", mode="official")` directly, and left the memory's bearing grid on `laser_angles`'
+FROG default. Timing a 0.5 deg checkpoint through it would have fed a 360-beam network 720 beams and reported the
+cost of twice the work, which is the exact opposite of the saving the sweep exists to measure. It was found on
+2026-11-06 while queueing that very measurement, and no published figure came from it: every CPU number on record
+is FROG `official` at full resolution, where the old defaults were right. Both are now flag-driven, and
+`tests/test_averaging_spec.py` and `tests/test_latency_spec.py` pin them.
+
+**`run_arms` and `run_report` keep their literals deliberately.** They score published LFE detectors against ours
+on FROG, which is what those tables *are*, so a dataset flag there would be meaningless. The test asserts the
+file still holds exactly two `frog_laser_angles(720)` calls, so a third cannot appear unnoticed.
+
+**The remaining instance is `stage2_probe.py`**, which has no dataset flags either, and it is deliberately left
+that way: it has never been run on a non-default arm, so nothing it has produced is wrong, and it is what a
+stage-2 re-score of a re-ranked checkpoint would need if one is ever wanted.
+
+**And a re-ranking pass writes its own file.** `--rank-only` goes to `averaging.rank_only.json`, never over
+`averaging.json`, for two reasons found by `--list`: the runner skips a job whose declared output already exists,
+and every wrongly-ranked run already has an `averaging.json` -- which is also the evidence that diagnosed the
+defect, the 64.50% and the monotonic fall across windows. A fix must not overwrite what it is checked against.
+
+## `argparse` reads a per cent sign in a help string as a format specifier
+
+`train_takheliped.py step1 --help` and `step3a --help` exited 1 on this machine after printing most of their
+text:
+
+    TypeError: %o format: an integer is required, not dict
+
+`argparse` expands every help string through `help % params`, so `"cost 24% of training time"` is read as the
+conversion `%o`. Write `%%`. Three strings had it, all describing a measured percentage, which is exactly the
+kind of sentence this repository writes.
+
+It is item 70's failure -- a `--help` that crashes rather than printing -- in a form item 70's test cannot
+see, because every character involved is ASCII; what is wrong is the escaping, not the character set. The
+guard is to render: `tests/test_console_ascii.py` now calls `format_help()` on every parser and subcommand,
+which is what `--help` itself calls.
+
+## `np.array_equal` on raw FROG scans is always `False`
+
+FROG writes a missing return as `+inf` or NaN, and `missing_return_m=None` passes them through -- 3.4 M
+non-finite readings in the test split alone. `NaN != NaN`, so
+
+    np.array_equal(decimated_scans, full_scans[:, ::2])      # False, and means nothing
+
+Pass `equal_nan=True`, or compare the finite part and the NaN masks separately. This cost one false alarm
+while verifying that the decimated FROG grid really is every second beam of the full one (it is).

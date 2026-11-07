@@ -8,25 +8,35 @@ https://github.com/VisualComputingInstitute/DROW/blob/master/v2/utils/__init__.p
 
 from json import loads
 from pathlib import Path
-from typing import Union, List, Dict, Tuple
+from typing import Union, List, Dict, Optional, Tuple
 
 from numpy import genfromtxt, fromregex, where, array, array_equal, vectorize, float32, uint32, arange, clip
 from numpy.typing import NDArray
 
-from ..utils.file_utils import DROW_DATA_PATH, DROW_TEST_SET
+from ..utils.file_utils import DROW_DATA_PATH, DROW_TEST_SET, DROW_TRAIN_SET, DROW_VALIDATION_SET
 from ..utils.drow_utils import laser_measures
 from ..utils.generic_utils import Logging
 
 _DATASET_PATH = Path(__file__).parent.parent / DROW_DATA_PATH
+
+#: Which directory each split name lives in, so a caller can ask for a split by the name the trainer uses for
+#: FROG's rather than by a path. DROW has no partitions of its own: these three directories are the partition.
+DROW_SPLITS = {"train": DROW_TRAIN_SET, "val": DROW_VALIDATION_SET, "test": DROW_TEST_SET}
 
 
 class DROW_Dataset(Logging):
     TIME_FRAME = 5
     _LOAD_JSON_VECTOR = vectorize(loads, otypes=[object])
 
-    def __init__(self, datapath: Union[Path, str] = _DATASET_PATH, dataset: Union[Path, str] = DROW_TEST_SET, laser_scans: int = laser_measures, time_frame_size: int = TIME_FRAME, verbose: bool = True):
+    def __init__(self, datapath: Union[Path, str] = _DATASET_PATH, dataset: Union[Path, str] = DROW_TEST_SET, laser_scans: int = laser_measures, time_frame_size: int = TIME_FRAME, verbose: bool = True, split: Optional[str] = None):
+        """`split` names one of `DROW_SPLITS` and overrides `dataset`, so the same call shape serves this loader and
+        FROG's; without it the test set loads, which is what every caller predating the argument asked for."""
         Logging.__init__(self, verbose)
         self.time_frame = time_frame_size
+        if split is not None:
+            if split not in DROW_SPLITS:
+                raise ValueError(f"unknown DROW split {split!r}; expected one of {', '.join(DROW_SPLITS)}")
+            dataset = DROW_SPLITS[split]
         dataset_path = Path(datapath) / Path(dataset)
         self.filenames = [f"{f.parent}/{f.stem}" for f in dataset_path.glob("*.csv")]
 

@@ -1,6 +1,6 @@
 # Performance log
 
-*keywords:* wp-AUC, AP, ms/frame, SOTA, comparison table, published baseline, PeTra, Li2Former, LFE, DR-SPAAM, DROW3, state of the art, Aycard, AlgorithmicDetector, attribution, credit
+*keywords:* wp-AUC, AP, ms/frame, SOTA, comparison table, published baseline, PeTra, Li2Former, LFE, DR-SPAAM, DROW3, state of the art, Aycard, AlgorithmicDetector, attribution, credit, history ablation, shuffled frozen zeroed, five-frame averager, PeTra never run here
 
 The standing comparison: published state of the art against this project's own architectures, **one row per model, latest measurement only**.
 
@@ -17,7 +17,7 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 
 | notation | meaning |
 | --- | --- |
-| plain `61.9%` | published by that model's own authors — the yardstick, never re-run here |
+| plain `71.7%` | published by that model's own authors — the yardstick, never re-run here. **It carries the configuration it was published at**, because two cells of this table were found in 2026-11-04 to name a figure no primary source holds |
 | **bold** | measured by this project: our own architectures, or a gap the literature does not cover |
 | `gap` | nobody published it and we have not measured it |
 | `check paper` | the authors did publish one; it is simply not transcribed here yet. **Look it up before spending a run.** |
@@ -29,16 +29,16 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 | --- | --- | --- | --- | --- |
 | ROS `leg_detector` | classical | check paper | 20.2% | check paper |
 | AlgorithmicDetector | rule-based, **O. Aycard**⁰ | **F1 55.7%** | **F1 1.7%** | n/a |
-| PeTra | published | gap | 50.1% *(PeTra\* 59.0%)* | gap |
+| PeTra | published | gap | 50.1% *(PeTra\* 59.0%)*¹³ | gap |
 | LFE-Peaks | published | gap¹ | 65.6% | gap¹ |
 | LFE-PPN | published | gap¹ | 69.2% *(ours 69.6%)* | gap¹ |
-| DROW3 | published | 61.9% | 73.9% | 82.9% *(official repo README, merged 1091-point 360° scans)* |
-| DR-SPAAM | published | 69.6% *(RA-L'22: 72%+)* | **75.6%** *(`T=5`)* / 73.7% *(`T=1`)* | 84.9% *(official repo README, merged 1091-point 360° scans)* |
+| DROW3 | published | 71.7% *(the "DROW3x + validation" curve, which is the configuration our downloaded weights are; 68.1% train-only)* | 73.9% | 82.9% *(official repo README, merged 1091-point 360° scans)* |
+| DR-SPAAM | published | 70.3% *(paper, Table I; the later repository reports 72.3% for a **retrained** model -- this cell is uncited until the provenance audit in `TODO.md` settles which)* | **75.6%** *(`T=5`)* / 73.7% *(`T=1`)* | 84.9% *(official repo README, merged 1091-point 360° scans)* |
 | Li2Former | published | 76.4% *(Li2Former-A, `T=5`; 74.8% without the AFM; 72.5% at `d=0.3`)* | gap² | 81.4% |
 | **SpaceTimeCNN** | ours, superseded | not measured | **63.0%**³ | n/a |
 | **FullScanTCN**, **TemporalUNet** | ours, **retired 2026-10-31** | not measured | not measured | n/a |
-| **TAKHeLiPeD, stages 1-2** (calibration network) | ours, novel | gap | **82.8%**¹² *(superseded recipe 82.2%⁹; old recipe 77.7%⁴)* | n/a |
-| **TAKHeLiPeD, stages 1-3** (+ object memory) | ours, novel | gap | **86.3%**¹² *(superseded architecture 86.0%¹¹; with the coasting head 85.9%⁹; old recipe 83.3%⁵)* | n/a |
+| **TAKHeLiPeD, stages 1-2** (calibration network) | ours, novel | **29.5%**¹⁴ | **82.8%**¹² *(superseded recipe 82.2%⁹; old recipe 77.7%⁴)* | n/a |
+| **TAKHeLiPeD, stages 1-3** (+ object memory) | ours, novel | **46.0%**¹⁴ | **86.3%**¹² *(superseded architecture 86.0%¹¹; with the coasting head 85.9%⁹; old recipe 83.3%⁵)* | n/a |
 
 **DR-SPAAM `T=5` at 75.6% on FROG was the number to beat, and the frozen detector clears it by 10.7 pp.**
 That margin was **7.7 pp** while this file still led with the old recipe's 83.3%, and the sentence outlived the number by three weeks -- which is the failure the stale-number audit existed to fix and the reason each cell here now carries the configuration it was measured on.
@@ -92,11 +92,23 @@ When quoting FROG, always say which `d`.
 Credit it as his in anything published from this repo; only the pybind11 binding, the Python wrapper and the evaluation harness around it are ours.
 It is a classical reference point, not a baseline taken from any of the papers compared here (`../docs/RESEARCH.md` §2.1), and the formal reference to cite is `../TODO.md` §A.
 
+¹⁴ **DROW-native, one seed, 2026-11-05** (`CHANGELOG.md`), trained and scored at DROW's own **29.99 m** sensor limit rather than FROG's 10 m, on DROW test's 2,428 annotated frames. **Read it as a floor, not a competitive number**: it is 24.3 pp below the weakest published DROW baseline here, which was the expectation recorded before the run. What it establishes is the memory's contribution -- **+22.56 pp over its own candidates against +3.49 pp on FROG, 6.5x** -- and at matched false positives (its own threshold 0.1358, 7.699 FP/frame) it reaches **93.88% recall against the candidates' 90.38%**, so the recall it appears to lose at the shared 0.3 threshold is decalibration. Two cautions: the 29.5% stage-2 cell is its **best** checkpoint through stage 2's **own** decoder, while the 46.0% row's internal baseline is the **averaged** checkpoint through the NMS candidate decoder (23.45%), so the two cells are not a 16 pp gain; and DROW annotates in bursts of 20 over 7.5 s with 24 s gaps that exceed the slots' 10 s fade, so no gradient crossed a gap and the figure measures this memory over 7.5 s windows (`dataset-properties.md`).
+
+¹³ **PeTra is cited only, and that is not a failed attempt.** There is no PeTra implementation and no PeTra weights in this repository -- only its published figures, including the 28.17 ms GPU timing -- so it has never run here and cannot be timed under this project's CPU protocol. Filling either `gap` cell would mean reimplementing it from the paper, which is the thing that produced an untrustworthy number once already (footnote 2). Moved here from `TODO.md` on 2026-11-05, so the question stops returning as a queue item.
 ¹ The LFE paper only ever evaluates on FROG's 720-beam scans.
 This project *has* run LFE cross-dataset by zero-padding shorter scans to 720 (DROW: 24.0% / 11.7%), but that padding is our own invention, is not described in the paper, and does not resample to FROG's 0.25°/beam angular resolution — beam index stops meaning the same physical angle.
 Degraded by construction, so it is recorded here as a footnote rather than reported as a result.
 ² Li2Former was never evaluated on FROG by its authors. **The rest of this footnote was wrong and is corrected (2026-11-01).** Training does complete here: `AGENTS.md` I4's DirectML premise predates this host having ROCm, and on ROCm it trains at 2.09 GiB and 259 ms/frame. What blocks the cell is not the hardware but the model -- `Li2FormerDetector` is **this project's reading of the paper's prose, not the paper's architecture**, so a number from it would not be Li2Former's. The authors do publish code (`ai-winter/Li2Former-v1`, GPL-3.0, **no weights and no training recipe**), and `OfficialLi2FormerDetector` now wraps it; the cell stays `gap` until that port reproduces their DROW figure, which is the only check available without weights to match. **It does not reproduce it, and that is now measured (2026-11-03): 48.1% on DROW test at `d = 0.5` and 40.5% at `d = 0.3`, against their 76.4% and 72.5%** -- see the reproduction section below for the four-cell check that rules the harness out of the gap. So the FROG cell stays `gap`, now for a stated reason rather than a pending one: a FROG number from a port that misses their own DROW figure by 28 pp would not be Li2Former's either, and filling the cell would need a recipe that reproduces DROW first.
-³ **63.0%** single-frame, the figure the acceptance criteria were written against and `docs/PAPER.md` argues from (2026-09-10's history ablation). These three are the project's own first line of work, superseded by TAKHeLiPeD and trained on nothing since 2026-09; `SpaceTimeCNN` is kept so the decisions made on it stay reproducible and removes the other two. The `T=5, dtime=10` re-measurement this footnote used to promise was never run and is not planned: a temporal window is not what the project proposes any more.
+³ **63.0%** single-frame, the figure the acceptance criteria were written against and `docs/PAPER.md` argues from. **The ablation it comes from, in full** (2026-09-10, moved here from `TODO.md` on 2026-11-05 when that queue's closed sections were deleted): four history ablations of one epoch-1 checkpoint, identical weights, the whole `frog_16-41` test recording, 50,088 frames.
+
+| history | wp-AUC | vs full | what the step removes |
+| --- | --- | --- | --- |
+| full | **67.1%** | -- | -- |
+| shuffled | **66.6%** | **-0.5** | ordering and direction, i.e. **motion** |
+| frozen | **63.0%** | -4.1 | the independent observations, i.e. **aggregation** |
+| zeroed | 42.0% | -25.1 | nothing further -- frozen and zeroed carry the same information, so the extra 21 pp is pure out-of-distribution damage |
+
+**The temporal window was worth 4.1 pp and essentially none of it was motion**: destroying the ordering cost 0.5 pp, removing the independent looks 3.6 pp. `SpaceTimeCNN` was a five-frame **averager**, and a 476K-parameter five-frame model beat a 180K single-frame one by 0.6 pp by averaging rather than by seeing motion. That is the measurement that redirected the project away from short temporal windows, and it is why TAKHeLiPeD's memory is scored over tens of seconds rather than five frames. These three are the project's own first line of work, superseded by TAKHeLiPeD and trained on nothing since 2026-09; `SpaceTimeCNN` is kept so the decisions made on it stay reproducible and removes the other two. The `T=5, dtime=10` re-measurement this footnote used to promise was never run and is not planned: a temporal window is not what the project proposes any more.
 ⁴ The slot study's backbone, measured 2026-09-19 over the whole FROG `official` test split: **77.66%**, the no-temporal stage 2 (seed 0) whose decoded candidates the object memory in the row below rescores, at 2.620 false positives per frame and 88.8% recall at the 0.3 operating point.
 That backbone's own three-seed mean is **77.23%**; the default architecture, which kept the coarse temporal convolution (removed 2026-10-08), means **77.92%** over three seeds. The pooled per-run spread across five three-seed arms is ~0.95 pp (`interpreting-evaluation.md`), so those two are a tie, not a ranking.
 Both are scored under the limit-beam decoding rule and the running time step adopted 2026-09-17.
@@ -138,14 +150,36 @@ Everything marked `check paper` should be transcribed from the paper, not measur
 ### Our reproductions are a harness self-test, not a result
 
 This project *has* independently reproduced several published numbers, and those reproductions stay useful for one specific purpose: **checking the evaluation harness against a known answer.**
-On DROW the pipeline lands close — DROW3 66.5% against a published 61.9%, DR-SPAAM 68.1% against 69.6%.
+On DROW the pipeline **undershoots**, and that is the correction of 2026-11-04: DROW3 **66.5%** against the **71.7%**
+its own weights were published at, DR-SPAAM **69.08%** (streaming) against the **70.3%** of the paper those weights
+come from.
+
+**The `61.9%` this file carried for DROW3 was never a published figure, and the defect was the citation, not the
+harness.** `library/setup.py` downloads `final-WNet3xLF2p-T5-odom.rot-trainval-50ep.pth.tar`, and the filename states
+the configuration: late fusion, five scans, **odometry rotation correction**, trained on **train + validation**. That
+is exactly the "DROW3x + validation" curve of Beyer et al.'s Fig. 4 — person class, test split, 0.5 m radius, the
+same quantity `_prec_rec_2d` computes — published at **71.7% AUC** (peak-F1 70.5, EER 69.5); the same paper's
+train-only model is **68.1%**. **61.9% matches no row of any primary source.** The nearest values anywhere are 61.5
+and 61.4, and those are the *peak-F1* and *EER* — not the AUC — of the `T=1, no time` configuration, which is not the
+model we run.
+
+**So the overshoot rule never fired on DROW.** What was logged for two months as +4.6 pp *over* a published figure is
+**−5.2 pp under** one, and an undershoot has innocent explanations: the merge radius we had to choose, the decoding,
+the frame sample. The direction is what matters for reading the DROW column: every detector in it goes through one
+pipeline that appears to cost 1-5 pp, so **our own DROW numbers are depressed by the same amount and the comparison
+between them stays fair**, while any absolute DROW figure taken from here is a floor rather than a match.
 
 **DR-SPAAM's 1.5 pp undershoot was mostly our own wrapper, found 2026-10-10**. The official detector is
 *stateful*: it keeps its spatial-attention template between calls and clears it only at a sequence boundary. Ours re-encoded a
 `T`-scan window from scratch per frame and seeded the template from that window's oldest scan, which is a different detector.
 Scored both ways on DROW test with the published weights, through one decoder and one metric: **windowed 67.84%, streaming
 69.08%** — so the published algorithm is **+1.24 pp** better than what we were calling DR-SPAAM, and our reproduction of it
-moves from −1.5 pp to **−0.52 pp** of the authors' 69.6%. **Every DR-SPAAM accuracy figure in this file is the windowed form and
+moves from −1.5 pp to **−0.52 pp** of the authors' 69.6%. **That reference is itself uncited, found 2026-11-04 beside
+the DROW3 correction above**: 69.6% matches no row of the DR-SPAAM paper, whose Table I reports **70.3** AP at 0.5 m
+on the test split, nor of the later `2D_lidar_person_detection` repository, which reports **72.3** for a retrained
+model. Our weights are `dr_spaam_e40.pth` and our wrapper uses the later release's 56-point cutouts, so the
+reproduction gap is **−1.2 pp** or **−3.2 pp** depending on which is the right row — not −0.52 pp. Until the
+provenance audit queued in `TODO.md` settles it, treat the DR-SPAAM DROW cell as uncited. **Every DR-SPAAM accuracy figure in this file is the windowed form and
 understates the baseline by about that much**, on all three datasets.
 
 **Its cost is misreported in the opposite direction.** The windowed form runs the first two conv blocks five times per frame
@@ -391,6 +425,98 @@ The third job measured that as-published row deliberately, and it reproduces the
 frames: **−18.1%** at threshold 0.3 and **3.7x** at 0.9, against the −11.8% and 8x measured on `transferred`. The two
 `official` arms' candidate columns are **bit-identical**, which is the control proving the override touches stage 3
 and nothing else (`interpreting-evaluation.md`).
+
+## FROG at 0.5 deg: halving the angular resolution costs about a point, and the memory carries none of the repair
+
+One `official` chain retrained on every second beam -- 360 beams over 180 deg, 45 sectors, no padding,
+`--beam-stride 2` on every stage -- against the frozen three-seed headline at FROG's native 0.25 deg. Both on
+FROG `official` test, 50,088 frames, 153,655 people, every annotated frame; stride 5 agrees to 0.02 pp.
+
+**The decimated chain was run twice**, because the first arm's averaging window had been ranked at the wrong
+angular spacing ([`gotchas.md`](gotchas.md)). The **corrected** arm is the measurement: its window was ranked on
+its own 0.5 deg val split, exactly as the headline's was. The mis-ranked arm is kept beside it because the pair
+differ in nothing else, which is what prices the defect.
+
+| | 0.25 deg, 3 seeds | **0.5 deg, correct window** | 0.5 deg, mis-ranked window |
+| --- | ---: | ---: | ---: |
+| **whole detector, wp-AUC** | **86.30%** (86.13 / 86.31 / 86.44, sd 0.16) | **85.28%** (**-1.02 pp**) | 85.42% (-0.88 pp) |
+| the same at 0.3 m | 85.20% | 84.16% (-1.04 pp) | 84.35% (-0.85 pp) |
+| candidates (stage 2, averaged weights) | 82.79% (sd 0.10) | **82.18%** (-0.61 pp) | 81.74% (-1.05 pp) |
+| **the memory's contribution** | **+3.51 pp** (sd 0.12) | **+3.10 pp** | +3.69 pp |
+| recall / precision, AP-optimal | 84.8% / 73.2% | 88.2% / 69.6% | 88.3% / 68.1% |
+| recall at each arm's own threshold | 95.1% (94.9 / 95.3 / 95.2) | 94.2% | 95.3% |
+| FP/frame, AP-optimal | 0.95 (0.87-1.02) | 1.183 | 1.271 |
+| candidate FP/frame, AP-optimal | -- | 2.536 | 2.914 |
+
+**The cost is about a point, and the memory does not repair it.** Stage 2 at half the beams is **0.61 pp** behind
+and the whole detector **1.02 pp**, so the deficit *grows* through the memory rather than shrinking. The memory is
+worth **+3.10 pp** here against **+3.51** at full resolution. That reverses what the mis-ranked arm appeared to
+show, and the reversal has a mechanism: a weaker stage 2 leaves the memory more to remove. Fixing the window cut
+candidate false positives from 2.914 to 2.536 per frame and lifted candidate precision from 49.4% to 52.8%,
+after which the memory's own false positives fell 1.271 -> 1.183 at unchanged recall (88.3% -> 88.2%) -- less
+work done, because less was left to do. **The memory's contribution is therefore not a stable statistic for
+comparing two arms**: it moved 0.59 pp between two runs that differ only in their stage-2 weights, while the
+whole detector moved 0.14. What survives is the weaker claim: at half the beams the memory still adds about
+**3 pp**, within half a point of what it adds at full resolution, and one seed per arm cannot say which side.
+
+**What the mis-ranked window cost, exactly.** The two 0.5 deg arms differ in one thing, so the difference is the
+defect's price. Candidates rose **+0.44 pp** (81.74 -> 82.18) -- an exact figure with no seed noise in it, since
+the candidate column is a deterministic function of the stage-2 weights. The whole detector moved **-0.14 pp**
+(85.42 -> 85.28), inside stage-3 seed noise, the headline's three seeds spanning 0.31 pp. So the defect was worth
+about half a point of stage 2 and nothing measurable after the memory.
+
+**The -0.88 pp was reported as an upper bound, and that framing was wrong.** It assumed a better stage 2
+propagates to a better whole detector. It did not: stage 2's deficit nearly halved while the whole detector's
+grew by 0.14 pp. The resolution cost is now measured on the correctly ranked arm -- **-1.02 pp**, one seed
+against three -- rather than bounded by the mis-ranked one, and "about a point" is the honest reading until a
+second seed exists.
+
+**The arms sit at different AP-optimal thresholds** (0.116 for the corrected arm, 0.136 for the mis-ranked one,
+~0.073 for the headline), so the precision/recall and exchange-rate rows are not a like-for-like trade. The
+own-threshold row is not like-for-like either, because each arm is held at *its own* candidate FP rate: the
+corrected arm reaches 94.2% recall at 2.536 FP/frame where the mis-ranked one reaches 95.3% at 2.914, which is a
+cleaner input rather than a worse memory. Its exchange rate reads 10.4 against the mis-ranked 12.1 and the
+headline's 6.8 for the same reason -- a different point on its own curve.
+
+**Decimation does not make inference cheaper -- it makes it dearer.** Measured 2026-11-06 on the CPU, which is
+the device this project is judged on: four threads, 2,000 consecutive scans, batch 1, back to back on a host idle
+but for the two jobs, both arms through the same `tracking_baselines.py latency`.
+
+| phase | 0.25 deg | **0.5 deg** | difference |
+| --- | ---: | ---: | ---: |
+| stage 2 | 8.41 ms (p99 9.35) | **10.29 ms (p99 12.12)** | **+1.88 ms, +22%** |
+| decode | 1.34 ms (p99 1.94) | 1.26 ms (p99 1.83) | -0.08 ms |
+| memory | 5.99 ms (p99 6.43) | 5.89 ms (p99 6.43) | -0.10 ms |
+| **total** | **15.76 ms (p99 17.24)** | **17.46 ms (p99 19.82)** | **+1.70 ms, +11%** |
+
+**Halving the beams made stage 2 22% slower.** This was predicted to be where decimation paid, and it is not: the
+prediction was that half the beams would be roughly half the convolution. The memory and the decode are flat, as
+expected -- the memory runs over 256 candidate slots and never sees a beam -- so the whole move is stage 2's.
+
+**The explanation is a hypothesis, not a measurement.** The likeliest is thread efficiency: at four threads a
+720-beam tensor fills the threads where a 360-beam one does not, so the halved arm pays the same per-operation
+overhead over less work, and its p99 degrading further than its median (+2.77 ms against +1.88) fits that. What
+would settle it is the same pair at one thread and at eight; nothing here establishes the cause.
+
+**So the resolution question now has both halves, and they agree.** 0.5 deg costs **1.02 pp** of whole-detector
+accuracy *and* **11%** more CPU time per frame. Against FROG's 25 ms budget both arms still fit, so this is a
+margin question rather than a feasibility one -- but there is no version of this trade in which decimating to meet
+a common angular spacing is the cheap option. `step3a`'s own GPU figure says nothing either way, and the two
+decimated arms are the proof: the **same** architecture at the same slot count reads **3.58 ms** in the morning
+run and **5.22 ms** in the evening one, 46% apart, because the host was slower throughout the second (596 s
+against 398 s for an identical epoch). It is a host-load figure.
+
+**Training is the one place decimation pays**, and it is not a deployment cost: 37 s against 50 s for a stage-2
+epoch, 397 s against 582 s for a stage-3 one, since both replay stage 2 over every beam. Read that pair off the
+morning runs only -- the corrected arm's epochs cost 596 s on the slower evening host, which says nothing about
+the beam count.
+
+**What it means for `docs/PROPOSAL.md` §5.3.** The proposal resamples every scan to one fixed angular spacing so
+that a kernel covers the same angle on any sensor, and §6.1 leaves the exact value "to confirm". This is the first
+measurement of what that spacing is worth: at **half** FROG's, about a point of whole-detector AP (1.02 pp). So
+the resampler is a real but small effect rather than the requirement the proposal assumed, and a sensor at half
+FROG's resolution is usable without one. It does not settle the *cross-sensor* case the resampler exists for,
+where beam index stops meaning the same angle -- that is DROW and JRDB, not a decimated FROG.
 
 ## Why stage 2 beats LFE and DR-SPAAM: what it is *not*
 

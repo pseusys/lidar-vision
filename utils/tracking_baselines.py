@@ -863,23 +863,29 @@ def run_report(args) -> None:
 
 
 def run_latency(args) -> None:
-    """E22: stage 2 with candidate decoding, then the memory, one scan at a time on one stream, timed stage by stage."""
+    """E22: stage 2 with candidate decoding, then the memory, one scan at a time on one stream, timed stage by stage.
+
+    The sensor comes from `--dataset` / `--frog-mode` / `--beam-stride`, not from a literal here: timing a
+    decimated checkpoint on the full grid reports the cost of twice the beams it was trained on, which is the
+    opposite of what the sweep is for (`memory/gotchas.md`).
+    """
     import torch
-    from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
     from takheliped.detectors.takheliped import free_range_profile
-    from train_takheliped import (MAX_RANGE_M, SECTOR_BEAMS, TOP_P, beam_frame_votes, calibration_network, decode_candidates,
-                                  detect_device, laser_angles, object_memory)
+    from train_takheliped import (MAX_RANGE_M, SECTOR_BEAMS, TOP_P, beam_frame_votes, calibration_network, dataset_spec,
+                                  decode_candidates, detect_device, laser_angles, object_memory)
 
     if args.threads:
         torch.set_num_threads(args.threads)
     device = torch.device("cpu") if args.device == "cpu" else detect_device()[0]
     synchronise = str(device).startswith("cuda")
-    angles = frog_laser_angles(720)
+    spec = dataset_spec(args)
+    angles = spec.angles()
     net = calibration_network(torch.load(args.stage2, map_location="cpu", weights_only=False), angles).to(device).eval()
     checkpoint = torch.load(args.memory, map_location="cpu", weights_only=False)
-    ds = FROG_Dataset(split="test", mode="official", auto_download=False, verbose=False, missing_return_m=None)
+    ds = spec.load("test", None, args.frog_mode)
     s = int(np.argmax([len(x) for x in ds.scans]))
-    scans, poses = ds.scans[s][:args.frames + 1], np.asarray(ds.odoms[s]["xya"])[:args.frames + 1]
+    scans = spec.thin(np.asarray(ds.scans[s][:args.frames + 1], np.float32))
+    poses = np.asarray(ds.odoms[s]["xya"])[:args.frames + 1]
     slots, memory = None, None
     timings = {"stage2": [], "decode": [], "memory": []}
 
@@ -906,7 +912,7 @@ def run_latency(args) -> None:
             free = free_range_profile(torch.from_numpy(np.asarray(scan, np.float32)[None]), 720 // SECTOR_BEAMS, MAX_RANGE_M).to(device)
             out = memory.step(torch.from_numpy(xy).to(device), torch.from_numpy(score).to(device), torch.from_numpy(valid).to(device),
                               torch.from_numpy(np.asarray(pose, np.float32)[None]).to(device), torch.full((1,), 0.025, device=device), slots,
-                              cand_features=torch.from_numpy(feat).to(device), free_range=free, angles=laser_angles(device))
+                              cand_features=torch.from_numpy(feat).to(device), free_range=free, angles=laser_angles(device, spec))
             slots = out.slots
             t3 = tick()
             if i:
@@ -975,7 +981,9 @@ def run_summary(args) -> None:
     log(f"wrote {args.out / 'summary.json'}")
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    from train_takheliped import DATASETS, DEFAULT_DATASET, DEFAULT_MODE
+
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="command", required=True)
     for name in ("rule", "track", "arms", "report", "latency", "merge", "summary"):
@@ -998,7 +1006,16 @@ def main() -> None:
             p.add_argument("--device", choices=("auto", "cpu"), default="auto")
             p.add_argument("--frames", type=int, default=2000)
             p.add_argument("--threads", type=int, default=0)
-    args = ap.parse_args()
+            # The sensor the checkpoints were trained for. Timing a decimated network on the full grid measures
+            # the wrong thing silently, because the network is fully convolutional over beams.
+            p.add_argument("--dataset", choices=tuple(DATASETS), default=DEFAULT_DATASET)
+            p.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default=DEFAULT_MODE)
+            p.add_argument("--beam-stride", type=int, default=1, help="keep every Nth beam; must match the checkpoints' own")
+    return ap
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     if hasattr(args, "arms"):
         args.arms = parse_arms(args.arms) if args.arms else ARMS
     args.out.mkdir(parents=True, exist_ok=True)

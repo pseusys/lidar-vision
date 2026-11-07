@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 sys.path.insert(0, str(Path(__file__).parent.parent / "utils"))
 
 from train_takheliped import (  # noqa: E402
-    DT_AVERAGE_FRAMES, MAX_DT_S, MIN_DT_S, SequenceCandidates, Split, decimate, frame_periods, pack,
+    FROG, MAX_DT_S, MIN_DT_S, SequenceCandidates, Split, decimate, frame_periods, pack,
 )
 from slot_experiments import bernoulli_keep, burst_keep, periodic_keep  # noqa: E402
 
@@ -150,7 +150,7 @@ class TestAveragedGaps:
 
         out = decimate(split, keep, "averaged")
 
-        assert np.allclose(out.dt, frame_periods(out.data.time, out.offsets, out.lengths, DT_AVERAGE_FRAMES), atol=0)
+        assert np.allclose(out.dt, frame_periods(out.data.time, out.offsets, out.lengths, FROG.dt_average_frames), atol=0)
 
     def test_a_single_drop_barely_moves_the_averaged_step(self):
         """Under a millisecond, against the 25 ms the exact mode would add: this is why a naive sweep measures nothing."""

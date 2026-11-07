@@ -1,6 +1,6 @@
 # Dataset properties — what the data itself constrains
 
-*keywords:* time span, temporal horizon, receptive field, how long, how fast, people move, stationary people, displacement, frame rate, Hz, annotation density, person density, phantom persistence, architecture constraints, cross-dataset, DROW vs FROG, ceiling
+*keywords:* time span, temporal horizon, receptive field, how long, how fast, people move, stationary people, displacement, frame rate, Hz, annotation density, person density, phantom persistence, architecture constraints, cross-dataset, DROW vs FROG, ceiling, DROW splits, corrupt labels, rated range, dt window, 29.99 m, annotation bursts, every 5th scan, burst period, 31.5 s, supervision per chunk, class mix, wheelchair, walker, 56% not pedestrian, trained as background
 
 **Measured behaviour of the recordings, not their file formats** — the formats are in [`data-model.md`](data-model.md), model scores in [`performance-log.md`](performance-log.md).
 
@@ -24,9 +24,10 @@ static detector's output?** Everything below is an *upper bound* from
 | false positives now, per frame ² | 1.53 | 4.15 | 0.21 |
 | after a 1 s consecutive-trail filter | 1.05 (**-32%**) | 2.20 (**-47%**) | 0.11 (**-48%**) |
 
-¹ DROW3 measures 66.5% here against its authors' published 61.9% — a known
-harness overshoot on DROW that predates this analysis (`performance-log.md`), not
-a property of the data.
+¹ DROW3 measures 66.5% here against the **71.7%** its own weights were published
+at — an undershoot of the ordinary, innocent kind (`performance-log.md`). The
+"+4.6 pp harness overshoot" this footnote described until 2026-11-04 was a
+mis-citation: 61.9% matches no row of any primary source.
 
 ² On the **longest unbroken person-free run**, the subset the oracle needs to build
 trajectories at all. Across *all* 72,533 person-free frames the same detectors measure
@@ -413,7 +414,7 @@ per-object gap-bridging and a map does not help it.
 | beams / FoV | 720 / 180° / 0.25° | 450 / 225° / 0.5° |
 | sensor height | knee (~35 cm) | knee |
 | **rate** | **40.0 Hz** (corrected 2026-09-17: the old 26.2 Hz was the median of bunched timestamps; every FROG duration in seconds on this page derived from 26.2 Hz is 1.53x too long) | **12.7 Hz** (per-file mean; the median interval says 10 Hz only because timestamps are rounded to 0.05 s, `noise-structure.md`) |
-| annotated scans | **every one** | **5.0%** — every 5th scan, 0.39 s apart |
+| annotated scans | **every one** | **5.0%** -- in bursts of 20 at every 5th scan, 24 s apart (below) |
 | **people per annotated frame** | **3.06** (test; 3.13-4.08 across recordings) | **0.81** |
 | classes | pedestrian only | pedestrian / wheelchair / walker |
 | odometry, per frame | 1.88 cm, up to 0.4° (p95) | 0.32 cm |
@@ -425,6 +426,108 @@ per-object gap-bridging and a map does not help it.
 2. **Person density differs 3.8x**, so AP is not comparable across the two: precision is a base-rate-sensitive quantity and FROG hands a detector nearly four times as many chances to be right per frame.
 3. **Annotation density differs 20x.** DROW's 2,428 labelled frames are the binding limit on any supervised temporal model trained there — and the reason the motion table above is thin on the DROW side. Densifying it by *interpolating between real annotations* (never by pseudo-labelling with a detector, whose 1.4-1.9 phantoms/frame would be taught as positives) is tracked as a research item.
 4. **Beam count and angular resolution differ**, so a beam-indexed architecture is not transferable without resampling; beam index does not mean the same physical angle in the two.
+
+### More than half of what DROW annotates is not a pedestrian, and we train all of it as background (2026-11-05)
+
+Counted from the raw `.wp` / `.wc` / `.wa` files. This page had the class *list* and never the class *mix*:
+
+| | pedestrian | wheelchair | walker | **not pedestrian** |
+| --- | --- | --- | --- | --- |
+| train | 23,910 | 14,455 | 2,047 | **40.8%** |
+| val | 3,102 | 5,678 | 219 | **65.5%** |
+| test | **1,976** | **1,970** | **581** | **56.4%** |
+
+**On test there are as many wheelchairs as pedestrians.** A person in a wheelchair is a person, and at knee
+height the return is person-shaped; a walker is a person standing behind a metal frame. The trainer reads
+`ds.det_wp` only, so each of those 2,551 test objects is a knee-height person-like return that the loss teaches
+as **background**, and that the metric scores as a **false positive** if the network finds it anyway.
+
+**Two separate costs, and only one of them is bounded.** The scoring cost is bounded: 2,551 objects over 2,428
+test frames is **1.05 per frame**, so at most that much of a measured false-positive rate is a correct detection
+counted as an error -- up to 14% of the candidates' 7.699 and **43% of the memory's 2.417**. The training cost is
+not bounded by anything: 40.8% of the annotated objects in the train split carry a background target, which is
+contradictory supervision on the exact shape the network exists to recognise.
+
+**It is a choice nobody examined, not a bug.** `DatasetSpec` records `classes=("pedestrian", "wheelchair",
+"walker")` and the parameter table prints all three, while the targets have only ever been the first. The
+published detectors' own architecture carries **four** class logits (`architectures.py`: `n_cls = 1 if
+pedestrian_only else 4`) and the weights this project downloads are the one-class inference build, so what their
+*training* did with wheelchairs is a question for the provenance audit rather than something to assume.
+
+### DROW annotates in bursts of 20, not uniformly, and the gaps are longer than the memory's fade (2026-11-05)
+
+The cell above used to read *"5.0% -- every 5th scan, 0.39 s apart"*, and those two halves contradict each
+other: every 5th scan is 20%, not 5%. Measured from the raw `.wp` annotation ids, both are describing something
+real, and neither describes it correctly.
+
+| | train | val | test |
+| --- | --- | --- | --- |
+| annotations | 17,665 | 3,919 | 2,428 |
+| **bursts** | **890** | **199** | **122** |
+| annotations per burst, median | **20.0** | 20.0 | 20.0 |
+| gap *inside* a burst | **5 scans** (95.4% of all gaps) | 5 | 5 |
+| burst span | **95 scans = 7.5 s** | 95 | 95 |
+| **burst to burst** | **400 scans = 31.5 s** | 400 | 400 |
+
+So the protocol is: **20 annotations at every 5th scan, spanning 7.5 s, then about 24 s of nothing, repeating** --
+identical in all three splits, which makes it the annotators' procedure rather than an artefact. "Every 5th
+scan" is right *inside* a burst; "5.0%" is right *globally*; and the global share is 5.18% because the 24 s gaps
+take three quarters of every recording.
+
+**Two consequences, and both change a decision.**
+
+* **A 10 s chunk holds at most 20 annotated frames and about 6 on average.** 10 s is 127 frames, which is 0.32
+  of a burst period, so a window placed at random carries `127 x 0.0518 ~ 6.6` supervised frames and one placed
+  on a burst carries 20 -- against FROG's ~400, every frame of which is annotated. The deficit per rollout is
+  **20x at best and ~60x typical**, not the 16x computed from a uniform every-5th assumption.
+* **The 24 s unannotated gap is longer than the slots' 10 s fade time.** A slot spawned in one burst is retired
+  before the next burst starts, so **no gradient ever crosses a gap**: on DROW every rollout is effectively one
+  isolated 7.5 s observation, whatever the chunk length. That is a structural reason DROW cannot reward a
+  long-horizon memory, separate from having less data, and it is measured rather than argued.
+
+### DROW per split, measured through the trainer's own loader (2026-11-05)
+
+Measured while making the trainer dataset-agnostic, which is the first time DROW was read through the path that
+trains on it. Scan and annotation counts reproduce this page's table exactly; the rest is new.
+
+| | train | val | test |
+| --- | --- | --- | --- |
+| scans | 341,147 | 74,745 | 48,131 |
+| annotated | 17,665 | 3,919 | 2,428 |
+| labels | 23,906 ¹ | 3,102 | 1,976 |
+| **people per annotated frame** | **1.35** | 0.79 | **0.81** |
+| furthest label | 19.09 m | 17.73 m | 14.41 m |
+| labels at or past 10 m | 2,809 (11.8%) | 197 (6.4%) | 159 (8.0%) |
+
+¹ After four corrupt annotations are dropped: 316, 352, 498 and 716 m, all in train, in a care facility with a
+30 m SICK S300. They are readings of the annotation tool, not distant people, and the trainer removes anything
+past the **sensor's** rated range -- not past the run's `--max-range-m`, which is a different question, since
+the 2,809 real people past 10 m are precisely what the 29.99 m limit exists to keep.
+
+**The 0.81 people per annotated frame on this page is a test figure**, as FROG's 3.06 is. DROW's train split is
+**1.35**, so the density ratio against FROG is 3.8x on test and 2.3x on train. Quote the one that matches the
+split being discussed.
+
+**Two consequences of the owner's 29.99 m range limit, both measured.**
+
+* **It makes DROW's missing-return marker self-cancelling.** DROW holds no non-finite and no non-positive
+  reading in any split; a missing return is a finite value at the sensor limit, 29.96-29.99 m. At a 29.99 m
+  limit `sanitize_ranges` maps the 29.99 marker onto "nothing within range" and `voting_beams` lets no such
+  beam cast a vote, so no `missing_return_m` rewrite is owed the way FROG's `+inf`/61.0 needs one.
+* **It puts three times FROG's scale into stage 2 at initialisation.** `beam_features` emits metres and
+  `ConvNeXtBlock` carries its input forward on an un-normalised residual path. On 256 real annotated frames at
+  the adopted widths and a fixed seed, the initial logit spread rises from sd 0.167 (FROG at 10 m) to 0.301,
+  and the extreme beam from 1.07 to 3.78, against a saturation line near 4 where `sigmoid'` falls under 0.02.
+  Bounded rather than fatal, and the first thing to look at if a DROW stage 2 plateaus early.
+
+**The time-step averaging window stays in frames, and this is the measurement that says so.** Stage 3's
+running mean of the stamped intervals is 32 intervals long because FROG stamps three scans to a timestamp.
+DROW's defect is different -- stamps are granular to 0.05 s against a 0.0787 s period -- but the window that
+serves it is the same: across twelve real files the error against each file's own mean period is **0.5-0.9% at
+32 intervals**, 1.7% at 10, 2.1% at 8, where a *single* interval costs **36%**. Restating the window in
+seconds is what would hurt, not help: 32 FROG frames are 0.80 s, and 0.80 s of DROW is 10 frames. What is
+averaged out is a defect of the stamping mechanism, counted in frames, so frames is its unit -- stated per
+dataset rather than shared, which is the part that was wrong.
 
 ## What the false positives are, and what that rules out
 

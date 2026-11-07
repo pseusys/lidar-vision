@@ -29,11 +29,11 @@ import sys
 import time
 import traceback
 from ast import literal_eval
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from inspect import signature
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -44,14 +44,16 @@ _HERE = Path(__file__).parent
 sys.path.insert(0, str(_HERE.parent / "library"))
 sys.path.insert(0, str(_HERE))
 
+from takheliped.datasets.drow_dataset import DROW_Dataset
 from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from takheliped.detectors import LFEPeaksDetector
 from takheliped.detectors.takheliped import (
-    ASSOCIATIONS, BLOCKS, MAX_RANGE_M, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
-    world_to_sensor,
+    ASSOCIATIONS, BEAM_DIVISOR, BLOCKS, MAX_RANGE_M, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
+    sector_count, world_to_sensor,
 )
 from takheliped.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
-from takheliped.utils.drow_utils import (_prec_rec_2d, _win2global, frame_period_s, project_cartesian_from_polar,
+from takheliped.utils.drow_utils import (_prec_rec_2d, _win2global, frame_period_s,
+                                         laser_angles as drow_laser_angles, project_cartesian_from_polar,
                                          swap_vote_frame, votes_to_detections)
 from train import _safe_auc, beam_heatmap, compute_loss, detect_device, make_targets
 
@@ -72,7 +74,6 @@ FP_BUDGET_TOLERANCE = 1e-9
 TIMED_FRAMES = 2000
 EXTRA_TEST_RADII_M = (0.3,)
 FOCAL_GAMMA = 2.0
-DT_AVERAGE_FRAMES = 32         # intervals in stage 3's running time step; FROG's stamps come in bunches of 3
 LFE_MISSING_RETURN_M = 10.0     # the FROG loader's legacy clamp, kept for LFE-Peaks' candidates only
 MIN_DT_S = 1e-3
 MAX_DT_S = 1.0
@@ -145,32 +146,190 @@ class SequenceCandidates:
     free_range: np.ndarray
 
 
-SECTOR_BEAMS = 8                # stage 2's bottleneck sits three halvings below the beam grid, so a sector is 8 beams
-SECTORS = 720 // SECTOR_BEAMS   # FROG's profile width; the candidate cache is keyed on it
-_ANGLES: Dict[str, torch.Tensor] = {}
+SECTOR_BEAMS = BEAM_DIVISOR     # stage 2's bottleneck sits three halvings below the beam grid, so a sector is 8 beams
+_ANGLES: Dict[Tuple[str, int, str], torch.Tensor] = {}
 
 
-def laser_angles(device) -> torch.Tensor:
-    """FROG's beam grid on `device`, cached per device: `ObjectMemory` needs it to map a slot's bearing to a sector."""
-    key = str(device)
+@dataclass(frozen=True)
+class DatasetSpec:
+    """One recording source, and every parameter that is a property of the data rather than of the model.
+
+    This is the per-dataset table the owner asked for: printed at the head of a run and stored in the checkpoint,
+    so a result states which sensor, rate and range limit produced it instead of leaving that to whoever
+    remembers the command. The values are the measured ones in `memory/dataset-properties.md`, not nominal ones.
+
+    `decimate` keeps every `k`-th beam of the source grid, which is how one common angular spacing is met: FROG
+    halved to DROW's 0.5 deg invents nothing, where resampling DROW upward would invent a return on every depth
+    edge in a dataset whose unknown readings are already open space.
+    """
+
+    name: str
+    source_beams: int
+    fov_deg: float
+    source_spacing_deg: float
+    rate_hz: float
+    max_range_m: float
+    rated_range_m: float
+    annotated_share: float
+    people_per_annotated_frame: float       # on the test split, as `memory/dataset-properties.md` reports it
+    classes: Tuple[str, ...]
+    #: The annotation files holding `classes` after the first, which is the person class the trainer reads.
+    #: DROW writes one file per class and stage 2 only ever opened `.wp`, so its wheelchairs and walkers --
+    #: 56.4% of what its test split annotates -- were trained as background. Naming them here is what lets
+    #: the ignore region find them; it does not make them targets, which is the swappable head's job.
+    other_detections: Tuple[str, ...]
+    dt_average_frames: int
+    grid: Callable[[int], np.ndarray]
+    loader: Callable[[str, Optional[float], str], object]
+    decimate: int = 1
+
+    @property
+    def beams(self) -> int:
+        return self.source_beams // self.decimate
+
+    @property
+    def spacing_deg(self) -> float:
+        return self.source_spacing_deg * self.decimate
+
+    @property
+    def sectors(self) -> int:
+        """The bottleneck profile's width, padded where the three halvings do not divide the beams: DROW's 450 gives 57."""
+        return sector_count(self.beams)
+
+    def angles(self) -> np.ndarray:
+        """This grid's bearings, built by the dataset's own helper and thinned the same way the scans are."""
+        return self.grid(self.source_beams)[::self.decimate]
+
+    def decimated(self, every: int) -> "DatasetSpec":
+        return self if every == 1 else replace(self, decimate=self.decimate * every)
+
+    def load(self, split: str, missing_return_m: Optional[float], mode: str = DEFAULT_MODE):
+        return self.loader(split, missing_return_m, mode)
+
+    def thin(self, scans: np.ndarray) -> np.ndarray:
+        """`scans` on this spec's beam grid: every `decimate`-th beam of the loader's own, contiguous for torch."""
+        return scans if self.decimate == 1 else np.ascontiguousarray(np.asarray(scans)[..., ::self.decimate])
+
+    def real_people(self, polar: np.ndarray) -> np.ndarray:
+        """`polar` `[P, 2]` of (range, bearing), without the labels no sensor of this kind could have produced.
+
+        Applied to every annotation file the spec names, not only the person class: nothing says `.wc` and
+        `.wa` are cleaner than `.wp`, and an ignore region drawn around a label 400 m away would silence a beam
+        that is reading real space.
+
+        DROW carries four annotations at 316-716 m, all in train (`results/scan_anomalies_drow.json`), in a care
+        facility whose S300 is rated to 30 m. A vote regressed towards one is a target the beam it sits on cannot
+        reach, and a positive on a beam reading 29.96 m of empty space.
+
+        The threshold is the **sensor's** rated range and not the run's `--max-range-m`, because those answer
+        different questions: DROW's 3,165 labels between 10 m and 18 m are real people, kept deliberately by
+        training at 29.99 m, where these four are not people at all. Measured, this removes nothing from FROG --
+        its labels stop at exactly 10.00 m, its annotation limit, in all three splits.
+        """
+        people = np.asarray(polar, np.float64).reshape(-1, 2)
+        return people if not len(people) else people[people[:, 0] <= self.rated_range_m]
+
+
+def _frog_loader(split: str, missing_return_m: Optional[float], mode: str):
+    return FROG_Dataset(split=split, mode=mode, auto_download=False, verbose=False, missing_return_m=missing_return_m)
+
+
+def _drow_loader(split: str, missing_return_m: Optional[float], mode: str):
+    """DROW's three directories are its partition, so FROG's `mode` means nothing here and is not consulted.
+
+    Neither is `missing_return_m`: checked across train, val and test, DROW holds no non-finite and no
+    non-positive reading, and writes a missing return as a finite value at the sensor limit (29.96-29.99 m).
+    There is nothing to rewrite, and a 29.99 m range limit makes `sanitize_ranges` map the 29.99 marker onto
+    "nothing within range" on its own -- which is also why `voting_beams` lets no such beam cast a vote.
+    """
+    return DROW_Dataset(split=split, verbose=False)
+
+
+#: FROG, whose `rate_hz` is the corrected 40.01 Hz, not the 26.2 Hz median of its bunched stamps.
+FROG = DatasetSpec(name="frog", source_beams=720, fov_deg=180.0, source_spacing_deg=0.25, rate_hz=40.01,
+                   max_range_m=MAX_RANGE_M, rated_range_m=61.0, annotated_share=1.0, people_per_annotated_frame=3.06,
+                   classes=("pedestrian",), other_detections=(), dt_average_frames=32,
+                   grid=frog_laser_angles, loader=_frog_loader)
+#: DROW at its own sensor limit, the owner's call: a 10 m model cannot represent the 7.3% of its labels past 10 m.
+DROW = DatasetSpec(name="drow", source_beams=450, fov_deg=224.5, source_spacing_deg=0.5, rate_hz=12.70,
+                   max_range_m=29.99, rated_range_m=30.0, annotated_share=0.05, people_per_annotated_frame=0.81,
+                   classes=("pedestrian", "wheelchair", "walker"), other_detections=("det_wc", "det_wa"),
+                   dt_average_frames=32, grid=drow_laser_angles, loader=_drow_loader)
+DATASETS = {spec.name: spec for spec in (FROG, DROW)}
+DEFAULT_DATASET = "frog"        # so every command and every number measured before this flag existed is unchanged
+
+
+def parameter_table(spec: DatasetSpec, max_range_m: Optional[float] = None) -> str:
+    """`spec` as one printable block: what a run is reading, printed where its log begins.
+
+    `max_range_m` overrides the dataset's own where a run was given `--max-range-m`, because the limit a model
+    was trained at is the one that has to be reported beside its number.
+    """
+    rows = [("dataset", spec.name),
+            ("beams", f"{spec.beams}" + (f" (every {spec.decimate} of {spec.source_beams})" if spec.decimate > 1 else "")),
+            ("field of view", f"{spec.fov_deg:g} deg"),
+            ("spacing", f"{spec.spacing_deg:g} deg per beam"),
+            ("sectors", f"{spec.sectors} of {SECTOR_BEAMS} beams"),
+            ("rate", f"{spec.rate_hz:g} Hz"),
+            ("annotated scans", f"{100 * spec.annotated_share:g}%"),
+            ("people per annotated frame", f"{spec.people_per_annotated_frame:g}"),
+            ("classes", ", ".join(spec.classes)),
+            ("range limit", f"{spec.max_range_m if max_range_m is None else max_range_m:g} m"),
+            ("sensor rated to", f"{spec.rated_range_m:g} m, past which a label is corrupt"),
+            ("dt average", f"{spec.dt_average_frames} intervals")]
+    width = max(len(key) for key, _ in rows)
+    return "\n".join(f"  {key.ljust(width)}  {value}" for key, value in rows)
+
+
+def unlearnable_labels(people_polar: Sequence[np.ndarray], max_range_m: float) -> Optional[str]:
+    """One line naming the labels `max_range_m` cannot represent, or `None` when there are none.
+
+    `sanitize_ranges` maps every reading at or past the limit onto it, so a person at 12 m reaches a 10 m model
+    as a beam reporting empty space at 10 m -- while the target is still placed, which asks the loss for a
+    detection the input cannot support. On DROW at FROG's default 10 m that is 8% of the test labels, and
+    nothing about the run would otherwise say so.
+
+    It reports rather than refuses, because item 74 runs this configuration deliberately: a FROG-trained model
+    carries FROG's 10 m onto DROW, and the restricted-label column is what it is scored against.
+    """
+    ranges = np.concatenate([np.asarray(p, np.float64).reshape(-1, 2)[:, 0] for p in people_polar]) \
+        if len(people_polar) else np.zeros(0)
+    past = ranges >= max_range_m
+    if not past.any():
+        return None
+    return (f"  ** {int(past.sum())} of {len(ranges)} labels ({100 * past.mean():.1f}%) lie at or past the "
+            f"{max_range_m:g} m range limit, out to {ranges.max():.1f} m: sanitize_ranges() flattens their beams "
+            f"to the limit, so these are targets the input cannot support.")
+
+
+def dataset_spec(args) -> DatasetSpec:
+    """The dataset a run reads, with `--beam-stride` applied. Every subcommand resolves it the same way."""
+    return DATASETS[getattr(args, "dataset", DEFAULT_DATASET)].decimated(getattr(args, "beam_stride", 1))
+
+
+def laser_angles(device, spec: DatasetSpec = FROG) -> torch.Tensor:
+    """`spec`'s beam grid on `device`, cached: `ObjectMemory` needs it to map a slot's bearing to a sector."""
+    key = (spec.name, spec.decimate, str(device))
     if key not in _ANGLES:
-        _ANGLES[key] = torch.from_numpy(frog_laser_angles(720)).to(device)
+        _ANGLES[key] = torch.from_numpy(spec.angles()).to(device)
     return _ANGLES[key]
 
 
-def build_candidates(ds, candidates_of, top_p: int, radius: float, recordings: int = 0) -> List[SequenceCandidates]:
+def build_candidates(ds, candidates_of, top_p: int, radius: float, recordings: int = 0,
+                     spec: DatasetSpec = FROG) -> List[SequenceCandidates]:
     """Candidates for every recording of `ds`: `candidates_of(s)` gives recording `s`'s per-frame candidates `(score, x, y)` `[K, 3]`
     with the detector's features `[K, C]`; the `top_p` best per frame are kept, with annotations attached."""
     out = []
     for s in range(min(recordings, len(ds.scans)) if recordings else len(ds.scans)):
-        scans = np.asarray(ds.scans[s], np.float32)
+        scans = spec.thin(np.asarray(ds.scans[s], np.float32))
         n = len(scans)
         annotated = np.zeros(n, dtype=bool)
         people = [np.empty((0, 2))] * n
         for d in range(len(ds.det_id[s])):
             i = int(ds.idet2iscan[s][d])
             annotated[i] = True
-            people[i] = np.array([project_cartesian_from_polar(r, phi) for r, phi in ds.det_wp[s][d]], dtype=np.float64).reshape(-1, 2)
+            people[i] = np.array([project_cartesian_from_polar(r, phi) for r, phi in spec.real_people(ds.det_wp[s][d])],
+                                 dtype=np.float64).reshape(-1, 2)
         g = max(1, max(len(p) for p in people))
         frames = candidates_of(s)
         seq = SequenceCandidates(
@@ -178,7 +337,7 @@ def build_candidates(ds, candidates_of, top_p: int, radius: float, recordings: i
             target=np.zeros((n, top_p), bool), pose=np.asarray(ds.odoms[s]["xya"], np.float32), time=np.asarray(ds.scan_time[s], np.float64),
             annotated=annotated, gt_xy=np.zeros((n, g, 2), np.float32), gt_valid=np.zeros((n, g), bool), gt_covered=np.zeros((n, g), bool),
             features=np.zeros((n, top_p, frames[0][1].shape[1] if frames else 0), np.float16),
-            free_range=free_range_profile(torch.from_numpy(scans), scans.shape[-1] // SECTOR_BEAMS, MAX_RANGE_M).numpy().astype(np.float16),
+            free_range=free_range_profile(torch.from_numpy(scans), spec.sectors, spec.max_range_m).numpy().astype(np.float16),
         )
         for i, (c, f) in enumerate(frames):
             order = np.argsort(-c[:, 0], kind="stable")[:top_p]
@@ -223,7 +382,7 @@ def mean_frame_period(time: np.ndarray, offsets: np.ndarray, lengths: np.ndarray
     return frame_period_s([time[int(o):int(o) + int(n)] for o, n in zip(offsets, lengths)])
 
 
-def pack(seqs: Sequence[SequenceCandidates]) -> Split:
+def pack(seqs: Sequence[SequenceCandidates], spec: DatasetSpec = FROG) -> Split:
     g = max(s.gt_xy.shape[1] for s in seqs)
     widened = []
     for s in seqs:
@@ -236,15 +395,15 @@ def pack(seqs: Sequence[SequenceCandidates]) -> Split:
     data = SequenceCandidates(**{f.name: np.concatenate([getattr(s, f.name) for s in widened]) for f in fields(SequenceCandidates)})
     lengths = np.array([len(s.time) for s in seqs])
     offsets = np.concatenate([[0], np.cumsum(lengths)[:-1]])
-    return Split(data, offsets, lengths, frame_periods(data.time, offsets, lengths, DT_AVERAGE_FRAMES))
+    return Split(data, offsets, lengths, frame_periods(data.time, offsets, lengths, spec.dt_average_frames))
 
 
-def decimate(split: Split, keep: np.ndarray, dt_mode: str = "exact") -> Split:
+def decimate(split: Split, keep: np.ndarray, dt_mode: str = "exact", spec: DatasetSpec = FROG) -> Split:
     """`split` with only the frames `keep` marks, as if the sensor had stalled.
 
     The recurrence comparison found the three recurrences tie, and this is the experiment that asks whether the adopted rule's one
     distinguishing property -- decaying over **real elapsed time** -- is worth anything. It cannot be asked on FROG as
-    recorded: `frame_periods` averages the stamped intervals over `DT_AVERAGE_FRAMES`, rightly, so at a
+    recorded: `frame_periods` averages the stamped intervals over the dataset's window, rightly, so at a
     near-constant 40.01 Hz the model has only ever seen a constant step and `exp(-dt * rate)` has been a fixed per-slot
     decay factor by construction. Dropping frames creates the gaps; `dt_mode` decides what the model is told about them.
 
@@ -283,7 +442,7 @@ def decimate(split: Split, keep: np.ndarray, dt_mode: str = "exact") -> Split:
     data = SequenceCandidates(**{f.name: getattr(split.data, f.name)[index] for f in fields(SequenceCandidates)})
     lengths = np.array(lengths)
     offsets = np.concatenate([[0], np.cumsum(lengths)[:-1]])
-    dt = np.concatenate(steps) if dt_mode == "exact" else frame_periods(data.time, offsets, lengths, DT_AVERAGE_FRAMES)
+    dt = np.concatenate(steps) if dt_mode == "exact" else frame_periods(data.time, offsets, lengths, spec.dt_average_frames)
     return Split(data, offsets, lengths, dt)
 
 
@@ -836,6 +995,28 @@ def frame_batch(split: "FrameSplit", frames: np.ndarray, device) -> torch.Tensor
     return torch.from_numpy(split.scans[frames]).to(device)
 
 
+def ignore_beams(scan: np.ndarray, angles: np.ndarray, objects, radius: float, max_range_m: float,
+                 positives: Optional[np.ndarray] = None) -> np.ndarray:
+    """The beams `[N]` an annotated non-person object covers: the ignore region a wheelchair or a walker earns.
+
+    **Built by `make_targets` itself**, with the same radius and the same geometry, so a beam is ignored exactly
+    where it would have been a positive had the object been labelled a person. A second implementation of that
+    neighbourhood would drift from the one the targets use, and these two agreeing is the whole point.
+
+    `positives` subtracts the person beams, and the precedence has to run that way round: a wheelchair standing
+    beside a person must not silence the person. `make_targets`' own class ordering already does this when both
+    classes are passed to it at once -- the person class sorts last and takes the beam -- so this keeps that
+    behaviour while leaving the person targets to their own untouched call.
+    """
+    objects = np.asarray(objects, np.float64).reshape(-1, 2)
+    if not len(objects):
+        return np.zeros(len(scan), bool)
+    labels, _ = make_targets(anchor_ranges(scan, max_range_m), angles, {3: [tuple(o) for o in objects]},
+                             vote_collect_radius=radius)
+    mask = labels > 0
+    return mask if positives is None else mask & ~np.asarray(positives, bool)
+
+
 def anchor_ranges(scans: np.ndarray, max_range_m: float) -> np.ndarray:
     """Ranges as the network read them (`sanitize_ranges`), for everything that anchors on a beam's endpoint -- vote decoding and
     training targets. Raw scans there would put a missing return's votes at infinity, or at FROG train/val's 61.0 m, while the
@@ -952,6 +1133,48 @@ def score_detections(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]], ra
     return result
 
 
+def restrict_to_range(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]], radius_m: float,
+                     detections: bool = False) -> List[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """`evaluate`'s scored frames with everything past `radius_m` of the sensor removed, for item 82's column.
+
+    **A scoring pass, not a run.** The memory must play every candidate it was trained to see -- dropping the far
+    ones before the replay would change what competes for a slot, which is a different detector rather than a
+    restricted score of this one. So this takes the frames the replay already produced and scores them again.
+
+    `detections` chooses between the two readings of the owner's decision, and both are reported because the
+    decision does not pick one. Left off, only the **labels** are truncated, which is what "ground truth
+    truncated at 10 m" says and charges this detector for every vote it places further out. Turned on, the
+    detections go too, which is what a 10 m-trained baseline does by construction, since it cannot represent a
+    position past its own limit. The gap between the two is the price of training at 29.99 m.
+
+    Frames are kept even when nothing survives in them: a frame is the denominator of false positives per frame,
+    so dropping it would deflate that rate rather than restrict it.
+    """
+    out = []
+    for scores, xy, gt in frames:
+        gt = np.asarray(gt, np.float64).reshape(-1, 2)
+        gt = gt[np.linalg.norm(gt, axis=1) <= radius_m] if len(gt) else gt
+        scores, xy = np.asarray(scores), np.asarray(xy).reshape(-1, 2)
+        if detections and len(scores):
+            near = np.linalg.norm(xy.astype(np.float64), axis=1) <= radius_m
+            scores, xy = scores[near], xy[near]
+        out.append((scores, xy, gt))
+    return out
+
+
+def restricted_columns(played: Dict[str, list], radius_m: float) -> Dict[str, Dict[str, Dict[str, float]]]:
+    """Item 82's columns: one replay's frames scored again under both readings of a restricted label set."""
+    columns = {}
+    for reading, detections in (("labels", False), ("labels_and_detections", True)):
+        key = f"within_{radius_m:g}m_{reading}"
+        columns[key] = {side: score_detections(restrict_to_range(played[side], radius_m, detections))
+                        for side in ("candidates", "memory")}
+        for side, row in columns[key].items():
+            print(f"  within {radius_m:g} m, {reading}, {side}: AP {row['ap']:.2%} P {row['precision']:.1%} "
+                  f"R {row['recall']:.1%} FP {row['fp_per_frame']:.3f} over {row['people']} people", flush=True)
+    return columns
+
+
 def coasting_hits(report_xy: np.ndarray, kept_xy: np.ndarray, gt_xy: np.ndarray, radius: float) -> int:
     """How many annotated people `[G, 2]` that no kept candidate `[C, 2]` covers are covered by a coasting report `[R, 2]`, one to one."""
     if not len(report_xy) or not len(gt_xy):
@@ -962,7 +1185,8 @@ def coasting_hits(report_xy: np.ndarray, kept_xy: np.ndarray, gt_xy: np.ndarray,
 
 
 @torch.no_grad()
-def memory_ms_per_frame(model: ObjectMemory, split: Split, device, frames: int = TIMED_FRAMES) -> float:
+def memory_ms_per_frame(model: ObjectMemory, split: Split, device, frames: int = TIMED_FRAMES,
+                        spec: DatasetSpec = FROG) -> float:
     """Milliseconds per `ObjectMemory.step` for one stream, as on the robot, over the first recording's first `frames` frames after one
     untimed warm-up step."""
     model.eval()
@@ -977,7 +1201,7 @@ def memory_ms_per_frame(model: ObjectMemory, split: Split, device, frames: int =
         start = time.perf_counter()
         slots = model.step(batch["xy"][:, t], batch["score"][:, t], batch["valid"][:, t], batch["pose"][:, t], batch["dt"][:, t], slots,
                            cand_features=batch["features"][:, t], free_range=batch["free_range"][:, t],
-                           angles=laser_angles(batch["xy"].device)).slots
+                           angles=laser_angles(batch["xy"].device, spec)).slots
         if synchronise:
             torch.cuda.synchronize()
         elapsed += (time.perf_counter() - start) if t else 0.0
@@ -1021,7 +1245,7 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
     # by reading the loop rather than assumed -- an earlier guess that the `.astype` was the culprit was wrong.
     slice_frames: int = 256, extra_radii: Sequence[float] = (), reset_every_s: Optional[float] = None,
              drift_m_per_s: float = 0.0, heading_deg_per_s: float = 0.0, frames_out: Optional[Dict[str, list]] = None,
-             compute_metrics: bool = True) -> Dict[str, Dict[str, float]]:
+             compute_metrics: bool = True, spec: DatasetSpec = FROG) -> Dict[str, Dict[str, float]]:
     """Play each segment (recording, first frame, frames, warm-up) from empty memory, `streams` at a time, and score every
     `stride`-th annotated frame after its warm-up: the candidates alone, and the candidates rescored plus coasting slots.
     Frames are gathered `slice_frames` at a time, so memory is bounded by streams x slice rather than by the longest recording.
@@ -1062,7 +1286,7 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
                     pose = torch.from_numpy(perturb_poses(pose.cpu().numpy(), since_start, drift_m_per_s, heading_deg_per_s)).to(device)
                 out = model.step(batch["xy"][:, i], batch["score"][:, i], batch["valid"][:, i], pose, batch["dt"][:, i], slots,
                                  reset=torch.from_numpy(due | (t == 0)).to(device), cand_features=batch["features"][:, i],
-                                 free_range=batch["free_range"][:, i], angles=laser_angles(device))
+                                 free_range=batch["free_range"][:, i], angles=laser_angles(device, spec))
                 slots = out.slots
                 rows = np.nonzero(chosen[:, t])[0]
                 if not len(rows):
@@ -1117,49 +1341,104 @@ def evaluate(model: ObjectMemory, split: Split, device, stride: int, streams: in
 
 # ---------------------------------------------------------------- training
 
-def candidate_cache_path(name: str, limit: int, stage2: Optional[Path], mode: str = DEFAULT_MODE) -> Path:
+def partition_tag(spec: DatasetSpec, mode: str) -> str:
+    """What fills the cache key's partition slot: FROG's partition, or the dataset's own name where it has none.
+
+    A decimated chain is tagged too. Its sector count already separates it, and saying it twice costs nothing
+    and reads plainly in a directory listing of 64 cache files.
+    """
+    tag = mode if spec.name == "frog" else spec.name
+    return tag if spec.decimate == 1 else f"{tag}-d{spec.decimate}"
+
+
+def candidate_cache_path(name: str, limit: int, stage2: Optional[Path], mode: str = DEFAULT_MODE,
+                         spec: DatasetSpec = FROG) -> Path:
     """Where split `name`'s candidates are cached: LFE-Peaks' when `stage2` is None, otherwise those of the checkpoint at `stage2`,
     keyed by its run directory, file name and write time, and by the decoder, so a new checkpoint or decoder never reads stale ones.
 
-    `transferred`'s test split is `official`'s person-free complement under the same split name, so the mode is part of the key."""
+    `transferred`'s test split is `official`'s person-free complement under the same split name, so the partition is part of the
+    key; so is the sector count, which is what carries the dataset's beam grid into the name."""
     source = "lfe-peaks" if stage2 is None else f"network-{stage2.parent.name}-{stage2.stem}-{int(stage2.stat().st_mtime)}-nms-mean"
-    return CACHE_DIR / f"{source}_{mode}_{name}_f{CANDIDATE_FLOOR}_p{TOP_P}_s{SECTORS}{f'_first{limit}' if limit else ''}.pkl"
+    return CACHE_DIR / (f"{source}_{partition_tag(spec, mode)}_{name}_f{CANDIDATE_FLOOR}_p{TOP_P}_s{spec.sectors}"
+                        f"{f'_first{limit}' if limit else ''}.pkl")
 
 
-def load_split(name: str, limit: int, stage2: Optional[Path], device, mode: str = DEFAULT_MODE) -> Split:
-    """Cached candidates of every recording of FROG `mode` `name`: LFE-Peaks' when `stage2` is None, otherwise the trained
-    calibration network's at `stage2`, with its decoder features."""
+def candidate_cache_payload(seqs: Sequence["SequenceCandidates"]) -> List[Dict[str, np.ndarray]]:
+    """`seqs` as plain dicts of arrays, so a cache loads from any module rather than only from this script run as `__main__`."""
+    return [{f.name: getattr(s, f.name) for f in fields(SequenceCandidates)} for s in seqs]
+
+
+def write_candidate_cache(path: Path, seqs: Sequence["SequenceCandidates"]) -> None:
+    """Write `seqs` to `path`, **streamed**, because the cache is too big to hold twice.
+
+    `pickle.dumps` builds the entire byte string beside the object graph it is encoding, so writing that way
+    needs about twice the cache. DROW's train split is 341,147 frames at roughly 5 KB each -- some 1.7 GB -- and
+    on 2026-11-05 the second copy raised `MemoryError` after 56 minutes of decoding, with the raw scans and
+    torch already resident. `pickle.dump` to an open file encodes through a 64 KB frame buffer instead.
+
+    The protocol is left at the default, which is what `pickle.dumps` used, so the bytes are unchanged: caches
+    written before this still load, and caches written here load under the old code.
+    """
+    with path.open("wb") as stream:
+        pickle.dump(candidate_cache_payload(seqs), stream)
+
+
+def read_candidate_cache(path: Path) -> List["SequenceCandidates"]:
+    """`path`'s cache, **streamed**, for the same reason `write_candidate_cache` streams: `pickle.loads` needs
+    the whole file as a `bytes` beside the arrays it decodes into."""
+    with path.open("rb") as stream:
+        return [SequenceCandidates(**fields_of) for fields_of in pickle.load(stream)]
+
+
+def decode_split_candidates(name: str, limit: int, stage2: Optional[Path], device, mode: str,
+                            spec: DatasetSpec) -> List[SequenceCandidates]:
+    """`spec`'s `name` split decoded into per-recording candidates: LFE-Peaks' when `stage2` is None, otherwise the trained
+    calibration network's at `stage2`, with its decoder features.
+
+    **This is a separate function so that its locals die before `pack` runs**, which is a memory decision rather than a
+    structural one. The raw dataset is ~614 MB of scans on DROW and the closure holds the network beside it, while `pack`
+    concatenates every field across recordings and therefore needs a second full copy of the candidates -- 1.7 GB on DROW's
+    train split. Holding the dataset across that peak costs 0.8 GB for nothing, and `load_split` used to.
+    """
+    # LFE-Peaks keeps the loader's legacy clamp it was always run with; the network reads raw scans and sanitises them itself
+    ds = spec.load(name, LFE_MISSING_RETURN_M if stage2 is None else None, mode)
+    angles = spec.angles()
+    if stage2 is None:
+        detector = LFEPeaksDetector(peak_height=CANDIDATE_FLOOR)
+
+        def candidates_of(s):
+            return [(c := np.asarray(detector.detect(scan, angles), dtype=np.float64).reshape(-1, 3), np.zeros((len(c), 0)))
+                    for scan in spec.thin(np.asarray(ds.scans[s], np.float32))]
+    else:
+        net = calibration_network(torch.load(stage2, map_location="cpu"), angles).to(device)
+
+        def candidates_of(s):
+            return network_candidates(net, spec.thin(np.asarray(ds.scans[s], np.float32)), device)
+    return build_candidates(ds, candidates_of, TOP_P, MATCH_RADIUS_M, recordings=limit, spec=spec)
+
+
+def load_split(name: str, limit: int, stage2: Optional[Path], device, mode: str = DEFAULT_MODE,
+               spec: DatasetSpec = FROG) -> Split:
+    """Cached candidates of every recording of `spec`'s `name` split, packed into one `Split`."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path = candidate_cache_path(name, limit, stage2, mode)
+    path = candidate_cache_path(name, limit, stage2, mode, spec)
     if path.exists():
-        seqs = [SequenceCandidates(**fields_of) for fields_of in pickle.loads(path.read_bytes())]
+        seqs = read_candidate_cache(path)
     else:
         t0 = time.time()
-        # LFE-Peaks keeps the loader's legacy clamp it was always run with; the network reads raw scans and sanitises them itself
-        ds = FROG_Dataset(split=name, mode=mode, auto_download=False, verbose=False, missing_return_m=LFE_MISSING_RETURN_M if stage2 is None else None)
-        angles = frog_laser_angles(720)
-        if stage2 is None:
-            detector = LFEPeaksDetector(peak_height=CANDIDATE_FLOOR)
-
-            def candidates_of(s):
-                return [(c := np.asarray(detector.detect(scan, angles), dtype=np.float64).reshape(-1, 3), np.zeros((len(c), 0))) for scan in ds.scans[s]]
-        else:
-            net = calibration_network(torch.load(stage2, map_location="cpu"), angles).to(device)
-
-            def candidates_of(s):
-                return network_candidates(net, ds.scans[s], device)
-        seqs = build_candidates(ds, candidates_of, TOP_P, MATCH_RADIUS_M, recordings=limit)
-        # plain dicts of arrays, so the cache loads from any module, not only from this script run as __main__
-        path.write_bytes(pickle.dumps([{f.name: getattr(s, f.name) for f in fields(SequenceCandidates)} for s in seqs]))
+        seqs = decode_split_candidates(name, limit, stage2, device, mode, spec)
+        write_candidate_cache(path, seqs)
         print(f"built {path.name}: {len(seqs)} recordings, {sum(len(s.time) for s in seqs)} frames, {time.time() - t0:.0f} s", flush=True)
-    return pack(seqs)
+    return pack(seqs, spec)
 
 
 def train_memory(args) -> None:
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     device, _ = detect_device()
-    splits = {name: load_split(name, args.limit_recordings, args.stage2, device, args.frog_mode)
+    spec = dataset_spec(args)
+    print(parameter_table(spec), flush=True)
+    splits = {name: load_split(name, args.limit_recordings, args.stage2, device, args.frog_mode, spec)
               for name in ("train", "val")}
     for name, split in splits.items():
         print(f"{name}: {len(split.lengths)} recordings, {split.lengths.sum()} frames, {int(split.data.annotated.sum())} annotated", flush=True)
@@ -1247,7 +1526,7 @@ def train_memory(args) -> None:
                 for t in range(length):
                     out = model.step(batch["xy"][:, t], batch["score"][:, t], batch["valid"][:, t], batch["pose"][:, t], batch["dt"][:, t], slots, reset=reset_t[:, t],
                                      cand_features=batch["features"][:, t], free_range=batch["free_range"][:, t],
-                                     angles=laser_angles(device))
+                                     angles=laser_angles(device, spec))
                     slots = out.slots
                     if args.state_grad_clip:
                         slots.state.register_hook(lambda g, b=args.state_grad_clip, c=clipped: clip_state_grad(g, b, c))
@@ -1276,6 +1555,7 @@ def train_memory(args) -> None:
                         continue
                     path = args.out_dir / f"{args.mode}_nan.pth"
                     torch.save(dict(model=model.state_dict(), chunk_s=chunk_s, epoch=epoch + 1, seq=seq, frame=frame, reset=reset, frog_mode=args.frog_mode,
+                                    dataset=spec.name, beam_stride=spec.decimate,
                                     args={k: str(v) for k, v in vars(args).items()}), path)
                     raise RuntimeError(f"not finite at {where}: {diagnosis}\n  chunk and weights saved to {path}")
                 optimizer.step()
@@ -1293,7 +1573,8 @@ def train_memory(args) -> None:
             if not step_every_iteration:
                 schedule.step(val["memory"]["ap"])
             improved = stopper.update(val["memory"]["ap"])      # patience restarts with every chunk length
-            checkpoint = dict(model=model.state_dict(), chunk_s=chunk_s, epoch=epoch, val=val, frog_mode=args.frog_mode, args={k: str(v) for k, v in vars(args).items()})
+            checkpoint = dict(model=model.state_dict(), chunk_s=chunk_s, epoch=epoch, val=val, frog_mode=args.frog_mode,
+                              dataset=spec.name, beam_stride=spec.decimate, args={k: str(v) for k, v in vars(args).items()})
             if improved:
                 torch.save(checkpoint, args.out_dir / f"{args.mode}_object_memory.{chunk_s:g}s.best.pth")
             overall = best.offer(val["memory"]["ap"], checkpoint)   # the run's best does not
@@ -1316,7 +1597,7 @@ def train_memory(args) -> None:
         if best.saved:
             model.load_state_dict(torch.load(best.path, map_location=device)["model"])     # the next stage resumes from the run's best
     del splits["train"], splits["val"]                  # the test candidates are only needed now, and three splits at once exhaust a 16 GB host
-    splits["test"] = load_split("test", args.limit_recordings, args.stage2, device, args.frog_mode)
+    splits["test"] = load_split("test", args.limit_recordings, args.stage2, device, args.frog_mode, spec)
     print(f"test: {len(splits['test'].lengths)} recordings, {splits['test'].lengths.sum()} frames, "
           f"{int(splits['test'].data.annotated.sum())} annotated", flush=True)
     results = dict(history=history, test={}, memory_ms_per_frame=memory_ms_per_frame(model, splits["test"], device))
@@ -1342,42 +1623,49 @@ def train_memory(args) -> None:
 @dataclass
 class FrameSplit:
     """Every frame of a split end to end: ranges `[F, N]`, pose `[F, 3]`, the first frame of its recording `[F]`, and the
-    annotated frames with their people as (range, bearing) and as detection-frame xy."""
+    annotated frames with their people as (range, bearing) and as detection-frame xy, plus whatever else that frame
+    annotates that is not a person."""
     scans: np.ndarray
     poses: np.ndarray
     start: np.ndarray
     annotated: np.ndarray
     people_polar: List[np.ndarray]
     people_xy: List[np.ndarray]
+    #: Per annotated frame, the annotated objects of every class **but** the person class, as (range, bearing).
+    #: Empty on a one-class dataset, so the training loop indexes it without asking which dataset it is on.
+    other_polar: List[np.ndarray]
     time: np.ndarray
 
 
-def load_frames(name: str, mode: str = DEFAULT_MODE) -> FrameSplit:
-    """Every recording of FROG `mode`'s `name` split, packed end to end.
+def load_frames(name: str, mode: str = DEFAULT_MODE, spec: DatasetSpec = FROG) -> FrameSplit:
+    """Every recording of `spec`'s `name` split, packed end to end.
 
-    The partition is an argument because it used to be a literal here, which quietly made every run an
-    `official` run whatever the caller intended. It stays `official` by default so every number measured
-    before the flag existed is reproduced by the default command.
+    Both the partition and the dataset are arguments because both used to be literals here, which quietly made
+    every run an `official` FROG run whatever the caller intended. FROG `official` stays the default so every
+    number measured before the flags existed is reproduced by the default command.
     """
-    return frames_from_dataset(FROG_Dataset(split=name, mode=mode, auto_download=False, verbose=False, missing_return_m=None))
+    return frames_from_dataset(spec.load(name, None, mode), spec)
 
 
-def frames_from_dataset(ds) -> FrameSplit:
+def frames_from_dataset(ds, spec: DatasetSpec = FROG) -> FrameSplit:
     """Pack every recording of `ds` end to end, annotations placed on their own scans through `idet2iscan`."""
-    scans, poses, start, annotated, polar, times = [], [], [], [], [], []
+    scans, poses, start, annotated, polar, other, times = [], [], [], [], [], [], []
     offset = 0
     for s in range(len(ds.scans)):
         n = len(ds.scans[s])
-        scans.append(np.asarray(ds.scans[s], np.float32))
+        scans.append(spec.thin(np.asarray(ds.scans[s], np.float32)))
         times.append(np.asarray(ds.scan_time[s], np.float64))
         poses.append(np.asarray(ds.odoms[s]["xya"], np.float32))
         start.append(np.full(n, offset))
         for d in range(len(ds.det_id[s])):
             annotated.append(offset + int(ds.idet2iscan[s][d]))
-            polar.append(np.asarray(ds.det_wp[s][d], np.float64).reshape(-1, 2))
+            polar.append(spec.real_people(ds.det_wp[s][d]))
+            other.append(np.concatenate([spec.real_people(getattr(ds, name)[s][d]) for name in spec.other_detections])
+                         if spec.other_detections else np.zeros((0, 2)))
         offset += n
     xy = [np.array([project_cartesian_from_polar(r, phi) for r, phi in p], dtype=np.float64).reshape(-1, 2) for p in polar]
-    return FrameSplit(np.concatenate(scans), np.concatenate(poses), np.concatenate(start), np.array(annotated), polar, xy, time=np.concatenate(times))
+    return FrameSplit(np.concatenate(scans), np.concatenate(poses), np.concatenate(start), np.array(annotated), polar, xy,
+                      other, time=np.concatenate(times))
 
 
 @dataclass
@@ -1493,10 +1781,15 @@ def train_calibration(args) -> None:
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     device, _ = detect_device()
-    splits = {name: load_frames(name, args.frog_mode) for name in SPLITS}
+    spec = dataset_spec(args)
+    print(parameter_table(spec, args.max_range_m), flush=True)
+    splits = {name: load_frames(name, args.frog_mode, spec) for name in SPLITS}
     for name, split in splits.items():
         print(f"{name}: {len(split.scans)} frames, {len(split.annotated)} annotated", flush=True)
-    angles = frog_laser_angles(720)
+        note = unlearnable_labels(split.people_polar, args.max_range_m)
+        if note:
+            print(note, flush=True)
+    angles = spec.angles()
     stored_args = {k: str(v) for k, v in vars(args).items()}
     net = CalibrationNetwork(torch.from_numpy(angles), dropout=args.dropout, **network_shape(stored_args)).to(device)
     if args.init:
@@ -1539,11 +1832,15 @@ def train_calibration(args) -> None:
             frames = train_split.annotated[chunk]
             ranges = frame_batch(train_split, frames, device)
             scans, people = [train_split.scans[f] for f in frames], [train_split.people_polar[c] for c in chunk]
+            others = [train_split.other_polar[c] for c in chunk]
             if args.mirror:
                 flip = rng.random(len(frames)) < MIRROR_PROBABILITY
                 ranges = mirror_scans(ranges, flip)
                 scans = [np.ascontiguousarray(s[::-1]) if m else s for s, m in zip(scans, flip, strict=True)]
                 people = [mirror_people(g, angles) if m else g for g, m in zip(people, flip, strict=True)]
+                # The objects mirror with the scan for the same reason the people do: the mask is built from
+                # bearings, so an unmirrored object silences the beams on the wrong side of the robot.
+                others = [mirror_people(o, angles) if m else o for o, m in zip(others, flip, strict=True)]
             logit, votes, _ = net(ranges)
             targets = [make_targets(anchor_ranges(s, net.max_range_m), angles, {3: [tuple(p) for p in g]},
                                     vote_collect_radius=args.label_radius, nearest=args.label_assign == "nearest",
@@ -1556,8 +1853,15 @@ def train_calibration(args) -> None:
                 beam_heatmap(anchor_ranges(s, net.max_range_m), angles, {3: [tuple(p) for p in g]},
                              sigma_m=args.label_sigma_m, vote_collect_radius=args.label_radius)
                 for s, g in zip(scans, people, strict=True)])).to(device)
+            # The ignore region: the beams a wheelchair or a walker covers leave the classification term, since
+            # a person in a wheelchair is a person and teaching that return as background is a contradictory
+            # target on the one shape the network exists to recognise.
+            ignore = None if not args.ignore_other_classes else torch.from_numpy(np.stack([
+                ignore_beams(s, angles, o, args.label_radius, net.max_range_m, positives=t[0] > 0)
+                for s, o, t in zip(scans, others, targets, strict=True)])).to(device)
             loss, _, _ = compute_loss(logit.reshape(-1, 1), votes.reshape(-1, 2), labels.reshape(-1), vote_targets.reshape(-1, 2),
-                                      soft_labels=None if soft is None else soft.reshape(-1))
+                                      soft_labels=None if soft is None else soft.reshape(-1),
+                                      ignore=None if ignore is None else ignore.reshape(-1))
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), GRAD_CLIP)
@@ -1574,6 +1878,7 @@ def train_calibration(args) -> None:
             if args.schedule == "plateau":
                 schedule.step(val["ap"])
             checkpoint = dict(model=net.state_dict(), epoch=epoch, val=val, frog_mode=args.frog_mode,
+                              dataset=spec.name, beam_stride=spec.decimate,
                               args=stored_args)
             best.offer(val["ap"], checkpoint)
             periodic.offer(epoch, checkpoint)
@@ -1661,7 +1966,7 @@ def detach_joint(state: JointState) -> JointState:
 
 @torch.no_grad()
 def evaluate_joint(net: CalibrationNetwork, memory: ObjectMemory, split: FrameSplit, segments: List[Tuple[int, int, int, int]], stride: int,
-                   device, streams: int, prior_mode: str = "slots") -> Dict[str, Dict[str, float]]:
+                   device, streams: int, prior_mode: str = "slots", spec: DatasetSpec = FROG) -> Dict[str, Dict[str, float]]:
     """Play each segment (recording, first frame, frames, warm-up) through the whole detector from empty memory, `streams` at a time,
     and score every `stride`-th annotated frame after its warm-up: stage 2's candidates alone (the memory's feedback already in them),
     and the candidates rescored plus coasting slots.
@@ -1673,7 +1978,7 @@ def evaluate_joint(net: CalibrationNetwork, memory: ObjectMemory, split: FrameSp
         raise ValueError(f"unknown prior_mode {prior_mode!r}; expected one of {', '.join(PRIOR_MODES)}")
     net.eval(), memory.eval()
     offsets, lengths = recording_bounds(split.start)
-    periods = frame_periods(split.time, offsets, lengths, DT_AVERAGE_FRAMES)
+    periods = frame_periods(split.time, offsets, lengths, spec.dt_average_frames)
     people_at = {int(f): i for i, f in enumerate(split.annotated)}
     raw, full = [], []
     segments = sorted(segments, key=lambda seg: -seg[2])
@@ -1716,8 +2021,10 @@ def train_joint(args) -> None:
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     device, _ = detect_device()
-    splits = {name: first_recordings(load_frames(name, args.frog_mode), args.limit_recordings) for name in SPLITS}
-    angles = frog_laser_angles(720)
+    spec = dataset_spec(args)
+    print(parameter_table(spec), flush=True)
+    splits = {name: first_recordings(load_frames(name, args.frog_mode, spec), args.limit_recordings) for name in SPLITS}
+    angles = spec.angles()
     stage2 = torch.load(args.stage2, map_location="cpu")
     # What those weights were trained against. The targets below and the dropout here both come from the checkpoint,
     # not from this step's flags, so fine-tuning minimises the objective stage 2 already minimised.
@@ -1739,7 +2046,7 @@ def train_joint(args) -> None:
     train = splits["train"]
     offsets, lengths = recording_bounds(train.start)
     people_at = {int(f): i for i, f in enumerate(train.annotated)}
-    periods = frame_periods(train.time, offsets, lengths, DT_AVERAGE_FRAMES)
+    periods = frame_periods(train.time, offsets, lengths, spec.dt_average_frames)
     length = max(2, round(args.chunk_s / mean_frame_period(train.time, offsets, lengths)))
     iterations = math.ceil(len(train.scans) / length)
     eval_every = max(1, round(args.eval_every * iterations))
@@ -1798,7 +2105,7 @@ def train_joint(args) -> None:
         result = evaluate_joint(net, memory, val, val_segments, args.val_stride, device, args.val_windows, mode)
         stopper.update(result["memory"]["ap"])          # called for its side effect: it records the bar and the misses
         overall = best.offer(result["memory"]["ap"], dict(net=net.state_dict(), memory=memory.state_dict(), epoch=epoch, val=result,
-                                                          frog_mode=args.frog_mode,
+                                                          frog_mode=args.frog_mode, dataset=spec.name, beam_stride=spec.decimate,
                                                           args={k: str(v) for k, v in vars(args).items()}))
         hours = (time.time() - start) / 3600
         row = dict(epoch=epoch, loss=float(np.mean(losses)) if losses else float("nan"), val_ap=result["memory"]["ap"], val_ap_candidates=result["candidates"]["ap"],
@@ -1844,7 +2151,8 @@ def first_recordings(split: FrameSplit, n: int) -> FrameSplit:
     end = int(offsets[n])
     keep = split.annotated < end
     return FrameSplit(split.scans[:end], split.poses[:end], split.start[:end], split.annotated[keep],
-                      [q for q, k in zip(split.people_polar, keep) if k], [q for q, k in zip(split.people_xy, keep) if k], time=split.time[:end])
+                      [q for q, k in zip(split.people_polar, keep) if k], [q for q, k in zip(split.people_xy, keep) if k],
+                      [q for q, k in zip(split.other_polar, keep) if k], time=split.time[:end])
 
 
 # ---------------------------------------------------------------- step 4: ablations that need no training
@@ -1901,23 +2209,28 @@ def score_checkpoint(args) -> None:
     stage2_checkpoint = torch.load(args.stage2, map_location="cpu")
     memory_checkpoint = torch.load(args.memory, map_location=device, weights_only=False)
     note = partition_note(stage2_checkpoint, memory_checkpoint, args.frog_mode)
-
-    print(f"scoring on FROG {args.frog_mode} {args.split}; checkpoints trained on "
+    spec = dataset_spec(args)
+    print(parameter_table(spec), flush=True)
+    print(f"scoring on {spec.name} {args.frog_mode if spec.name == 'frog' else ''} {args.split}; checkpoints trained on "
           f"{' and '.join(note['trained_on'])}", flush=True)
     if note["cross_partition"]:
         print("  ** CROSS-PARTITION SCORE: these frames are not the ones these weights were trained against.", flush=True)
         print("  Deliberate here, and the reason this mode exists -- but never quote it beside a", flush=True)
         print("  same-partition number without saying so (AGENTS.md rule 3).", flush=True)
 
-    split = load_split(args.split, args.limit_recordings, args.stage2, device, args.frog_mode)
+    split = load_split(args.split, args.limit_recordings, args.stage2, device, args.frog_mode, spec)
     print(f"{args.split}: {len(split.lengths)} recordings, {split.lengths.sum()} frames, "
           f"{int(split.data.annotated.sum())} annotated", flush=True)
     model = object_memory(memory_checkpoint, split.data.features.shape[-1]).to(device)
     results = dict(partitions=note, test={})
     for stride in args.test_strides:
+        # Item 82's columns come off this same replay: `frames_out` hands back the frames it scored, so the
+        # restricted reading costs no second pass and -- more to the point -- cannot be a second pass, since
+        # restricting the candidates before the memory sees them would change the run rather than its score.
+        played = {} if args.eval_max_range_m else None
         results["test"][f"stride_{stride}"] = evaluate(model, split, device, stride, args.max_streams,
                                                        evaluation_segments(split, 0, 0, 0),
-                                                       extra_radii=EXTRA_TEST_RADII_M)
+                                                       extra_radii=EXTRA_TEST_RADII_M, frames_out=played)
         c, m = (results["test"][f"stride_{stride}"][k] for k in ("candidates", "memory"))
         print(f"{args.split}, every {stride} annotated frame: "
               f"candidates AP {c['ap']:.2%} (0.3 m {c['ap_0.3m']:.2%}) P {c['precision']:.1%} "
@@ -1925,6 +2238,8 @@ def score_checkpoint(args) -> None:
         print(f"  memory AP {m['ap']:.2%} (0.3 m {m['ap_0.3m']:.2%}) P {m['precision']:.1%} "
               f"R {m['recall']:.1%} FP {m['fp_per_frame']:.3f} FN {m['fn_per_frame']:.3f}  "
               f"exchange rate {m['exchange_rate']:.2f}", flush=True)
+        if played is not None:
+            results["test"][f"stride_{stride}"].update(restricted_columns(played, args.eval_max_range_m))
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(results, indent=1), encoding="utf-8")
@@ -1933,9 +2248,11 @@ def score_checkpoint(args) -> None:
 
 def run_ablations(args) -> None:
     device, _ = detect_device()
-    angles = frog_laser_angles(720)
+    spec = dataset_spec(args)
+    print(parameter_table(spec), flush=True)
+    angles = spec.angles()
     results = dict(sort={}, memory_slots={}, joint_slots={})
-    candidates = load_split("test", args.limit_recordings, args.stage2, device, args.frog_mode)
+    candidates = load_split("test", args.limit_recordings, args.stage2, device, args.frog_mode, spec)
     raw = score_detections([(d_s[v], d_xy[v], gt[gv]) for d_s, d_xy, v, gt, gv, a in
                             zip(candidates.data.score, candidates.data.xy, candidates.data.valid, candidates.data.gt_xy, candidates.data.gt_valid, candidates.data.annotated) if a])
     results["candidates"] = raw
@@ -1950,7 +2267,7 @@ def run_ablations(args) -> None:
     whole = evaluation_segments(candidates, 0, 0, 0)
     memory_checkpoint = torch.load(args.memory, map_location=device, weights_only=False)
     joint_state = torch.load(args.joint, map_location=device)
-    test = first_recordings(load_frames("test", args.frog_mode), args.limit_recordings)
+    test = first_recordings(load_frames("test", args.frog_mode, spec), args.limit_recordings)
     test_segments = evaluation_segments(SimpleNamespace(lengths=recording_bounds(test.start)[1]), 0, 0, 0)
     for slots in args.slots:
         memory = object_memory(memory_checkpoint, candidates.data.features.shape[-1], capacity=slots).to(device)
@@ -1987,6 +2304,12 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
                        help="FROG partition to train on; stored in the checkpoint, which is how evaluate.py "
                             "knows which partition to score on and refuses to mix two in one pass")
+        p.add_argument("--dataset", choices=tuple(DATASETS), default=DEFAULT_DATASET,
+                       help="which recording source to train on; stored in the checkpoint beside the partition, "
+                            "and `frog` by default so every command predating this flag is unchanged")
+        p.add_argument("--beam-stride", type=int, default=1,
+                       help="keep every Nth beam, so FROG's 0.25 deg grid can be read at DROW's 0.5 deg without "
+                            "resampling either; 2 halves 720 beams to 360 and the sector profile to 45")
         p.add_argument("--lr", type=float, default=1e-3)
         p.add_argument("--weight-decay", type=float, default=1e-2)
         p.add_argument("--seed", type=int, default=0)
@@ -1994,7 +2317,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--resume", action="store_true", help="continue from this run's saved state in --out-dir, written after every "
                                                              "evaluation; a crash then costs the time since it, not the whole run")
     for step1 in (sub.choices["step1"], sub.choices["step3a"]):
-        step1.add_argument("--chunk-s", type=float, nargs="+", default=[10.0], help="chunk-length curriculum, seconds. Default is the adopted single 10 s stage: the 1 s warm-up tied and cost 24% of training time, and it carried two of the sweep's five out-of-memory failures through its 26-stream configuration. `--chunk-s 1 10` restores the curriculum")
+        step1.add_argument("--chunk-s", type=float, nargs="+", default=[10.0], help="chunk-length curriculum, seconds. Default is the adopted single 10 s stage: the 1 s warm-up tied and cost 24%% of training time, and it carried two of the sweep's five out-of-memory failures through its 26-stream configuration. `--chunk-s 1 10` restores the curriculum")
         step1.add_argument("--max-epochs", type=float, default=100, help="per chunk length; patience usually ends a stage first")
         step1.add_argument("--patience", type=int, default=8, help="evaluations without a new best val AP")
         step1.add_argument("--min-epochs", type=float, default=5, help="per chunk length")
@@ -2096,7 +2419,7 @@ def build_parser() -> argparse.ArgumentParser:
                                 "attention; 0, the default, keeps the adopted path. Slots compete for "
                                 "the frame's candidates through a softmax over SLOTS, each slot's update is the "
                                 "attention-weighted mean of what it won, and --recurrence folds that into its state. "
-                                "The conclusion of the recurrence decision: one global state captured 5% of what the slots deliver, so the abstraction is load-bearing, "
+                                "The conclusion of the recurrence decision: one global state captured 5%% of what the slots deliver, so the abstraction is load-bearing, "
                                 "and a citable cell was preferred to a re-implemented one, so if the published "
                                 "update also works the architecture becomes 'Slot Attention over LiDAR candidates'. "
                                 "manage_slots still runs -- it is what gives a slot its room-frame position -- and the "
@@ -2107,7 +2430,7 @@ def build_parser() -> argparse.ArgumentParser:
                            help="how slots are paired to candidates. mutual, the adopted rule: a "
                                 "slot's nearest candidate and that candidate's nearest slot must agree. hungarian: the "
                                 "globally optimal one-to-one assignment under the same gate -- the standard primitive, "
-                                "which differs from mutual only under contention, and which S4 suggests has about 0.8% "
+                                "which differs from mutual only under contention, and which S4 suggests has about 0.8%% "
                                 "of people left to recover. Solved over the gated sub-problem per stream, so it costs a "
                                 "scipy call per frame inside the phase that dominates the CPU budget")
         step1.add_argument("--global-state", action=argparse.BooleanOptionalAction, default=False,
@@ -2151,18 +2474,26 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
                        help="the partition to score ON, which may differ from the one trained on; a mismatch is "
                             "reported in the output rather than refused, because that comparison is this mode's purpose")
+    score.add_argument("--dataset", choices=tuple(DATASETS), default=DEFAULT_DATASET)
+    score.add_argument("--beam-stride", type=int, default=1, help="keep every Nth beam; must match the checkpoints' own")
     score.add_argument("--split", choices=("train", "val", "test"), default="test")
     score.add_argument("--test-strides", type=int, nargs="+", default=[5],
                        help="score every Nth annotated frame, once per value; 5 by default because the frozen "
                             "headline is a stride-5 number and a stride-1 answer would not be comparable with it")
     score.add_argument("--max-streams", type=int, default=32)
     score.add_argument("--limit-recordings", type=int, default=0)
+    score.add_argument("--eval-max-range-m", type=float, default=0.0,
+                       help="item 82: also score this run against the labels inside this radius, both with the far "
+                            "detections kept and with them dropped. Scoring only -- unlike step2's --max-range-m, "
+                            "which shapes the network, this narrows what a finished run is read on. 0 is off")
     score.add_argument("--out", type=Path, default=_HERE.parent / "results" / "score_results.json")
 
     step4 = sub.add_parser("step4")
     step4.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
                        help="FROG partition to run the ablations on; must match the one the checkpoints were "
                             "trained under, or the ablation scores a model on another partition's frames")
+    step4.add_argument("--dataset", choices=tuple(DATASETS), default=DEFAULT_DATASET)
+    step4.add_argument("--beam-stride", type=int, default=1, help="keep every Nth beam; must match the checkpoints' own")
     step4.add_argument("--stage2", type=Path, required=True)
     step4.add_argument("--memory", type=Path, required=True, help="step3a's stage 3")
     step4.add_argument("--joint", type=Path, required=True, help="step3b's whole detector")
@@ -2179,6 +2510,10 @@ def build_parser() -> argparse.ArgumentParser:
     step3b.add_argument("--limit-recordings", type=int, default=0, help="only the first N recordings of each split (smoke runs)")
     step2 = sub.choices["step2"]
     step2.add_argument("--init", type=Path, default=None, help="start from this checkpoint's weights (a fresh optimizer)")
+    step2.add_argument("--ignore-other-classes", action="store_true",
+                       help="drop the beams a non-person annotation covers out of the classification loss, "
+                            "neither positive nor negative. Stage 2's alone, since it is the only stage that "
+                            "builds per-beam targets, and a no-op on a one-class dataset, which has none to drop")
     step2.add_argument("--schedule", choices=("plateau", "cosine", "exponential"), default="plateau", help="plateau: cut the rate when "
                        "val AP stalls; exponential: DR-SPAAM's decay from --lr to --min-lr over --max-epochs, every iteration -- DR-SPAAM's own")
     step2.add_argument("--lr-factor", type=float, default=0.3)
