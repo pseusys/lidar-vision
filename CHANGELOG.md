@@ -38,6 +38,128 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The four levers, measured: two beat the DROW headline, and the softmax head collapses (2026-11-07)
+
+*keywords: items 83 86 87 answered, item 84's arms, items 88 and 89 added, drow_heads_sigmoid 32.10, drow_heads_softmax 19.50, drow_range10 36.36 restricted, drow_gather 24.64, drow_kernel5 24.20 kernel3 28.57, sigmoid pos_weight soft-count confound, frog_binary_regression 82.76 86.13 exact, the 20.5 pp DROW gap*
+
+**The regression arm is exact.** The frozen seed-0 FROG chain, re-scored through the new head code at stride 1,
+returned candidates **82.7578%** and whole detector **86.1306%** -- `a71_freeze_s0`'s own 82.76% and 86.13% to
+every digit either was ever quoted at. The binary path is untouched, so the seven DROW arms behind it stand.
+`range_full` doubles as the second half of that check: it **is** the headline recipe, re-run on today's code,
+and it returned **29.4436%** against the headline's 29.45%.
+
+**Seven DROW stage-2 arms, one seed each, against the headline's 29.45%** (2,428 annotated test frames,
+29.99 m, AP at 0.5 m):
+
+| arm | test AP | vs headline | FP/frame | precision | recall | parameters |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| headline (binary, k = 7, 29.99 m) | 29.45% | -- | 8.279 | 8.2% | 90.6% | 960,323 |
+| the ignore region (2026-11-06) | 29.59% | +0.14 | 5.5 | -- | -- | 960,323 |
+| `range_full` (the headline, today's code) | **29.44%** | -0.01 | 8.278 | 8.2% | 90.6% | 960,323 |
+| `heads_softmax` | **19.50%** | **-9.95** | 23.331 | 3.3% | 97.9% | 960,422 |
+| `heads_sigmoid` | **32.10%** | **+2.65** | 9.349 | 7.5% | 93.8% | 960,389 |
+| `range10` (trained at 10 m) | **33.44%** | +3.99 | 5.665 | 10.3% | 80.2% | 960,323 |
+| `gather` (1.66 m metric window) | 24.64% | -4.80 | 6.753 | 8.9% | 81.3% | -- |
+| `kernel5` | 24.20% | -5.24 | 10.460 | 6.5% | 89.7% | -- |
+| `kernel3` | 28.57% | -0.88 | 6.677 | 9.6% | 86.7% | -- |
+
+**The range span is a real part of the gap, and this is the first isolation of it.** `range10`'s unrestricted
+AP is not the comparison -- it forfeits the 159 labels past 10 m outright, which is why its recall is 80.2% --
+so both arms were re-scored on the same 1,817 labels inside 10 m:
+
+| | labels inside 10 m | labels and detections inside 10 m |
+| --- | ---: | ---: |
+| `range_full`, trained at 29.99 m | 30.66% | 31.16% |
+| `range10`, trained at 10 m | **36.36%** | **36.36%** |
+| | **+5.70** | **+5.20** |
+
+Identical labels, identical radius, one variable: where the model was trained. **Training at the limit is worth
+5.2 pp of ranking on the near field**, and it is the largest effect in the chain. The two readings coincide for
+`range10` because a 10 m model emits nothing past 10 m, so restricting detections removes nothing. What this
+supports is the standing suspicion that **this architecture has no distance normalisation anywhere** while
+every published DROW baseline resamples a fixed metric window per beam -- but it does **not** support the cheap
+proxy for it: the 1.66 m metric gather lost **4.80 pp** here, 3.4x the 1.42 pp it cost on FROG, so a metric
+window at the input is now closed on both datasets and whatever the range effect is, that is not its shape.
+
+**The arc is closed too, and the way it closed bounds what a single DROW seed can say.** Neither `kernel5`
+(24.20%) nor `kernel3` (28.57%) reaches k = 7, so the headline's arc is the best of the three on DROW -- but
+they are **not monotone in k**, and no mechanism makes a 5-beam arc worse than a 3-beam one. Either the
+response is genuinely non-monotone or **DROW single-seed spread is several points**, and both readings say the
+same thing about the rest of this table: a one-seed 2.65 pp is not yet a figure. FROG's spread for the same
+quantity is 0.16 pp over three seeds, which is why nobody had asked this question before.
+
+**`heads_sigmoid` beats the headline by 2.65 pp -- and the arm is confounded, which is a defect in the code I
+wrote yesterday rather than a property of the head.** `compute_loss`'s docstring promises that `pos_weight` is
+counted from the **hard** labels under a soft target, "because it is a count of positive beams and taking it
+from a soft target would move the class balance as well as the target". The sigmoid branch does exactly what
+that sentence forbids: `positives = scored.sum(0)` is summed **after** the person column has been overwritten
+with the Gaussian, so the person column's weight is its Gaussian mass rather than its beam count. The hard
+label marks a person's whole extent at 1 while the Gaussian decays, so the mass is the smaller number, the
+weight is the larger one, and the arm fires harder -- which is exactly the operating point it reported (9.349
+FP/frame and 93.8% recall against 8.279 and 90.6%). So the +2.65 pp is a head change **and** a class-balance
+change, and item 88 is the one-line fix plus the re-run that would tell them apart.
+
+**`heads_softmax` collapses to 19.50%, 9.95 pp below the headline**, at 23.331 FP/frame, 3.3% precision and
+97.9% recall: the person column is winning the normalisation almost everywhere. It early-stopped after 23
+evaluations with a best val AP of 22.37% at epoch 2.75, while the sigmoid arm kept improving for 59 evaluations
+to 26.83%. Two candidates, neither yet measured: `cross_entropy`'s **mean** reduction normalises by the sum of
+the class weights for an index target and by the batch size for a probability target, so the adopted recipe's
+soft row changes the loss's scale against the vote term in the softmax branch and in no other; and softmax
+makes the three classes **compete**, which on a dataset where 56.4% of the objects are wheelchairs and walkers
+at knee height is a discrimination problem the person column pays for, where sigmoid lets one beam be a person
+positive and a wheelchair positive at once. Item 88 covers the first; the second is what a fixed re-run would
+show.
+
+**What the four levers do to the 20.5 pp gap** between our 46.01% whole detector and DROW3's 66.5% through this
+same harness: they do not close it, and nothing here was expected to. Two arms beat the headline, and if both
+survive replication and the confound they are worth perhaps 8 pp of stage-2 AP between them -- against 20.5 pp,
+on a pair of configurations where one forfeits 8% of the labels. What the chain **has** done is move the
+remaining suspects: the arc, the metric window, capacity and the ignore region are now all measured and all
+closed, so what is left is **distance** (real, +5.2 pp, mechanism unknown and not the input window) and
+**temporal input** (untouched -- DROW3's 71.7% is a 5-scan odometry-aligned model, and our memory cannot learn
+across DROW's 24 s annotation gaps).
+
+**Stage 3's pre-commitment landed on the collapsed arm, and the whole detector followed stage 2 down.**
+`heads_stage3` was pointed at the averaged `softmax` weights and started at 07:34, thirteen minutes before the
+firing armed to re-point it, so it was left running (owner's standing instruction for exactly this case). It
+stopped at epoch 38, best at epoch 30, exactly where `--patience 8` said it would.
+
+| | binary chain (`drow_stage3_s0`) | this softmax run |
+| --- | ---: | ---: |
+| candidates, test, stride 1 | 23.45% | **20.73%** |
+| **whole detector, test, stride 1** | **46.01%** | **38.70%** |
+| **the memory's contribution** | **+22.56 pp** | **+17.97 pp** |
+| val candidates | 27.73% | 23.52% |
+| best val AP (epoch) | 47.43% (36 of 44) | 46.72% (30 of 38) |
+| the memory's val contribution | +19.70 pp | +23.20 pp |
+
+**The softmax head loses 7.31 pp of whole-detector accuracy**, having lost 9.95 pp at stage 2, so the answer to
+item 84 on DROW is negative on both halves of the pipeline. It is not a story about candidate quality alone:
+the candidates are 2.72 pp behind and the whole detector is 7.31 pp behind, so the memory *amplified* the
+deficit rather than absorbing it.
+
+**The one thing this run looked like it had, it did not have.** Through 38 epochs of val the memory was adding
+**+23.20 pp** to these candidates against the binary chain's +19.70, which read as the multi-class trunk giving
+a class-agnostic memory more to work with -- the hypothesis this entry carried all morning. On test the same
+two runs read **+17.97 pp** against **+22.56**. The lift did not merely fail to transfer; it inverted, and the
+two runs' val and test lifts move in *opposite* directions (binary +19.70 val to +22.56 test, softmax +23.20 to
++17.97). So **a val memory lift does not predict a test memory lift**, and the provisional reading written here
+at 09:47 and corrected at 11:46 was wrong both times. Recorded in
+[`memory/interpreting-evaluation.md`](memory/interpreting-evaluation.md), because it is the second time this
+project has read a stage-3 contribution off the wrong split.
+
+The matched-false-positive column says the same thing from the other side. At its own threshold (0.054,
+19.883 FP/frame) the memory reaches **96.8% recall against the candidates' 97.2%** -- it gives up 0.4 pp, where
+on the binary chain the same comparison *gained* 3.5 pp (93.88% against 90.38% at 7.699 FP/frame). On
+multi-class candidates the memory's whole contribution is ranking, and none of it is recall.
+
+**Where that leaves the gap:** unmoved, and this arm is further from it than the chain it was meant to improve
+-- 38.70% is **27.8 pp** below DROW3's 66.5% through this same harness (71.7% as published). The best DROW
+whole detector on record is still the binary chain's **46.01%**. What the day closed is four levers and one
+head; what it did not touch is distance (real, +5.2 pp at stage 2, mechanism open) and temporal input.
+
+---
+
 ## A head the dataset chooses, and the four cheap levers DROW's 20 pp gap has left (2026-11-07)
 
 *keywords: item 84 built, item 83 queued, items 86 and 87 added, HEADS multiclass binary, --class-norm softmax sigmoid, class_channels person_column, class_annotations class_columns, DatasetSpec class_ids, soft_class_target, step2 --eval-max-range-m, calibration_frames no_grad, queue_drow_heads, 82.76 86.13 regression, 46.01 against 66.5*

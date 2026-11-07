@@ -92,7 +92,7 @@ When quoting FROG, always say which `d`.
 Credit it as his in anything published from this repo; only the pybind11 binding, the Python wrapper and the evaluation harness around it are ours.
 It is a classical reference point, not a baseline taken from any of the papers compared here (`../docs/RESEARCH.md` §2.1), and the formal reference to cite is `../TODO.md` §A.
 
-¹⁴ **DROW-native, one seed, 2026-11-05** (`CHANGELOG.md`), trained and scored at DROW's own **29.99 m** sensor limit rather than FROG's 10 m, on DROW test's 2,428 annotated frames. **Read it as a floor, not a competitive number**: it is 24.3 pp below the weakest published DROW baseline here, which was the expectation recorded before the run. What it establishes is the memory's contribution -- **+22.56 pp over its own candidates against +3.49 pp on FROG, 6.5x** -- and at matched false positives (its own threshold 0.1358, 7.699 FP/frame) it reaches **93.88% recall against the candidates' 90.38%**, so the recall it appears to lose at the shared 0.3 threshold is decalibration. Two cautions: the 29.5% stage-2 cell is its **best** checkpoint through stage 2's **own** decoder, while the 46.0% row's internal baseline is the **averaged** checkpoint through the NMS candidate decoder (23.45%), so the two cells are not a 16 pp gain; and DROW annotates in bursts of 20 over 7.5 s with 24 s gaps that exceed the slots' 10 s fade, so no gradient crossed a gap and the figure measures this memory over 7.5 s windows (`dataset-properties.md`).
+¹⁴ **DROW-native, one seed, 2026-11-05** (`CHANGELOG.md`), trained and scored at DROW's own **29.99 m** sensor limit rather than FROG's 10 m, on DROW test's 2,428 annotated frames. **Read it as a floor, not a competitive number**: it is 24.3 pp below the weakest published DROW baseline here, which was the expectation recorded before the run. What it establishes is the memory's contribution -- **+22.56 pp over its own candidates against +3.49 pp on FROG, 6.5x** -- and at matched false positives (its own threshold 0.1358, 7.699 FP/frame) it reaches **93.88% recall against the candidates' 90.38%**, so the recall it appears to lose at the shared 0.3 threshold is decalibration. Two cautions: the 29.5% stage-2 cell is its **best** checkpoint through stage 2's **own** decoder, while the 46.0% row's internal baseline is the **averaged** checkpoint through the NMS candidate decoder (23.45%), so the two cells are not a 16 pp gain; and DROW annotates in bursts of 20 over 7.5 s with 24 s gaps that exceed the slots' 10 s fade, so no gradient crossed a gap and the figure measures this memory over 7.5 s windows (`dataset-properties.md`). **The 29.5% cell is the headline recipe's, not the best stage-2 AP on record for DROW**: a multi-class sigmoid head reached 32.10% on 2026-11-07, one seed and one confound away from being a figure, and a 10 m-trained arm reaches 36.36% on the labels inside 10 m. Both are below in "Four levers on DROW's 20.5 pp gap"; neither has a whole-detector number yet, which is why this row is still the chain's.
 
 ¹³ **PeTra is cited only, and that is not a failed attempt.** There is no PeTra implementation and no PeTra weights in this repository -- only its published figures, including the 28.17 ms GPU timing -- so it has never run here and cannot be timed under this project's CPU protocol. Filling either `gap` cell would mean reimplementing it from the paper, which is the thing that produced an untrustworthy number once already (footnote 2). Moved here from `TODO.md` on 2026-11-05, so the question stops returning as a queue item.
 ¹ The LFE paper only ever evaluates on FROG's 720-beam scans.
@@ -210,6 +210,88 @@ Against the correct `d = 0.5 m` column, on the genuine `frog_16-41` test recordi
 That signature is **mislocalisation**: the detections land near enough to pass a 0.5 m gate and too far to pass a 0.3 m one.
 It points at the anchor-decode geometry calibrated on 2026-09-10, whose angular convention was explicitly recorded as weakly identified *because AP@0.5 could not distinguish it*. AP@0.3 can, and does.
 **Use `--eval-r 0.3` as the discriminator when calibrating anything positional.**
+
+### Four levers on DROW's 20.5 pp gap, one seed each (2026-11-07)
+
+Seven stage-2 arms off one chain, all on DROW test's 2,428 annotated frames at 29.99 m, AP at 0.5 m, one seed
+each, read against the headline recipe's **29.45%**. The chain's first job was a FROG regression arm that had
+to reproduce `a71_freeze_s0` exactly and did -- candidates **82.7578%**, whole detector **86.1306%** -- and
+`range_full` is the headline recipe itself re-run on the same code, which returned **29.4436%**. Both halves of
+the determinism check passed, so the deltas below are the arms.
+
+| arm | test AP | vs headline | FP/frame | precision | recall |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| the headline recipe | 29.45% | -- | 8.279 | 8.2% | 90.6% |
+| `range_full` (the headline, re-run) | 29.44% | -0.01 | 8.278 | 8.2% | 90.6% |
+| `heads_sigmoid` (3 class columns, independent) | **32.10%** | **+2.65** | 9.349 | 7.5% | 93.8% |
+| `range10` (trained at 10 m) | **33.44%** | +3.99 | 5.665 | 10.3% | 80.2% |
+| `kernel3` | 28.57% | -0.88 | 6.677 | 9.6% | 86.7% |
+| `gather` (1.66 m metric window) | 24.64% | -4.80 | 6.753 | 8.9% | 81.3% |
+| `kernel5` | 24.20% | -5.24 | 10.460 | 6.5% | 89.7% |
+| `heads_softmax` (4 columns, background first) | **19.50%** | **-9.95** | 23.331 | 3.3% | 97.9% |
+
+**`range10`'s unrestricted column is not a comparison** -- a 10 m model forfeits the 159 labels past 10 m, which
+is the whole of its missing recall. Both range arms were re-scored on the same 1,817 labels inside 10 m, and
+that is the chain's one clean isolation:
+
+| | labels inside 10 m | labels and detections inside 10 m |
+| --- | ---: | ---: |
+| trained at 29.99 m | 30.66% | 31.16% |
+| trained at 10 m | **36.36%** | **36.36%** |
+| | **+5.70** | **+5.20** |
+
+**Training at the range it is scored on is worth 5.2 pp of ranking**, which makes depth a real component of the
+gap -- and the cheap explanation for it is already dead in the same chain, because the 1.66 m metric window
+*lost* 4.80 pp here against the 1.42 pp it cost on FROG. So the answer is not an input crop. This architecture
+has no distance normalisation of any kind, while every published DROW baseline resamples a fixed metric window
+per beam, and what the two results together say is that the missing piece is in the **loss or the vote target**
+rather than at the input.
+
+**Read any single-seed DROW delta in this table against its own arc arms.** `kernel5` at 24.20% and `kernel3` at
+28.57% are not monotone in `k`, and no mechanism makes a 5-beam arc worse than a 3-beam one -- so either the
+response is genuinely non-monotone or **DROW single-seed spread is several points**. FROG's spread on the same
+quantity is 0.16 pp over three seeds. Nothing in this table is a figure until a second seed exists, and the two
+arms that beat the headline are the two worth spending it on.
+
+**The sigmoid arm carries a second variable, and it is a defect rather than a property of the head.**
+`compute_loss` promises that `pos_weight` is counted from the hard labels under a soft target; its sigmoid
+branch sums the positives *after* the person column has been overwritten with the Gaussian, so that column's
+weight is its Gaussian mass rather than its beam count. The mass is the smaller number, the weight the larger
+one, and the arm fires harder -- which is the operating point it reported. Its +2.65 pp is therefore a head
+change **and** a class-balance change. The binary numbers everywhere else in this file are unaffected: the
+binary branch counts from hard labels, and FROG has one class.
+
+**The softmax arm collapsed** to 19.50% at 23.331 FP/frame and 97.9% recall, early-stopping after 23
+evaluations against the sigmoid arm's 59. Two unmeasured candidates: `cross_entropy` normalises a weighted mean
+by the sum of the class weights for an index target and by the batch size for a probability target, so the
+adopted recipe's soft row changes the loss's scale against the vote term in that branch alone; and softmax
+makes the classes compete, which on a dataset where **56.4% of the objects are wheelchairs and walkers** at
+knee height is a discrimination problem the person column pays for, where sigmoid lets one beam be a person and
+a wheelchair at once.
+
+**The whole detector followed stage 2 down.** The softmax arm's averaged stage 2 went on through stage 3 (38
+epochs, best at 30) and scored **38.70%** at test against the binary chain's **46.01%**, one variable apart:
+
+| | binary chain (`drow_stage3_s0`) | the softmax head |
+| --- | ---: | ---: |
+| candidates, test, stride 1 | 23.45% | 20.73% |
+| **whole detector** | **46.01%** | **38.70%** |
+| the memory's contribution | **+22.56 pp** | +17.97 pp |
+
+So **46.01% is still the best DROW whole detector on record**, and a multi-class head loses on both halves of
+the pipeline: 9.95 pp at stage 2 and 7.31 pp after the memory, which means the memory amplified the candidate
+deficit (2.72 pp) rather than absorbing it. Two readings worth keeping. At matched false positives the memory
+reaches **96.8% recall against these candidates' 97.2%**, giving up 0.4 pp where the binary chain's memory
+*gained* 3.5 pp at the same comparison -- on multi-class candidates its entire contribution is ranking. And
+through 38 epochs of **val** this run was adding +23.20 pp against the binary chain's +19.70, the exact
+opposite of the test ordering, which is why the memory's contribution is quoted from test and nowhere else
+([`interpreting-evaluation.md`](interpreting-evaluation.md)).
+
+**What this does to the 20.5 pp.** Nothing yet, and nothing here was expected to. What it does is close
+suspects: the kernel arc, the metric window, capacity in both directions and the ignore region are now all
+measured on DROW and all closed. What is left is **distance** -- real, +5.2 pp, mechanism open -- and
+**temporal input**, which is untouched: DROW3's 71.7% is a five-scan odometry-aligned model, and this project's
+memory cannot learn across DROW's 24 s annotation gaps (footnote 14).
 
 ### Li2Former on DROW: the one reproduction that did not land, and what it is not caused by
 

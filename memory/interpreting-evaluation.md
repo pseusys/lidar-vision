@@ -8,6 +8,28 @@ The standing comparison against published SOTA is in [`performance-log.md`](perf
 
 
 
+## A stage-3 contribution read off val does not survive on test
+
+**Measured 2026-11-07, on two DROW chains that differ only in the decision head.** The object memory's
+contribution -- whole detector minus its own candidates -- was read on both splits for both runs:
+
+| | binary chain (`drow_stage3_s0`) | the softmax head |
+| --- | ---: | ---: |
+| the memory's **val** contribution, at each run's best epoch | +19.70 pp | **+23.20 pp** |
+| the memory's **test** contribution, stride 1 | **+22.56 pp** | +17.97 pp |
+
+The two splits **disagree about which run's memory does more work**, and they disagree in opposite directions:
+the binary chain's lift grows from val to test, the softmax run's shrinks. A reading taken at epoch 9 of the
+softmax run (+19.54 against +12.19) was more wrong still. So **quote a memory contribution from test or not at
+all**, and treat a val lift as a training signal rather than a result -- `--patience` consumes it, which is
+exactly what makes it unsafe to report.
+
+Why it moves is not mysterious, only easy to forget: the lift is a *difference of two AP numbers*, each on a
+different split with a different scene composition, and the candidates term moves between splits too (23.52%
+val against 20.73% test here, 27.73% against 23.45% there). Nothing guarantees the two movements cancel. The
+same caution as the agnostic-column swap and the `memory_ms_per_frame` host-load reading: a derived figure
+inherits every defect of both its terms.
+
 ## Training cost is not inference cost, and a queued latency row is not a comparable one (2026-10-24)
 
 **Two mistakes from the Hungarian-association arm, both worth not repeating.**

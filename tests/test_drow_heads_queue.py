@@ -188,6 +188,19 @@ class TestTheGateAndThePreconditions:
         assert (q.CHECKPOINTS / "drow_stage2_s0" / "step2_results.json").exists()
         assert (q.CHECKPOINTS / "drow_stage3_s0" / "step3a_results.json").exists()
 
-    def test_no_arm_has_already_run_so_nothing_here_is_silently_skipped(self):
-        for name in [j.name for j in q.JOBS]:
-            assert not [p for p in job(name).outputs if p.exists()], f"{name} would be skipped"
+    def test_every_declared_output_is_a_path_its_own_job_writes(self):
+        """The runner skips a job whose declared output exists, which is only safe while the declaration and
+        the command agree. It has been wrong three times. This is the invariant, not a pre-launch guard: the
+        old test asserted that no arm had run yet, which stopped being true the moment the chain succeeded."""
+        for spec in q.JOBS:
+            cli = spec.cli
+            if "--out-dir" in cli:
+                out_dir = Path(cli[cli.index("--out-dir") + 1])
+                for path in spec.outputs:
+                    assert path.parent == out_dir, f"{spec.name}: declares {path}, writes into {out_dir}"
+            elif "--out" in cli:
+                assert spec.outputs == (Path(cli[cli.index("--out") + 1]),), spec.name
+            else:
+                # `heads_avg` writes beside the run it averages rather than taking a path of its own.
+                assert spec.name == "heads_avg", f"{spec.name} declares an output no flag accounts for"
+                assert spec.outputs[0].parent == q.HEADS_SOFTMAX
