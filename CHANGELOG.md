@@ -38,6 +38,53 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The sigmoid head's whole detector is 37.51%, and val had it 3.84 pp ahead (2026-11-07)
+
+*keywords: item 89 answered, item 84 closed, drow_sigmoid_stage3_s0 37.51, candidates 19.82, memory contribution 17.69, val test inversion third instance, multi-class head costs 8 pp end to end, memory lift falls with the footing, max-epochs 42 did not bind*
+
+**The fixed sigmoid head's whole detector scores 37.51% on DROW test at stride 1, against the binary chain's
+46.01% and the softmax head's 38.70%.** It is the worst of the three on both halves, and **46.01% stands as the
+best DROW whole detector on record.**
+
+| | binary (`drow_stage3_s0`) | softmax | sigmoid, `pos_weight` fixed |
+| --- | ---: | ---: | ---: |
+| candidates, test, stride 1 | 23.45% | 20.73% | **19.82%** |
+| **whole detector** | **46.01%** | 38.70% | **37.51%** |
+| the memory's contribution, test | **+22.56 pp** | +17.97 pp | +17.69 pp |
+| best **val** AP | 47.43% @ 36 of 44 | 46.72% @ 30 of 38 | **51.27% @ 21 of 29** |
+| stage 3 alone, one stream, GPU | 5.12 ms | 3.45 ms | 5.17 ms |
+
+**The cap did not bind, so this is a figure about the head.** `--max-epochs 42` was the time box showing, and
+the question it raised is answered negatively: the best val AP is at epoch **21**, and `--patience 8` ended the
+run at **29**, thirteen epochs short of the cap. The chain took 5 h 35 min end to end, inside the owner's box
+after all -- the overrun flagged at 18:30 did not happen because patience fired, not because the estimate
+improved. A DROW stage-3 epoch at 10 s chunks costs **450 s** on this host, as the binary chain's did; the
+softmax chain's 296 s was the outlier, because its candidate set was sparser.
+
+**Val had this run best of the three and test has it worst, which is the third inversion on this quantity and
+the largest.** On val it led by 3.84 pp over the binary chain's final best, held across seven consecutive
+epochs, from the worst candidate footing of the three (20.28% against 27.73%). Its val memory contribution was
+**+30.99 pp**, the largest ever recorded here. On test the same quantity is **+17.69 pp**, the smallest of the
+three. The ordering of the memory's contribution across the three runs is now **exactly reversed** between the
+splits, which is a stronger statement than the one already written up, and
+[`memory/interpreting-evaluation.md`](memory/interpreting-evaluation.md) carries it.
+
+**Two things are now double-confirmed and are the findings here.** First, **a multi-class head costs the DROW
+whole detector about 8 pp whatever its normalisation** -- 37.51% and 38.70% against 46.01%, two independent arms
+agreeing to 1.19 pp, where the stage-2 seed spread is 3.19 pp. The 1.19 pp between them is inside that spread
+and is not a ranking; the ~8 pp to the binary chain is 2.7 times it and is held by both. Second, **the memory's
+lift falls with the candidate footing rather than rising to compensate for it**, monotonically across all three
+runs: candidates 23.45 / 20.73 / 19.82 give lifts +22.56 / +17.97 / +17.69. The standing hypothesis was the
+opposite -- that a worse-ranked stage 2 leaves the memory more to do -- and val said so in all three runs. It is
+wrong on test, three times.
+
+**Where the gap stands: unchanged.** DROW3 through this repository's own pipeline is **66.5%** (71.7% as
+published), the record here is still 46.01%, and the gap is still **20.5 pp**. This arm is 28.99 pp short of it,
+so the multi-class head does not touch the question. The head work is finished: `binary` on DROW and on FROG,
+`sigmoid` and `softmax` measured on both halves on DROW, and nothing left to spend a night on.
+
+---
+
 ## A DROW seed is worth 3.19 pp, and that demotes most of the day's table (2026-11-07)
 
 *keywords: item 90 answered, item 88 answered, item 91 added, drow_headline_s1 26.26, drow_sigmoid_fixed_s0 28.79, drow_sigmoid_fixed_s1 31.01, DROW seed spread 3.19 pp, kernel non-monotonicity explained, early stopping variance, dropout 26.32 demoted*

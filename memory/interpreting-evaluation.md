@@ -13,22 +13,34 @@ The standing comparison against published SOTA is in [`performance-log.md`](perf
 **Measured 2026-11-07, on two DROW chains that differ only in the decision head.** The object memory's
 contribution -- whole detector minus its own candidates -- was read on both splits for both runs:
 
-| | binary chain (`drow_stage3_s0`) | the softmax head |
-| --- | ---: | ---: |
-| the memory's **val** contribution, at each run's best epoch | +19.70 pp | **+23.20 pp** |
-| the memory's **test** contribution, stride 1 | **+22.56 pp** | +17.97 pp |
+| | binary chain (`drow_stage3_s0`) | the softmax head | the sigmoid head, fixed |
+| --- | ---: | ---: | ---: |
+| the memory's **val** contribution, at each run's best epoch | +19.70 pp | +23.20 pp | **+30.99 pp** |
+| the memory's **test** contribution, stride 1 | **+22.56 pp** | +17.97 pp | +17.69 pp |
+| best **val** AP | 47.43% | 46.72% | **51.27%** |
+| **whole detector**, test | **46.01%** | 38.70% | 37.51% |
 
-The two splits **disagree about which run's memory does more work**, and they disagree in opposite directions:
-the binary chain's lift grows from val to test, the softmax run's shrinks. A reading taken at epoch 9 of the
-softmax run (+19.54 against +12.19) was more wrong still. So **quote a memory contribution from test or not at
-all**, and treat a val lift as a training signal rather than a result -- `--patience` consumes it, which is
-exactly what makes it unsafe to report.
+**The ordering is exactly reversed between the splits.** Val ranks the three memories sigmoid, then softmax,
+then binary; test ranks them binary, then softmax, then sigmoid -- across all three runs and on both the lift
+and the whole detector. The third arm is the sharpest case: it led on val by 3.84 pp over the binary chain's
+final best, held over seven consecutive epochs rather than spiking, from the *worst* candidate footing of the
+three -- and landed last on test by 8.50 pp. A reading taken at epoch 9 of the softmax run (+19.54 against
++12.19) was wrong in the same direction. So **quote a memory contribution from test or not at all**, and treat
+a val lift as a training signal rather than a result -- `--patience` consumes it, which is exactly what makes it
+unsafe to report. A val margin being large, stable and from a worse footing does not make it safer; this one was
+all three.
 
 Why it moves is not mysterious, only easy to forget: the lift is a *difference of two AP numbers*, each on a
 different split with a different scene composition, and the candidates term moves between splits too (23.52%
 val against 20.73% test here, 27.73% against 23.45% there). Nothing guarantees the two movements cancel. The
 same caution as the agnostic-column swap and the `memory_ms_per_frame` host-load reading: a derived figure
 inherits every defect of both its terms.
+
+**And the lift's direction is now settled, on test, three times.** It **falls with the candidate footing**
+rather than rising to compensate for it: candidates 23.45 / 20.73 / 19.82 give lifts +22.56 / +17.97 / +17.69,
+monotone across all three runs. Every one of those runs' val readings said the opposite. So a memory measured on
+a weak stage 2 is not quietly flattered by it -- the two terms move together, and a chain cannot buy a bigger
+lift by starting from less.
 
 ## A single-seed DROW stage-2 AP carries about 3 pp of noise, and the stopping rule is why
 

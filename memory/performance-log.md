@@ -283,11 +283,13 @@ a wheelchair at once.
 **The whole detector followed stage 2 down.** The softmax arm's averaged stage 2 went on through stage 3 (38
 epochs, best at 30) and scored **38.70%** at test against the binary chain's **46.01%**, one variable apart:
 
-| | binary chain (`drow_stage3_s0`) | the softmax head |
-| --- | ---: | ---: |
-| candidates, test, stride 1 | 23.45% | 20.73% |
-| **whole detector** | **46.01%** | **38.70%** |
-| the memory's contribution | **+22.56 pp** | +17.97 pp |
+| | binary chain (`drow_stage3_s0`) | the softmax head | the sigmoid head, fixed |
+| --- | ---: | ---: | ---: |
+| candidates, test, stride 1 | 23.45% | 20.73% | 19.82% |
+| **whole detector** | **46.01%** | **38.70%** | **37.51%** |
+| the memory's contribution | **+22.56 pp** | +17.97 pp | +17.69 pp |
+| best **val** AP | 47.43% @ 36 of 44 | 46.72% @ 30 of 38 | **51.27% @ 21 of 29** |
+| stage 3 alone, one stream, GPU | 5.12 ms | 3.45 ms | 5.17 ms |
 
 So **46.01% is still the best DROW whole detector on record**, and a multi-class head loses on both halves of
 the pipeline: 9.95 pp at stage 2 and 7.31 pp after the memory, which means the memory amplified the candidate
@@ -296,6 +298,26 @@ reaches **96.8% recall against these candidates' 97.2%**, giving up 0.4 pp where
 *gained* 3.5 pp at the same comparison -- on multi-class candidates its entire contribution is ranking. And
 through 38 epochs of **val** this run was adding +23.20 pp against the binary chain's +19.70, the exact
 opposite of the test ordering, which is why the memory's contribution is quoted from test and nowhere else
+([`interpreting-evaluation.md`](interpreting-evaluation.md)).
+
+**The sigmoid head's whole detector landed the same way, which makes it two arms rather than one opinion**
+(2026-11-07, `drow_sigmoid_stage3_s0`, the `pos_weight`-fixed arm). **37.51%** at test stride 1, the worst of
+the three on both halves. Its `--max-epochs 42` cap did **not** bind -- best val at epoch 21, patience ended it
+at 29 -- so the figure is about the head.
+
+Two readings come out of having three chains instead of two. **A multi-class head costs the DROW whole detector
+about 8 pp whatever its normalisation**: 37.51% and 38.70% against 46.01%, agreeing with each other to 1.19 pp,
+which is inside the 3.19 pp stage-2 seed spread and therefore not a ranking between them -- while the ~8 pp to
+the binary chain is 2.7 times that spread and is held by both arms independently. And **the memory's lift falls
+with the candidate footing rather than rising to compensate**, monotonically: candidates 23.45 / 20.73 / 19.82
+give +22.56 / +17.97 / +17.69. That kills the standing hypothesis that a worse-ranked stage 2 leaves the memory
+more to do, which all three runs' **val** readings supported.
+
+**This run is also the sharpest instance of the val/test inversion in the file.** Its best val AP, 51.27% at
+epoch 21, is the highest of the three and 3.84 pp above the binary chain's final best, held over seven
+consecutive epochs, from the *worst* candidate footing (20.28% on val against 27.73%). Its val memory
+contribution, +30.99 pp, is the largest recorded here. Both facts reverse on test. Nothing about DROW stage 3
+can be read off val -- not the lift, not the ordering, not the sign of a difference
 ([`interpreting-evaluation.md`](interpreting-evaluation.md)).
 
 **What this does to the 20.5 pp.** Nothing yet, and nothing here was expected to. What it does is close
