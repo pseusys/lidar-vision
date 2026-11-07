@@ -150,7 +150,7 @@ class TestNetworkCandidates:
             people = [np.array([[3.0, phi]])] * 3
             xy = [np.array([[-3.0 * np.sin(phi), 3.0 * np.cos(phi)]])] * 3
             return FrameSplit(scans, np.zeros((3, 3), np.float32), np.zeros(3, np.int64), np.arange(3), people, xy,
-                              [np.zeros((0, 2))] * 3, np.arange(3) / 40.0)
+                              [np.zeros((0, 2))] * 3, [()] * 3, np.arange(3) / 40.0)
 
         want = evaluate_calibration(net, split(at_limit), np.arange(3), "cpu", 3)
         got = evaluate_calibration(net, split(missing), np.arange(3), "cpu", 3)
@@ -183,7 +183,7 @@ class TestNetworkCandidates:
         people = [np.array([[3.0, phi]]), np.array([[net.max_range_m, phi]])]
         xy = [np.array([[-r * np.sin(phi), r * np.cos(phi)]]) for r in (3.0, net.max_range_m)]
         split = FrameSplit(scans, np.zeros((2, 3), np.float32), np.zeros(2, np.int64), np.arange(2), people, xy,
-                           [np.zeros((0, 2))] * 2, np.arange(2) / 40.0)
+                           [np.zeros((0, 2))] * 2, [()] * 2, np.arange(2) / 40.0)
         assert evaluate_calibration(net, split, np.arange(2), "cpu", 2)["recall"] == pytest.approx(0.5)     # only the wall's person is found
 
 
@@ -315,13 +315,15 @@ class TestAttributionArmShapes:
         """Exact equality on purpose: a new key here changes what every loader rebuilds, so adding one is a decision."""
         assert network_shape(self._stored([])) == dict(max_range_m=MAX_RANGE_M, input_features="beam", channels=(32, 64, 128),
                                                        gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext", aggregator=False,
-                                                       kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2)
+                                                       kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2,
+                                                       head="binary", class_norm="softmax", classes=1)
 
     def test_the_arms_flags_describe_their_network(self):
         shape = network_shape(self._stored(["--input-features", "lfe", "--channels", "8", "16", "32"]))
         assert shape == dict(max_range_m=MAX_RANGE_M, input_features="lfe", channels=(8, 16, 32),
                              gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext", aggregator=False,
-                                                       kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2)
+                             kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2,
+                             head="binary", class_norm="softmax", classes=1)
 
     def test_the_gather_flag_describes_its_network(self):
         """the metric window is part of the shape, so a checkpoint trained with it rebuilds with it."""
@@ -1297,7 +1299,7 @@ class TestFirstRecordings:
         split = FrameSplit(scans=np.arange(10, dtype=np.float32).reshape(5, 2), poses=np.zeros((5, 3), np.float32), start=np.array([0, 0, 2, 2, 2]),
                            annotated=np.array([1, 3, 4]), people_polar=[np.ones((1, 2)), np.zeros((0, 2)), np.ones((2, 2))],
                            people_xy=[np.ones((1, 2)), np.zeros((0, 2)), np.ones((2, 2))],
-                           other_polar=[np.zeros((0, 2))] * 3, time=np.arange(5) * 0.04)
+                           other_polar=[np.zeros((0, 2))] * 3, other_by_class=[()] * 3, time=np.arange(5) * 0.04)
         first = first_recordings(split, 1)
         assert first.scans.shape == (2, 2) and first.start.tolist() == [0, 0] and first.time.tolist() == pytest.approx([0.0, 0.04])
         assert first.annotated.tolist() == [1] and len(first.people_polar) == 1 and len(first.people_xy) == 1

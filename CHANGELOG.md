@@ -38,6 +38,77 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A head the dataset chooses, and the four cheap levers DROW's 20 pp gap has left (2026-11-07)
+
+*keywords: item 84 built, item 83 queued, items 86 and 87 added, HEADS multiclass binary, --class-norm softmax sigmoid, class_channels person_column, class_annotations class_columns, DatasetSpec class_ids, soft_class_target, step2 --eval-max-range-m, calibration_frames no_grad, queue_drow_heads, 82.76 86.13 regression, 46.01 against 66.5*
+
+**The decision head is now a named component and the dataset picks it.** `--head binary` is what every number
+on file was measured with -- one person logit, one 1x1 convolution, three channels. `--head multiclass` emits a
+score per class the dataset annotates, `--class-norm softmax` with DROW's background column or `sigmoid`
+scoring each class independently, and the **vote regression stays shared**, which is DROW3's and DR-SPAAM's own
+split rather than ours. The class count is the spec's rather than a flag, and `head`, `class_norm` and the
+count are shape keys in every checkpoint beside `channels`, because a multi-class checkpoint rebuilt as binary
+would quietly score the wrong column.
+
+**Three equivalences make it a generalisation rather than a second architecture**, and each is a test rather
+than a claim: the default head has the same 976,707 parameters, the same state-dict keys and the same 2-D logit
+shape; a one-class `sigmoid` head is **numerically identical** to `binary`, so a binary checkpoint folds into it
+with the extra columns silent and decodes identical candidates; and a `softmax` head **refuses** that fold
+instead of padding it, since its denominator changes what the weights mean. The object memory stays
+class-agnostic (owner, 2026-11-06), which keeps every FROG number and the whole slot ablation table valid.
+
+**The adopted recipe's soft target survives the head**, which the first smoke run proved was not free: the
+metric Gaussian is a *person-class* target and `compute_loss` refused it outright above one class. It now
+softens the person column and leaves the other classes their published hard 1 -- `sigmoid` writes it into that
+column, `softmax` takes the row `soft_class_target` builds, where target `g` on the person means `[1-g, g]`
+over background and person. Without it a multi-class arm would have differed from the chain it is compared with
+in two things at once and priced neither.
+
+**Two defects the 1,727-test suite did not catch and a two-minute smoke run did.** The soft-target refusal
+above, and a lost decorator: splitting `evaluate_calibration` into a frames pass left `@torch.no_grad()` on the
+wrapper while the loop calling `.numpy()` moved into `calibration_frames`, which would have crashed the test
+pass of **every** stage-2 run. The suite only ever reached the decorated wrapper. Both are pinned now, and the
+rule earned again is that a path no test exercises end to end gets a smoke run before a queue is launched.
+
+**Also built:** `--eval-max-range-m` at stage 2 (item 82's column, which until now existed only for the whole
+detector), `DatasetSpec.class_ids` with `class_annotations`/`class_columns` keeping DROW's label ids apart from
+the head's columns, and `FrameSplit.other_by_class` so the wheelchairs and walkers arrive separated as well as
+merged. `restricted_columns` no longer hardcodes `("candidates", "memory")` as its sides -- the same shape of
+defect as a helper hardcoding its dataset.
+
+**`queue_drow_heads.py` runs the four levers the DROW gap has left**, which is 20.5 pp between our 46.01% and
+DROW3's 66.5% *through this repository's own pipeline*. Three readings are already closed and the queue retries
+none of them: capacity in both directions (24.55% at (16, 32, 64), 26.32% at dropout 0.3, both below the
+headline's 29.45%), the angular grid (0.61 pp of stage 2 on FROG at 0.5 deg), and the ignore region (flat AP
+for a third fewer false positives). What is left is **ranking** -- 8.2% precision at 90.6% recall -- so the arms
+are: the two multi-class heads; the **range span**, never isolated, where a 10 m-trained arm and the headline
+recipe re-scored on the same restricted labels separate "cannot rank at depth" from "cannot rank"; the
+**metric gather at 1.66 m**, the same lever as a fixed metric window, which cost 1.42 pp on FROG and reads a
+beam covering twice the arc and three times the depth here; and the **kernel arc** at 5 and 3, last because
+the FROG sweep found it flat.
+
+**The regression arm runs first and everything waits on it:** the frozen seed-0 FROG chain re-scored through
+the new code must return candidates **82.76%** and whole detector **86.13%** at stride 1, the figures
+`a71_freeze_s0` recorded. Not "about" -- the binary path is meant to be untouched, so anything else means the
+head change moved FROG and every arm behind it is void. Stage 3 is pre-committed to the `softmax` arm, because
+a runner cannot branch on a result and the standing rule picks the published mechanism on a tie; the screens
+finish before it starts, so re-pointing it stays a decision someone can take.
+
+**Tests: 132 new, 1,727 pass, ruff clean.** `tests/test_decision_head.py` (44, the head and the loss),
+`tests/test_multiclass_training.py` (16, the targets and the folded-checkpoint identity),
+`tests/test_step2_eval_range.py` (8, the restricted column and the no-grad regression),
+`tests/test_drow_heads_queue.py` (64, every job through its own parser).
+
+**Changed:** `library/takheliped/detectors/takheliped.py` (`HEADS`, `CLASS_NORMS`, `class_channels`,
+`person_column`, `person_logit`, `_fold_head`), `utils/train.py` (the loss's normalisation and
+`soft_class_target`), `utils/train_takheliped.py` (the flags, the targets, the stored shape keys, stage 2's
+restricted column, `calibration_frames`), `utils/stage2_probe.py` and `utils/tracking_baselines.py` (both read
+the person column rather than channel 0), `utils/queue_drow_heads.py` (new), `docs/RESEARCH.md` (section 5.2's
+head table and the class-agnostic memory's one cost), `memory/detector-architectures.md`, `memory/commands.md`,
+`TODO.md`.
+
+---
+
 ## The 0.5 deg deficit is a figure rather than a bound, and it is 1.02 pp: the mis-ranked window cost 0.44 pp of candidates and nothing after the memory (2026-11-06)
 
 *keywords: item 73 figure not bound, item 85 closed, frog_half_stage3_fixed_s0, window 0.50-2.00, 85.28 vs 86.30, candidates 82.18, memory lift 3.10 vs 3.51, -1.02 pp, 0.44 pp window cost, memory_ms_per_frame host load, queue_half_corrected DONE*

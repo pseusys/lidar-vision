@@ -539,10 +539,28 @@ def build_cutout(input_mode: str, scans_hist, odoms_hist, n_beams: int, angles,
                   thresh_dist=thresh_dist, nsamp=nsamp, laserIncrement=laser_inc)
 
 
+def soft_class_target(labels: torch.Tensor, soft_labels: torch.Tensor, columns: int,
+                      person: int = 1) -> torch.Tensor:
+    """A softmax head's target rows `(N, columns)`: each beam's own class, with the person column softened.
+
+    The adopted recipe's classification target is a metric Gaussian on the person class rather than a hard 1
+    (`beam_heatmap`), and a multi-class head has to be able to take the same target or an arm carrying it would
+    differ from the headline in two things at once. Written as a row, the binary soft target *is* a
+    distribution: target `g` on the person means `[1 - g, g]` over background and person, which is what this
+    builds. Another class keeps its hard 1 -- only the person class has a Gaussian, since only the person class
+    is what `beam_heatmap` is built from -- and a row that would sum past 1, a beam near a person *and* labelled
+    something else, is renormalised rather than clipped.
+    """
+    rows = F.one_hot(labels.clamp(min=0), columns).to(soft_labels.dtype)
+    rows[:, person] = soft_labels.to(rows.dtype)
+    rows[:, 0] = (1.0 - rows[:, 1:].sum(-1)).clamp(min=0.0)
+    return rows / rows.sum(-1, keepdim=True).clamp(min=1e-12)
+
+
 def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
                  labels: torch.Tensor, vote_targets: torch.Tensor,
                  vote_weight: float = 0.02, soft_labels: torch.Tensor = None,
-                 ignore: torch.Tensor = None):
+                 ignore: torch.Tensor = None, class_norm: str = "softmax", person: int = 1):
     """
     logits       : (N, C)  raw class logits; C=4 for multi-class, C=1 for binary
     votes        : (N, 2)  predicted vote offsets
@@ -560,8 +578,19 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
     Binary mode (C=1, e.g. Li2Former): any non-background beam is treated as
     positive; loss is binary cross-entropy with class-balanced pos_weight.
 
+    `class_norm` picks how a multi-class head is normalised, and is ignored at C=1 where both answers are the
+    binary term above. **"softmax"** is DROW's own and the default: `C = 1 + classes` logits through a
+    cross-entropy whose `labels` are column indices, background at 0. **"sigmoid"** scores each class
+    independently -- `C = classes` logits, no background column, a one-hot target over the labelled column and
+    a per-column `pos_weight` -- which makes the binary term a strict special case of it rather than a
+    different objective: at one class the counts, the weight and the reduction are the same numbers.
+
     `soft_labels` (N,) in [0, 1] replaces the hard 0/1 classification target with a soft one -- `beam_heatmap`'s
-    Gaussian. Three things deliberately do **not** change with it, so the arm varies one
+    Gaussian. It is a **person-class** target, so under a multi-class head it softens the person column and
+    leaves the other classes their hard 1: `sigmoid` writes it into that column, and `softmax` takes the row
+    `soft_class_target` builds. `person` says which column that is, in label-column space, and it is 1 on every
+    dataset here because `DatasetSpec.classes` lists the person first. Three things deliberately do **not**
+    change with it, so the arm varies one
     thing: the **vote** term still masks on `labels > 0`, so localisation is untouched; `pos_weight` is still counted
     from the hard labels, because it is a count of positive beams and taking it from a soft target would move the class
     balance as well as the target; and with `soft_labels=None` this function is bit-identical to what produced every
@@ -572,9 +601,11 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
     keep = None if ignore is None or not bool(ignore.any()) else ~ignore
     n_pos = int((labels > 0).sum() if keep is None else ((labels > 0) & keep).sum())
     n_neg = int((labels == 0).sum() if keep is None else ((labels == 0) & keep).sum())
-    if soft_labels is not None and logits.shape[-1] != 1:
-        raise ValueError("soft_labels is a binary target, so it needs C=1 logits, not "
-                         f"{logits.shape[-1]} classes")
+    if class_norm not in ("softmax", "sigmoid"):
+        raise ValueError(f"class_norm must be 'softmax' or 'sigmoid', not {class_norm!r}")
+    if class_norm == "sigmoid" and logits.shape[-1] > 1 and int(labels.max()) > logits.shape[-1]:
+        raise ValueError(f"a sigmoid head needs one column per class: {logits.shape[-1]} columns were given for "
+                         f"labels up to column {int(labels.max())}")
 
     if logits.shape[-1] == 1:
         # Binary classification: background (0) vs. any person (1), or a soft target over the same beams
@@ -587,6 +618,19 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
         if keep is not None:
             scores, scored = scores[keep], scored[keep]
         l_class = F.binary_cross_entropy_with_logits(scores, scored, pos_weight=pos_weight)
+    elif class_norm == "sigmoid":
+        # One independent decision per class, against a one-hot target with no background column. The counting is
+        # per column so that one class reproduces the binary branch above exactly rather than approximately.
+        one_hot = F.one_hot(labels.clamp(min=0), logits.shape[-1] + 1)[..., 1:].to(logits.dtype)
+        if soft_labels is not None:
+            # The person column takes the Gaussian, exactly as the binary branch replaces its whole target with
+            # it: a beam near a person is a soft person positive whatever else it is labelled.
+            one_hot[:, person - 1] = soft_labels.to(one_hot.dtype)
+        scores, scored = (logits, one_hot) if keep is None else (logits[keep], one_hot[keep])
+        positives = scored.sum(0)
+        pos_weight = torch.where(positives > 0, (scored.shape[0] - positives) / positives.clamp(min=1.0),
+                                 torch.ones_like(positives))
+        l_class = F.binary_cross_entropy_with_logits(scores, scored, pos_weight=pos_weight)
     else:
         if n_pos > 0 and n_neg > 0:
             pos_weight = float(n_neg) / float(n_pos)
@@ -594,8 +638,11 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
             weight[1:] = pos_weight
         else:
             weight = None
+        # A soft target becomes a row of class probabilities (`soft_class_target`); `cross_entropy` takes either
+        # a class index or a distribution, so the hard path is unchanged bit for bit when none is given.
+        scored = labels if soft_labels is None else soft_class_target(labels, soft_labels, logits.shape[-1], person)
         l_class = F.cross_entropy(logits if keep is None else logits[keep],
-                                  labels if keep is None else labels[keep], weight=weight)
+                                  scored if keep is None else scored[keep], weight=weight)
 
     pos_mask = labels > 0
     if pos_mask.any():

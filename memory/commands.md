@@ -157,7 +157,9 @@ one written before a flag existed falls back to the adopted default.
 | `--vote-frame beam\|sensor` | `step2` | 18 | which frame the head regresses the offset to a person's centre in |
 | `--block convnext\|residual` | `step2` | 19 | which block carries the U-Net's depth |
 | `--channels 64 128 256` | `step2` | 19 | the widening half of the shape sweep; no new code was needed |
-| `--gather-width-m`, `--gather-samples` | `step2` | 15 | the metric-width first layer -- **answered, it costs** |
+| `--gather-width-m`, `--gather-samples` | `step2` | 15 | the metric-width first layer -- **answered on FROG, it costs 1.42 pp**; reopened once on DROW, where a beam covers twice the arc |
+| `--head binary\|multiclass`, `--class-norm softmax\|sigmoid` | `step2` | 84 | whether the head emits one person logit or a score per annotated class, and how a multi-class one is normalised. The vote regression is shared either way |
+| `--eval-max-range-m` | `step2`, `score` | 82, 86 | score a finished pass again inside a tighter radius, both readings. Scoring only -- `--max-range-m` is what shapes the network |
 
 Their queues: `queue_selective_vs_gru.py` (the recurrences, each with its own CPU latency job) and `queue_vote_frame_and_block.py` (three stage-2
 arms at three seeds, each followed by its weight average, then one `stage2_probe.py` pass over all twelve checkpoints).
@@ -426,6 +428,15 @@ python train_takheliped.py score --dataset drow --stage2 <averaged> --memory <st
 # the whole DROW chain, with the two stage-2 arms that make its number readable
 python queue_drow.py --list
 python queue_drow.py
+
+# the head queue: the FROG regression first, then DROW's classes as classes (softmax and sigmoid), the range
+# span from both sides, the metric gather and the kernel arc -- and one stage 3 off the softmax arm (~9 h)
+python queue_drow_heads.py --list
+python queue_drow_heads.py
+
+# a multi-class stage 2 on DROW: three columns plus the shared vote, scored on the person class as always
+python train_takheliped.py step2 --dataset drow --max-range-m 29.99 --head multiclass --class-norm softmax \
+    --checkpoint-every 0.25 --no-aggregator --label-sigma-m 0.3 --seed 0 --out-dir ../checkpoints_three_horizon/<name>
 
 # the handling queue: the 10 m column, the ignore-region arm, and the FROG 0.5 deg chain beside them
 python queue_drow_handling.py --list

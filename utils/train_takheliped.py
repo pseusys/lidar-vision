@@ -48,7 +48,7 @@ from takheliped.datasets.drow_dataset import DROW_Dataset
 from takheliped.datasets.frog_dataset import FROG_Dataset, frog_laser_angles
 from takheliped.detectors import LFEPeaksDetector
 from takheliped.detectors.takheliped import (
-    ASSOCIATIONS, BEAM_DIVISOR, BLOCKS, MAX_RANGE_M, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
+    ASSOCIATIONS, BEAM_DIVISOR, BLOCKS, CLASS_NORMS, HEADS, MAX_RANGE_M, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, MemoryOutput, ObjectMemory, SlotRules, Slots, free_range_profile, load_calibration_weights, render_prior, sanitize_ranges,
     sector_count, world_to_sensor,
 )
 from takheliped.utils.tracking import SortTracker, odom_xya_delta_to_tracker_frame
@@ -178,6 +178,12 @@ class DatasetSpec:
     #: 56.4% of what its test split annotates -- were trained as background. Naming them here is what lets
     #: the ignore region find them; it does not make them targets, which is the swappable head's job.
     other_detections: Tuple[str, ...]
+    #: The per-beam label id of each entry of `classes`, in that order. `make_targets` has used DROW's own
+    #: numbering since the baselines were written -- 1 wheelchair, 2 walker, 3 person -- and the order matters
+    #: beyond bookkeeping: where two classes cover one beam the higher id wins, which is what keeps a person
+    #: standing beside a wheelchair labelled a person. The head's columns follow `classes`, not these ids, so
+    #: the person is column 0 on every dataset; `class_columns` maps one to the other.
+    class_ids: Tuple[int, ...]
     dt_average_frames: int
     grid: Callable[[int], np.ndarray]
     loader: Callable[[str, Optional[float], str], object]
@@ -248,13 +254,13 @@ def _drow_loader(split: str, missing_return_m: Optional[float], mode: str):
 #: FROG, whose `rate_hz` is the corrected 40.01 Hz, not the 26.2 Hz median of its bunched stamps.
 FROG = DatasetSpec(name="frog", source_beams=720, fov_deg=180.0, source_spacing_deg=0.25, rate_hz=40.01,
                    max_range_m=MAX_RANGE_M, rated_range_m=61.0, annotated_share=1.0, people_per_annotated_frame=3.06,
-                   classes=("pedestrian",), other_detections=(), dt_average_frames=32,
+                   classes=("pedestrian",), other_detections=(), class_ids=(3,), dt_average_frames=32,
                    grid=frog_laser_angles, loader=_frog_loader)
 #: DROW at its own sensor limit, the owner's call: a 10 m model cannot represent the 7.3% of its labels past 10 m.
 DROW = DatasetSpec(name="drow", source_beams=450, fov_deg=224.5, source_spacing_deg=0.5, rate_hz=12.70,
                    max_range_m=29.99, rated_range_m=30.0, annotated_share=0.05, people_per_annotated_frame=0.81,
                    classes=("pedestrian", "wheelchair", "walker"), other_detections=("det_wc", "det_wa"),
-                   dt_average_frames=32, grid=drow_laser_angles, loader=_drow_loader)
+                   class_ids=(3, 1, 2), dt_average_frames=32, grid=drow_laser_angles, loader=_drow_loader)
 DATASETS = {spec.name: spec for spec in (FROG, DROW)}
 DEFAULT_DATASET = "frog"        # so every command and every number measured before this flag existed is unchanged
 
@@ -868,7 +874,8 @@ def decode_candidates(scan: np.ndarray, angles: np.ndarray, prob: np.ndarray, vo
 def network_shape(args: Dict[str, str]) -> Dict[str, object]:
     """The `CalibrationNetwork` arguments a stage-2 run's `args` (stored as strings) fix, because they change what the input means
     or which weights exist: the range limit, the input (`--input-features`), the widths (`--channels`), the metric gather
-    (`--gather-width-m`, `--gather-samples`), the head's target frame (`--vote-frame`), the block (`--block`), the
+    (`--gather-width-m`, `--gather-samples`), the decision head (`--head`, `--class-norm` and the dataset's class
+    count), the head's target frame (`--vote-frame`), the block (`--block`), the
     whole-scan aggregator (`--aggregator`) and the four flat shape knobs (`--kernel-size`, `--expansion`,
     `--blocks`, `--bottleneck-blocks`) -- the widths and input for the attribution arms F1 and W, then
     the sweeps that found them flat. A flag left unset, or written before it
@@ -887,7 +894,13 @@ def network_shape(args: Dict[str, str]) -> Dict[str, object]:
             "expansion": parameters["expansion"].default if args.get("expansion") in unset else int(args["expansion"]),
             "blocks": parameters["blocks"].default if args.get("blocks") in unset else tuple(literal_eval(args["blocks"])),
             "bottleneck_blocks": parameters["bottleneck_blocks"].default if args.get("bottleneck_blocks") in unset
-            else int(args["bottleneck_blocks"])}
+            else int(args["bottleneck_blocks"]),
+            # The head's three keys. A multi-class checkpoint rebuilt as binary would load a 6-channel head into a
+            # 3-channel one and, where the shapes happened to agree, score a different column -- so these are shape
+            # keys like `channels`, not options like `dropout`.
+            "head": parameters["head"].default if args.get("head") in unset else args["head"],
+            "class_norm": parameters["class_norm"].default if args.get("class_norm") in unset else args["class_norm"],
+            "classes": parameters["classes"].default if args.get("classes") in unset else int(args["classes"])}
 
 
 def stage2_training(args: Dict[str, str]) -> Dict[str, object]:
@@ -1017,6 +1030,51 @@ def ignore_beams(scan: np.ndarray, angles: np.ndarray, objects, radius: float, m
     return mask if positives is None else mask & ~np.asarray(positives, bool)
 
 
+def head_class_count(head: str, spec: DatasetSpec) -> int:
+    """How many classes the head is built to say: the dataset's for `multiclass`, one for `binary`.
+
+    Not a flag. A head as wide as a dataset it was not trained on would carry columns nothing ever supervised,
+    and one narrower would drop a class the dataset annotates -- so the width is the spec's and the checkpoint
+    stores it (`network_shape`).
+    """
+    return len(spec.classes) if head == "multiclass" else 1
+
+
+def class_annotations(spec: DatasetSpec, people, others, head: str) -> Dict[int, list]:
+    """`make_targets`' `{label id: [(range, bearing), ...]}` for one frame.
+
+    A `binary` head gets the people alone, which is what every run before this one trained against. A
+    `multiclass` head gets every class the spec annotates, each under the id `class_ids` gives it, so DROW's
+    wheelchairs and walkers become their own targets instead of background. `others` arrives in
+    `spec.other_detections` order, which is the order `class_ids` after the person follows.
+    """
+    gt: Dict[int, list] = {spec.class_ids[0]: [tuple(p) for p in np.asarray(people, np.float64).reshape(-1, 2)]}
+    if head == "binary":
+        return gt
+    for class_id, objects in zip(spec.class_ids[1:], others, strict=True):
+        gt[class_id] = [tuple(o) for o in np.asarray(objects, np.float64).reshape(-1, 2)]
+    return gt
+
+
+def class_columns(labels: np.ndarray, class_ids: Tuple[int, ...]) -> np.ndarray:
+    """`make_targets`' per-beam label ids `[N]` as the head's column indices: background 0, then one column per
+    entry of `DatasetSpec.classes`, in that order.
+
+    Two numbering schemes meet here and both are deliberate. The **ids** are DROW's, because `make_targets`
+    resolves a beam two classes both cover by letting the higher id win, and that is what keeps a person beside a
+    wheelchair labelled a person. The **columns** follow `classes`, which lists the person first on every dataset,
+    so the person's column is a property of the head rather than of the dataset.
+
+    An id the spec does not list becomes background rather than some other class's column: the honest reading
+    when a caller passed fewer classes than the dataset annotates, where the alternative mislabels it silently.
+    """
+    labels = np.asarray(labels)
+    columns = np.zeros(labels.shape, dtype=np.int64)
+    for column, class_id in enumerate(class_ids, start=1):
+        columns[labels == class_id] = column
+    return columns
+
+
 def anchor_ranges(scans: np.ndarray, max_range_m: float) -> np.ndarray:
     """Ranges as the network read them (`sanitize_ranges`), for everything that anchors on a beam's endpoint -- vote decoding and
     training targets. Raw scans there would put a missing return's votes at infinity, or at FROG train/val's 61.0 m, while the
@@ -1034,7 +1092,7 @@ def network_candidates(net: CalibrationNetwork, scans: np.ndarray, device) -> Li
     for scan in scans:
         logit, votes, features = net(torch.from_numpy(np.asarray(scan, np.float32)[None]).to(device))
         offsets = beam_frame_votes(votes[0].cpu().numpy(), angles, net.vote_frame)
-        candidates, weights = decode_candidates(np.asarray(scan), angles, torch.sigmoid(logit)[0].cpu().numpy(), offsets, TOP_P, net.max_range_m)
+        candidates, weights = decode_candidates(np.asarray(scan), angles, torch.sigmoid(net.person_logit(logit))[0].cpu().numpy(), offsets, TOP_P, net.max_range_m)
         out.append((candidates, weights @ features[0].T.cpu().numpy()))
     return out
 
@@ -1163,12 +1221,17 @@ def restrict_to_range(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]], r
 
 
 def restricted_columns(played: Dict[str, list], radius_m: float) -> Dict[str, Dict[str, Dict[str, float]]]:
-    """Item 82's columns: one replay's frames scored again under both readings of a restricted label set."""
+    """Item 82's columns: one pass's frames scored again under both readings of a restricted label set.
+
+    Every side the caller hands over is scored, in the order it hands them: stage 3 has two, `candidates` and
+    `memory`, and stage 2 has one. The sides were literals here until a stage-2 run needed the same column,
+    which is the same mistake as a helper hardcoding its dataset ([`gotchas.md`](../memory/gotchas.md)).
+    """
     columns = {}
     for reading, detections in (("labels", False), ("labels_and_detections", True)):
         key = f"within_{radius_m:g}m_{reading}"
-        columns[key] = {side: score_detections(restrict_to_range(played[side], radius_m, detections))
-                        for side in ("candidates", "memory")}
+        columns[key] = {side: score_detections(restrict_to_range(frames, radius_m, detections))
+                        for side, frames in played.items()}
         for side, row in columns[key].items():
             print(f"  within {radius_m:g} m, {reading}, {side}: AP {row['ap']:.2%} P {row['precision']:.1%} "
                   f"R {row['recall']:.1%} FP {row['fp_per_frame']:.3f} over {row['people']} people", flush=True)
@@ -1634,6 +1697,10 @@ class FrameSplit:
     #: Per annotated frame, the annotated objects of every class **but** the person class, as (range, bearing).
     #: Empty on a one-class dataset, so the training loop indexes it without asking which dataset it is on.
     other_polar: List[np.ndarray]
+    #: The same objects kept apart by class, one array per `spec.other_detections` entry in that order, for a
+    #: head that scores them rather than ignoring them. `other_polar` is their concatenation, so there is one
+    #: source: the ignore mask wants them merged and a multi-class target wants them separate.
+    other_by_class: List[Tuple[np.ndarray, ...]]
     time: np.ndarray
 
 
@@ -1649,7 +1716,7 @@ def load_frames(name: str, mode: str = DEFAULT_MODE, spec: DatasetSpec = FROG) -
 
 def frames_from_dataset(ds, spec: DatasetSpec = FROG) -> FrameSplit:
     """Pack every recording of `ds` end to end, annotations placed on their own scans through `idet2iscan`."""
-    scans, poses, start, annotated, polar, other, times = [], [], [], [], [], [], []
+    scans, poses, start, annotated, polar, other, by_class, times = [], [], [], [], [], [], [], []
     offset = 0
     for s in range(len(ds.scans)):
         n = len(ds.scans[s])
@@ -1660,12 +1727,13 @@ def frames_from_dataset(ds, spec: DatasetSpec = FROG) -> FrameSplit:
         for d in range(len(ds.det_id[s])):
             annotated.append(offset + int(ds.idet2iscan[s][d]))
             polar.append(spec.real_people(ds.det_wp[s][d]))
-            other.append(np.concatenate([spec.real_people(getattr(ds, name)[s][d]) for name in spec.other_detections])
-                         if spec.other_detections else np.zeros((0, 2)))
+            classes = tuple(spec.real_people(getattr(ds, name)[s][d]) for name in spec.other_detections)
+            by_class.append(classes)
+            other.append(np.concatenate(classes) if classes else np.zeros((0, 2)))
         offset += n
     xy = [np.array([project_cartesian_from_polar(r, phi) for r, phi in p], dtype=np.float64).reshape(-1, 2) for p in polar]
     return FrameSplit(np.concatenate(scans), np.concatenate(poses), np.concatenate(start), np.array(annotated), polar, xy,
-                      other, time=np.concatenate(times))
+                      other, by_class, time=np.concatenate(times))
 
 
 @dataclass
@@ -1732,7 +1800,7 @@ def joint_step(net: CalibrationNetwork, memory: ObjectMemory, ranges: torch.Tens
             prior = render_prior(predicted, slots.value, torch.sigmoid(state.slot_logit), slots.alive, net.angles, sectors)
     logit, votes, features = net(ranges, prior)
     angles = net.angles.cpu().numpy()
-    prob, scans = torch.sigmoid(logit).detach().cpu().numpy(), ranges.cpu().numpy()
+    prob, scans = torch.sigmoid(net.person_logit(logit)).detach().cpu().numpy(), ranges.cpu().numpy()
     votes_np = beam_frame_votes(votes.detach().cpu().numpy(), angles, net.vote_frame)
     xy, score = np.zeros((b, TOP_P, 2), np.float32), np.zeros((b, TOP_P), np.float32)
     valid, weights = np.zeros((b, TOP_P), bool), np.zeros((b, TOP_P, n), np.float32)
@@ -1750,19 +1818,27 @@ def joint_step(net: CalibrationNetwork, memory: ObjectMemory, ranges: torch.Tens
 @torch.no_grad()
 def evaluate_calibration(net: CalibrationNetwork, split: FrameSplit, positions: np.ndarray, device, batch: int) -> Dict[str, float]:
     """AP and operating point of the network on annotated frames `positions` of `split`."""
+    return score_detections(calibration_frames(net, split, positions, device, batch))
+
+
+@torch.no_grad()
+def calibration_frames(net: CalibrationNetwork, split: FrameSplit, positions: np.ndarray, device,
+                       batch: int) -> List[Tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """The `(scores, xy, people)` triples `evaluate_calibration` scores, kept so one pass can be scored twice --
+    once whole and once inside a range limit (`restricted_columns`) -- without running the network again."""
     net.eval()
     angles = net.angles.cpu().numpy()
     frames = []
     for chunk in np.array_split(positions, math.ceil(len(positions) / batch)):
         logit, votes, _ = net(frame_batch(split, split.annotated[chunk], device))
-        prob = torch.sigmoid(logit).cpu().numpy()
+        prob = torch.sigmoid(net.person_logit(logit)).cpu().numpy()
         votes = beam_frame_votes(votes.cpu().numpy(), angles, net.vote_frame)
         for j, a in enumerate(chunk):
             scan, p = voting_beams(split.scans[split.annotated[a]], prob[j], net.max_range_m)
             dets = decode_frame(scan, angles, p, votes[j])
             frames.append((dets[:, 0], dets[:, 1:], split.people_xy[a]))
     net.train()
-    return score_detections(frames)
+    return frames
 
 
 def select_test_weights(net: CalibrationNetwork, best: BestCheckpoint, select: str, last: Dict[str, object], device) -> None:
@@ -1791,6 +1867,9 @@ def train_calibration(args) -> None:
             print(note, flush=True)
     angles = spec.angles()
     stored_args = {k: str(v) for k, v in vars(args).items()}
+    # The head's width is the dataset's rather than a flag of its own, and it is stored so the checkpoint rebuilds
+    # the head it was trained as -- a multi-class checkpoint reopened as binary would score the wrong column.
+    stored_args["classes"] = str(head_class_count(args.head, spec))
     net = CalibrationNetwork(torch.from_numpy(angles), dropout=args.dropout, **network_shape(stored_args)).to(device)
     if args.init:
         load_calibration_weights(net, torch.load(args.init, map_location=device)["model"])
@@ -1833,6 +1912,7 @@ def train_calibration(args) -> None:
             ranges = frame_batch(train_split, frames, device)
             scans, people = [train_split.scans[f] for f in frames], [train_split.people_polar[c] for c in chunk]
             others = [train_split.other_polar[c] for c in chunk]
+            by_class = [train_split.other_by_class[c] for c in chunk]
             if args.mirror:
                 flip = rng.random(len(frames)) < MIRROR_PROBABILITY
                 ranges = mirror_scans(ranges, flip)
@@ -1841,11 +1921,16 @@ def train_calibration(args) -> None:
                 # The objects mirror with the scan for the same reason the people do: the mask is built from
                 # bearings, so an unmirrored object silences the beams on the wrong side of the robot.
                 others = [mirror_people(o, angles) if m else o for o, m in zip(others, flip, strict=True)]
+                by_class = [tuple(mirror_people(q, angles) if m else q for q in t)
+                            for t, m in zip(by_class, flip, strict=True)]
             logit, votes, _ = net(ranges)
-            targets = [make_targets(anchor_ranges(s, net.max_range_m), angles, {3: [tuple(p) for p in g]},
+            targets = [make_targets(anchor_ranges(s, net.max_range_m), angles,
+                                    class_annotations(spec, g, o, net.head_kind),
                                     vote_collect_radius=args.label_radius, nearest=args.label_assign == "nearest",
-                                    frame=net.vote_frame) for s, g in zip(scans, people, strict=True)]
-            labels = torch.from_numpy(np.stack([t[0] for t in targets])).to(device)
+                                    frame=net.vote_frame) for s, g, o in zip(scans, people, by_class, strict=True)]
+            # The label ids `make_targets` works in become the head's columns. A binary head only ever reads
+            # `labels > 0`, which the mapping preserves, so its loss is the one every number on file carries.
+            labels = torch.from_numpy(np.stack([class_columns(t[0], spec.class_ids) for t in targets])).to(device)
             vote_targets = torch.from_numpy(np.stack([t[1] for t in targets])).to(device)
             # The soft Gaussian beam target. The same geometry and the same radius as `make_targets`, so the positive beams are
             # identical and only their *values* change -- hard 1 to a metric Gaussian. The vote target is untouched.
@@ -1859,9 +1944,11 @@ def train_calibration(args) -> None:
             ignore = None if not args.ignore_other_classes else torch.from_numpy(np.stack([
                 ignore_beams(s, angles, o, args.label_radius, net.max_range_m, positives=t[0] > 0)
                 for s, o, t in zip(scans, others, targets, strict=True)])).to(device)
-            loss, _, _ = compute_loss(logit.reshape(-1, 1), votes.reshape(-1, 2), labels.reshape(-1), vote_targets.reshape(-1, 2),
+            loss, _, _ = compute_loss(logit.reshape(-1, net.class_columns), votes.reshape(-1, 2), labels.reshape(-1),
+                                      vote_targets.reshape(-1, 2),
                                       soft_labels=None if soft is None else soft.reshape(-1),
-                                      ignore=None if ignore is None else ignore.reshape(-1))
+                                      ignore=None if ignore is None else ignore.reshape(-1),
+                                      class_norm=net.class_norm)
             optimizer.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), GRAD_CLIP)
@@ -1900,9 +1987,14 @@ def train_calibration(args) -> None:
     select_test_weights(net, best, args.select, dict(epoch=step / iterations, args=stored_args), device)
     test = splits["test"]
     positions = np.arange(0, len(test.annotated), args.test_stride)
-    results = dict(history=history, test=evaluate_calibration(net, test, positions, device, args.eval_batch))
+    played = calibration_frames(net, test, positions, device, args.eval_batch)
+    results = dict(history=history, test=score_detections(played))
     r = results["test"]
     print(f"\ntest (every {args.test_stride} annotated frame): AP {r['ap']:.2%}  FP {r['fp_per_frame']:.3f}  FN {r['fn_per_frame']:.3f}", flush=True)
+    # Item 82's column for stage 2: the same pass read inside a tighter radius, which is the only footing a run
+    # trained at one range limit can be compared with a run trained at another on.
+    if args.eval_max_range_m:
+        results.update(restricted_columns({"stage2": played}, args.eval_max_range_m))
     (args.out_dir / "step2_results.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
     print(f"wrote {args.out_dir / 'step2_results.json'}", flush=True)
 
@@ -2152,7 +2244,8 @@ def first_recordings(split: FrameSplit, n: int) -> FrameSplit:
     keep = split.annotated < end
     return FrameSplit(split.scans[:end], split.poses[:end], split.start[:end], split.annotated[keep],
                       [q for q, k in zip(split.people_polar, keep) if k], [q for q, k in zip(split.people_xy, keep) if k],
-                      [q for q, k in zip(split.other_polar, keep) if k], time=split.time[:end])
+                      [q for q, k in zip(split.other_polar, keep) if k],
+                      [q for q, k in zip(split.other_by_class, keep) if k], time=split.time[:end])
 
 
 # ---------------------------------------------------------------- step 4: ablations that need no training
@@ -2510,6 +2603,14 @@ def build_parser() -> argparse.ArgumentParser:
     step3b.add_argument("--limit-recordings", type=int, default=0, help="only the first N recordings of each split (smoke runs)")
     step2 = sub.choices["step2"]
     step2.add_argument("--init", type=Path, default=None, help="start from this checkpoint's weights (a fresh optimizer)")
+    step2.add_argument("--head", choices=HEADS, default="binary",
+                       help="binary: one person logit, the head every number on file was measured with; multiclass: one score per "
+                            "class the dataset annotates, so DROW's wheelchairs and walkers are targets rather than background. "
+                            "The vote regression is shared either way, which is DROW3's own split")
+    step2.add_argument("--class-norm", choices=CLASS_NORMS, default="softmax",
+                       help="how a multiclass head is normalised: softmax carries a background column and is DROW's own; sigmoid "
+                            "scores each class independently, which makes the binary head a strict special case of it. Ignored "
+                            "by --head binary")
     step2.add_argument("--ignore-other-classes", action="store_true",
                        help="drop the beams a non-person annotation covers out of the classification loss, "
                             "neither positive nor negative. Stage 2's alone, since it is the only stage that "
@@ -2596,6 +2697,10 @@ def build_parser() -> argparse.ArgumentParser:
     step2.add_argument("--min-epochs", type=float, default=2)
     step2.add_argument("--val-frames", type=int, default=2000, help="evenly spaced annotated val frames per evaluation")
     step2.add_argument("--test-stride", type=int, default=1, help="score every Nth annotated test frame at the end")
+    step2.add_argument("--eval-max-range-m", type=float, default=0.0,
+                       help="item 82's column, at stage 2: also score the test pass against the labels inside this radius, both "
+                            "with the far detections kept and with them dropped. Scoring only -- unlike --max-range-m, which "
+                            "shapes the network. It is what reads a 10 m-trained arm against a 29.99 m one. 0 is off")
     return ap
 
 

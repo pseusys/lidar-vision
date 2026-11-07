@@ -564,7 +564,8 @@ with raw data**, with noise handled inside the model rather than in a per-datase
 
 A 1-D U-Net over the beam axis, built from ConvNeXt blocks, with widths (32, 64, 128) at `N`, `N/2` and `N/4` beams and a
 bottleneck over `N/8` sectors; a 3-tap convolution across bottleneck sectors; a DROW-style head giving each beam a
-person logit and a 2-D vote toward the person's centre. 960,323 parameters.
+person logit -- or one score per annotated class, where the dataset has more than one -- and a 2-D vote toward
+the person's centre. 960,323 parameters.
 **It reads one scan. It has no state and no pose**, which is what makes the temporal claim in Section 7.4 attributable to
 stage 3 rather than shared between them.
 
@@ -575,6 +576,39 @@ stage 3 rather than shared between them.
 | Per-beam classification plus a 2-D vote to the person's centre | Beyer et al., *DROW*, RA-L 2018 / *Deep Person Detection in 2D Range Data*, IROS 2018 | **The head is DROW's**, and so is the voting formulation -- this is the one piece of the proposed detector that is deliberately not novel, because it is what makes the comparison against DROW3 and DR-SPAAM an architecture comparison rather than a head comparison. What differs is what feeds it: a whole scan rather than a per-beam cutout. |
 | ~~Whole-scan global max concatenated to every bottleneck sector~~ -- **removed 2026-10-25** | -- | **Measured and dropped**. It was the one component here with no source claimed and the one a cutout detector cannot have at all, so it was the natural candidate for "what does seeing the whole scan buy?" The answer is nothing measurable: **82.24% against the three control seeds' 82.19%**, and the whole detector on its candidates scores 86.20% against 86.40%, inside the 1.32 pp bar, for 16,384 parameters. The full-scan input still matters -- a fixed-beam kernel over a whole scan beats a resampled cutout by 1.42 pp -- but *explicit* whole-scan context does not. `--aggregator` still builds it, because older checkpoints load with it. |
 | Weight averaging over a validation-chosen window of periodic checkpoints | Izmailov et al., *Averaging Weights Leads to Wider Optima and Better Generalization*, UAI 2018 (SWA) | **Faithful in spirit, simplified in practice.** SWA's cyclical learning-rate schedule is not used; the average is taken over consecutive periodic checkpoints from a single plateau-scheduled trajectory, and the window is chosen on validation. It gained in 15 of 18 stage-2 runs, +0.66 pp mean. |
+
+**The head is a swappable component, and the dataset chooses it.** Until 2026-11-07 the head could emit one
+thing: a person logit. `DatasetSpec` had meanwhile recorded three classes for DROW and printed all three in
+every parameter table, so a dataset whose labels this architecture could not express was a limit on the
+adaptivity claim -- and DROW is that dataset, with **56.4% of its annotated test objects** wheelchairs or
+walkers, trained as background. The head now takes its structure from the dataset the way the stem and the
+encoder already took their parameters:
+
+| head | class columns | what the forward pass returns |
+| --- | --- | --- |
+| `binary` (the default, and every number in this document) | 1 | a person logit `[B, N]` and a vote `[B, N, 2]` |
+| `multiclass`, `softmax` | 1 + classes, background first | class logits `[B, N, 1 + C]` and the same vote |
+| `multiclass`, `sigmoid` | classes, no background column | class logits `[B, N, C]` and the same vote |
+
+Three properties make this a generalisation rather than a second architecture. **The vote regression is
+shared**, which is DROW3's and DR-SPAAM's own split (`conv_cls (n_cls)` beside `conv_reg (2)`): two classes on
+one beam regress to the same centre and differ only in score, so localisation is unaffected by how many classes
+exist. **A one-class `sigmoid` head is numerically identical to `binary`** -- the same counts, the same
+`pos_weight`, the same reduction -- so a binary checkpoint folds into it with the extra columns silent and
+computes exactly what it computed before; a `softmax` head adds a background column and a denominator, so the
+same fold is refused rather than padded. And **the soft person target survives**: the adopted recipe's metric
+Gaussian softens the person column and leaves the other classes their published hard 1, which is what keeps a
+multi-class arm one variable away from the chain it is compared with.
+
+**The object memory stays class-agnostic**, on the owner's call (2026-11-06), and the reason is that
+persistence is a property of an object rather than of its label. It is not a shortfall for lack of information:
+each candidate reaches the memory as a pool of **stage 2's own decoder features** over the beams that voted for
+it, which under a multi-class head are exactly the features the class logits are computed from, so the class
+signal is present in a slot's input by construction. What a class-agnostic memory cannot do is temporally
+smooth a *label*: two objects at one place share one persistence score and the class is decided by the head on
+the current frame alone, so a label flickering between wheelchair and pedestrian stays flickering. That is
+invisible to `wp-AUC`, which scores one class at a time, and would show up only in a label-stability or
+confusion measure. Per-class slot state is the fix if it ever matters.
 
 **A fixed-beam first layer, on measured grounds.** The obvious objection is that a person subtends 42 beams at 2 m and 9 at
 9 m, so a fixed `k=7` kernel is scale-wrong nearly everywhere -- which is exactly what DROW's range-adaptive cutout fixes,

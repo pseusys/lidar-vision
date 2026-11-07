@@ -843,6 +843,30 @@ class ResidualBlock(nn.Module):
 
 BLOCKS = {"convnext": ConvNeXtBlock, "residual": ResidualBlock}
 
+#: The decision head: one person logit, or one score per class the dataset annotates. The vote is shared either
+#: way, which is DROW3's and DR-SPAAM's own split (`conv_cls (n_cls)` beside `conv_reg (2)`) rather than ours.
+HEADS = ("binary", "multiclass")
+#: How a multi-class head normalises its scores. `softmax` is DROW's own and carries a background column;
+#: `sigmoid` scores each class independently, which makes `binary` a strict special case of it at one class.
+CLASS_NORMS = ("softmax", "sigmoid")
+
+
+def class_channels(head: str, class_norm: str, classes: int) -> int:
+    """How many class columns the head emits: one for `binary` whatever the dataset annotates, one per class for
+    `sigmoid`, and one more for `softmax`'s background column."""
+    if head == "binary":
+        return 1
+    return classes if class_norm == "sigmoid" else classes + 1
+
+
+def person_column(head: str, class_norm: str) -> int:
+    """Which column carries the person class -- the one every reported metric scores.
+
+    `DatasetSpec.classes` lists the person class first on every dataset, so this is a property of the head alone:
+    column 0, or column 1 where `softmax` has put background in front of it.
+    """
+    return 1 if head == "multiclass" and class_norm == "softmax" else 0
+
 
 def metric_offsets(ranges: Tensor, step_rad: float, width_m: float, samples: int) -> Tensor:
     """Where each beam should read, in beams, to span a fixed **metric** width `[..., N] -> [..., N, samples]`.
@@ -988,7 +1012,7 @@ class CalibrationNetwork(nn.Module):
                  bottleneck_blocks: int = 2, kernel_size: int = 7, expansion: int = 4,
                  prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M, input_features: str = "beam",
                  gather_width_m: float = 0.0, gather_samples: int = 9, vote_frame: str = "beam", block: str = "convnext",
-                 aggregator: bool = True):
+                 aggregator: bool = True, head: str = "binary", class_norm: str = "softmax", classes: int = 1):
         super().__init__()
         if input_features not in INPUT_CHANNELS:
             raise ValueError(f"input_features must be one of {sorted(INPUT_CHANNELS)}, not {input_features!r}")
@@ -996,6 +1020,10 @@ class CalibrationNetwork(nn.Module):
             raise ValueError(f"vote_frame must be one of {list(VOTE_FRAMES)}, not {vote_frame!r}")
         if block not in BLOCKS:
             raise ValueError(f"block must be one of {sorted(BLOCKS)}, not {block!r}")
+        if head not in HEADS:
+            raise ValueError(f"head must be one of {list(HEADS)}, not {head!r}")
+        if class_norm not in CLASS_NORMS:
+            raise ValueError(f"class_norm must be one of {list(CLASS_NORMS)}, not {class_norm!r}")
         c0, c1, c2 = channels
         self.prior_channels = prior_channels
         self.max_range_m = max_range_m
@@ -1028,7 +1056,22 @@ class CalibrationNetwork(nn.Module):
         self.merge = nn.ModuleList([nn.Conv1d(2 * c2, c2, 1), nn.Conv1d(c2 + c1, c1, 1), nn.Conv1d(c1 + c0, c0, 1)])
         self.decoder = nn.ModuleList([_stage(c, 1, kernel_size, expansion, block) for c in (c2, c1, c0)])
         self.dropout = nn.Dropout(dropout)
-        self.head = nn.Conv1d(c0, 3, 1)
+        # The head, and the one place the dataset's own classes reach the architecture. `binary` is the head every
+        # number on file was measured with -- three channels, the logit in channel 0 -- and the attribute keeps its
+        # name so every stored checkpoint still finds its `head.weight`. The vote channels stay shared across
+        # classes whichever head is built, which is DROW3's and DR-SPAAM's split rather than this project's.
+        self.head_kind, self.class_norm, self.classes = head, class_norm, classes
+        self.class_columns = class_channels(head, class_norm, classes)
+        self.head = nn.Conv1d(c0, self.class_columns + 2, 1)
+
+    @property
+    def person_column(self) -> int:
+        """Which of the head's class columns is the person class, the one every reported metric scores."""
+        return person_column(self.head_kind, self.class_norm)
+
+    def person_logit(self, logits: Tensor) -> Tensor:
+        """The person logit `[B, N]` out of whichever head this is, so a decoder does not have to ask which."""
+        return logits if logits.dim() == 2 else logits[..., self.person_column]
 
     def _encode(self, x: Tensor, prior: Optional[Tensor]) -> Tuple[List[Tensor], Tensor]:
         skips = []
@@ -1045,7 +1088,11 @@ class CalibrationNetwork(nn.Module):
         for merge, block, skip in zip(self.merge, self.decoder, reversed(skips)):
             x = block(merge(cat([interpolate(x, scale_factor=2), skip], dim=1)))
         out = self.head(self.dropout(x))
-        return out[:, 0], out[:, 1:].transpose(1, 2), x
+        columns = self.class_columns
+        # `binary` keeps its 2-D logit rather than a `[B, N, 1]` one, so every caller written against it is
+        # untouched; a multi-class head hands out a column per class and callers take `person_logit`.
+        logits = out[:, 0] if self.head_kind == "binary" else out[:, :columns].transpose(1, 2)
+        return logits, out[:, columns:].transpose(1, 2), x
 
     def forward(self, ranges: Tensor, prior: Optional[Tensor] = None) -> Tuple[Tensor, Tensor, Tensor]:
         """Person logits `[B, N]`, votes `[B, N, 2]` and decoder features `[B, C, N]` for scans `[B, N]`, with the memory prior
@@ -1099,11 +1146,45 @@ def fold_legacy_calibration(state: dict) -> dict:
     return folded
 
 
+def _fold_head(net: CalibrationNetwork, state: dict) -> dict:
+    """A binary checkpoint's head placed in `net`'s wider one, or nothing when the two already agree.
+
+    The layout is `[classes..., vote, vote]` in both, so the fold is a permutation with zeros: the checkpoint's one
+    class row goes to `net.person_column` and its two vote rows to the end. Anything else -- a multi-class
+    checkpoint into a differently shaped head, or any checkpoint into a `softmax` one -- is refused, because a
+    silent widening is only honest when the widened network's output is unchanged.
+    """
+    if "head.weight" not in state:
+        return {}
+    own = net.state_dict()
+    if state["head.weight"].shape == own["head.weight"].shape:
+        return {}
+    if net.head_kind == "multiclass" and net.class_norm == "softmax":
+        raise ValueError("a softmax head cannot load a head of another width: its background column and its "
+                         f"denominator change what the weights mean (checkpoint {tuple(state['head.weight'].shape)}, "
+                         f"network {tuple(own['head.weight'].shape)})")
+    if state["head.weight"].shape[0] - 2 != 1:
+        raise ValueError(f"only a one-class head folds into another: checkpoint {tuple(state['head.weight'].shape)} "
+                         f"against network {tuple(own['head.weight'].shape)}")
+    column, columns = net.person_column, net.class_columns
+    weight, bias = zeros_like(own["head.weight"]), zeros_like(own["head.bias"])
+    weight[column], bias[column] = state["head.weight"][0], state["head.bias"][0]
+    weight[columns:], bias[columns:] = state["head.weight"][1:], state["head.bias"][1:]
+    return {"head.weight": weight, "head.bias": bias}
+
+
 def load_calibration_weights(net: CalibrationNetwork, state: dict) -> None:
     """Load a calibration network's weights into `net`, which may have prior channels the checkpoint has not: their weights start at
     zero, so `net` computes exactly what the checkpoint did until they are trained. Checkpoints from earlier architectures are folded
-    first (`fold_legacy_calibration`)."""
+    first (`fold_legacy_calibration`).
+
+    A **binary checkpoint widens into a `sigmoid` multi-class head** the same way, with the person column taking the
+    checkpoint's single logit and every other class starting silent, so the widened network computes exactly what the
+    checkpoint did. Into a **`softmax`** head it is refused instead: that head adds a background column and divides by
+    the whole row, so no arrangement of the old weights computes what the checkpoint did.
+    """
     state = fold_legacy_calibration(state)
+    state = {**state, **_fold_head(net, state)}
     own = net.state_dict()["aggregate.weight"]
     if state["aggregate.weight"].shape != own.shape:
         padded = zeros_like(own)

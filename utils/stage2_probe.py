@@ -146,7 +146,7 @@ def stage2_outputs(net, split: FrameSplit, positions: np.ndarray, device) -> Lis
     out = []
     for chunk in np.array_split(positions, math.ceil(len(positions) / EVAL_BATCH)):
         logit, votes, _ = net(frame_batch(split, split.annotated[chunk], device))
-        prob = torch.sigmoid(logit).cpu().numpy()
+        prob = torch.sigmoid(net.person_logit(logit)).cpu().numpy()
         votes = beam_frame_votes(votes.cpu().numpy(), net.angles.cpu().numpy(), net.vote_frame)
         for j, a in enumerate(chunk):
             scan, p = voting_beams(split.scans[split.annotated[a]], prob[j], net.max_range_m)

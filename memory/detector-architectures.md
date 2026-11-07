@@ -235,6 +235,18 @@ Only stage 3 carries state between frames: its slots, ~138 KB per stream (the co
 - **Still there, still conditional:** room coordinates win only below ~0.02 m/s of odometry drift (D1, E2); training with jittered poses is the untried repair (`../TODO.md` E11).
 Design rationale: [`../docs/PROPOSAL.md`](../docs/PROPOSAL.md). Evidence for each slot decision, or an explicit note that there is none: [`slot-design-evidence.md`](slot-design-evidence.md). Numbers: [`performance-log.md`](performance-log.md).
 
+**The decision head is a swappable part since 2026-11-07** (`--head`, `HEADS` in
+`library/takheliped/detectors/takheliped.py`). `binary` is the head every number on file was measured with: one
+person logit and a two-channel vote from a single 1x1 convolution. `multiclass` emits one score per class the
+dataset annotates -- `softmax` with a background column, DROW's own normalisation, or `sigmoid` scoring each
+class independently, which makes `binary` a *numerically* strict special case at one class. **The vote
+regression stays shared across classes**, which is DROW3's and DR-SPAAM's split (`conv_cls (n_cls)` beside
+`conv_reg (2)`) rather than this project's invention, so a wheelchair and a pedestrian on one beam regress to
+the same centre and differ only in score. The class count is the dataset's, not a flag, and `head`,
+`class_norm` and that count are shape keys in every checkpoint: a multi-class checkpoint rebuilt as binary would
+score the wrong column. **The object memory stays class-agnostic** (owner, 2026-11-06) -- persistence is
+class-independent, and holding it still keeps every FROG number and the whole slot ablation table valid.
+
 **Stage 2's recipe, decided 2026-10-06 (owner):** decode with `nms-mean` (NMS over the beams' votes, each detection at the probability-weighted mean of the votes it suppresses), train with mirror augmentation, and assign each training beam to its nearest person within 0.6 m. Together these take the no-temporal stage 2 from 77.1% to ~81.5% on FROG test; a second median channel (F3) was tested and dropped (`rejected-ideas.md`). **With dropout 0.1 and weight averaging, also adopted 2026-10-06** (`step2 --dropout 0.1 --checkpoint-every 0.25`, then `utils/average_checkpoints.py`), the no-temporal stage 2 reaches **82.20%**. **They are the trainer's defaults since 2026-10-06** (`decode_frame`, `step2 --label-assign nearest --mirror --dropout 0.1`; averaging is its own step); every stage-3 number until that point rests on the old recipe -- vote grid, no mirror, last-listed labels.
 
 **What the attribution ladder found about stage 2 (2026-10-05)** (`static-detector-diagnosis.md`, last section):

@@ -900,7 +900,7 @@ def run_latency(args) -> None:
             logit, votes, features = net(torch.from_numpy(np.asarray(scan, np.float32)[None]).to(device))
             t1 = tick()
             offsets = beam_frame_votes(votes[0].cpu().numpy(), angles, net.vote_frame)
-            candidates, weights = decode_candidates(np.asarray(scan), angles, torch.sigmoid(logit)[0].cpu().numpy(), offsets, TOP_P, net.max_range_m)
+            candidates, weights = decode_candidates(np.asarray(scan), angles, torch.sigmoid(net.person_logit(logit))[0].cpu().numpy(), offsets, TOP_P, net.max_range_m)
             pooled = weights @ features[0].T.cpu().numpy()
             if memory is None:
                 memory = object_memory(checkpoint, pooled.shape[1]).to(device).eval()
