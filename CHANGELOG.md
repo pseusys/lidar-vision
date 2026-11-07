@@ -38,6 +38,57 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The sigmoid arm's second variable, removed, and the seed spread that decides what any of it meant (2026-11-07)
+
+*keywords: item 88 fixed, items 89 and 90 queued, compute_loss sigmoid pos_weight hard counted, queue_drow_seeds, drow_sigmoid_fixed_s0, drow_headline_s1 drow_sigmoid_fixed_s1, step3a --max-epochs 42, DROW single-seed spread*
+
+**`pos_weight` in the sigmoid branch now comes from the hard labels, which is what the docstring always said it
+did.** The branch summed its positives *after* the person column had been overwritten with the metric Gaussian,
+so that column's weight was the Gaussian's mass rather than a count of positive beams. The hard label marks a
+person's whole extent at 1 while the Gaussian decays, so the mass is the smaller number, the weight the larger
+one, and the arm fires harder -- which is exactly the operating point `heads_sigmoid` reported (9.349 FP/frame
+at 93.8% recall against the headline's 8.279 and 90.6%). Its **+2.65 pp on DROW was a head change and a
+class-balance change at once.**
+
+The fix is one expression -- the weight is counted from `hard`, the one-hot before the overwrite, masked the
+same way `scored` is -- and the test that catches it computes the contract's own reference value rather than
+asserting a property: the classification term read **1.126** where hard counting gives **1.589**, a 41%
+difference, so the confound was substantial rather than marginal. A second test written at the same time
+*passed* immediately, because the defect never touched the other classes' columns, and was deleted rather than
+kept: a test that cannot fail for the reason it was written is padding.
+
+A one-epoch smoke of the fixed arm shows the predicted direction before any claim about it: 21.6 FP/frame at
+the first evaluation where the confounded arm had 27.6, at a lower loss.
+
+**`queue_drow_seeds.py` is sized to the owner's five-to-six hour box** (owner, 2026-11-07), which is why it
+runs three cheap things and one expensive one rather than everything the day left open:
+
+| job | what it answers | read against |
+| --- | --- | --- |
+| `sigmoid_fixed` | the arm without its confound | the confounded 32.10% and the headline's 29.45% |
+| `headline_s1` | **the DROW seed spread**, on the reference | 29.45%, and FROG's 0.16 pp over three seeds |
+| `sigmoid_s1` | the same spread on the winner | `sigmoid_fixed` |
+| `sigmoid_avg` | the averaged window, ranked on DROW val | -- |
+| `sigmoid_stage3` | the whole detector, capped at 42 epochs | 46.01% / 23.45%, and softmax's 38.70% / 20.73% |
+
+**The seed arms are the cheapest and most decisive thing in it.** `kernel5` (24.20%) and `kernel3` (28.57%)
+are not monotone in `k` and no mechanism explains that, so either the response is genuinely non-monotone or
+DROW single-seed spread is several points -- and in the second case nothing measured today is a figure,
+including the 2.65 pp this queue's first job exists to re-measure. Two replicates cost about thirty minutes
+between them and tell the difference.
+
+**`--max-epochs 42` is the one place the time box is visible in the science**, and it is stated rather than
+hidden: the two runs this is compared against were uncapped and took their bests at epoch 36 of 44 and 30 of
+38. The cap clears both, so a best inside 42 is comparable; a run still improving at 42 is a result about the
+cap, and the log will say which. Of the chain's ~5.5 h, 70 minutes are the candidate cache, which every new
+stage-2 checkpoint invalidates.
+
+**Tests: 36 new, 1,763 pass, ruff clean.** `tests/test_drow_seeds_queue.py` (35, every job through its own
+parser, plus the cap against both reference runs' best epochs) and the one reference-value test in
+`tests/test_decision_head.py` that turned the defect red.
+
+---
+
 ## The four levers, measured: two beat the DROW headline, and the softmax head collapses (2026-11-07)
 
 *keywords: items 83 86 87 answered, item 84's arms, items 88 and 89 added, drow_heads_sigmoid 32.10, drow_heads_softmax 19.50, drow_range10 36.36 restricted, drow_gather 24.64, drow_kernel5 24.20 kernel3 28.57, sigmoid pos_weight soft-count confound, frog_binary_regression 82.76 86.13 exact, the 20.5 pp DROW gap*

@@ -621,14 +621,20 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
     elif class_norm == "sigmoid":
         # One independent decision per class, against a one-hot target with no background column. The counting is
         # per column so that one class reproduces the binary branch above exactly rather than approximately.
-        one_hot = F.one_hot(labels.clamp(min=0), logits.shape[-1] + 1)[..., 1:].to(logits.dtype)
+        hard = F.one_hot(labels.clamp(min=0), logits.shape[-1] + 1)[..., 1:].to(logits.dtype)
+        one_hot = hard if soft_labels is None else hard.clone()
         if soft_labels is not None:
             # The person column takes the Gaussian, exactly as the binary branch replaces its whole target with
             # it: a beam near a person is a soft person positive whatever else it is labelled.
             one_hot[:, person - 1] = soft_labels.to(one_hot.dtype)
         scores, scored = (logits, one_hot) if keep is None else (logits[keep], one_hot[keep])
-        positives = scored.sum(0)
-        pos_weight = torch.where(positives > 0, (scored.shape[0] - positives) / positives.clamp(min=1.0),
+        # The weight is counted from `hard` rather than from `scored`, because it is a count of positive beams:
+        # the hard label marks a person's whole extent at 1 while the Gaussian decays, so reading it off the
+        # mass makes the weight larger and the arm fire harder. That is the docstring's third invariant, and
+        # breaking it made `heads_sigmoid` a head arm and a class-balance arm at once (DROW, 2026-11-07).
+        counted = hard if keep is None else hard[keep]
+        positives = counted.sum(0)
+        pos_weight = torch.where(positives > 0, (counted.shape[0] - positives) / positives.clamp(min=1.0),
                                  torch.ones_like(positives))
         l_class = F.binary_cross_entropy_with_logits(scores, scored, pos_weight=pos_weight)
     else:

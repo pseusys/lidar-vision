@@ -429,6 +429,11 @@ python train_takheliped.py score --dataset drow --stage2 <averaged> --memory <st
 python queue_drow.py --list
 python queue_drow.py
 
+# the seed-and-sigmoid queue: the item-88 re-run, a second seed on the headline and on the sigmoid arm,
+# then one capped stage 3 off the fixed arm (~5.5 h, of which 70 min is the candidate cache)
+python queue_drow_seeds.py --list
+python queue_drow_seeds.py
+
 # the head queue: the FROG regression first, then DROW's classes as classes (softmax and sigmoid), the range
 # span from both sides, the metric gather and the kernel arc -- and one stage 3 off the softmax arm (~9 h)
 python queue_drow_heads.py --list

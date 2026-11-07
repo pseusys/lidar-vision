@@ -206,6 +206,28 @@ class TestTheLossTakesTheNormalisationAndOneClassReproducesTheBinaryTerm:
         assert torch.equal(compute_loss(logits, votes, labels, targets, soft_labels=soft, class_norm="sigmoid")[0],
                            compute_loss(logits, votes, labels, targets, soft_labels=soft)[0])
 
+    def test_the_sigmoid_branchs_pos_weight_is_counted_from_the_hard_labels(self):
+        """`compute_loss` promises that `pos_weight` under a soft target is still a count of positive *beams*,
+        "because it is a count of positive beams and taking it from a soft target would move the class balance
+        as well as the target". The sigmoid branch summed its positives *after* the person column had been
+        overwritten with the Gaussian, so that column's weight was its Gaussian mass -- the hard label marks a
+        person's whole extent at 1 while the Gaussian decays, so the weight came out larger and the arm fired
+        harder. That made `heads_sigmoid`'s +2.65 pp on DROW a head change and a class-balance change at once
+        (2026-11-07)."""
+        logits, votes, _, targets = self._batch(3)
+        g = torch.Generator().manual_seed(7)
+        labels = torch.randint(0, 4, (64,), generator=g)
+        soft = torch.rand(64, generator=g)
+        hard = torch.nn.functional.one_hot(labels, 4)[..., 1:].to(logits.dtype)
+        scored = hard.clone()
+        scored[:, 0] = soft                                     # the person column, as the branch writes it
+        counts = hard.sum(0)                                    # the beams, not the Gaussian's mass
+        weight = torch.where(counts > 0, (hard.shape[0] - counts) / counts.clamp(min=1.0),
+                             torch.ones_like(counts))
+        expected = torch.nn.functional.binary_cross_entropy_with_logits(logits, scored, pos_weight=weight)
+        assert compute_loss(logits, votes, labels, targets, soft_labels=soft,
+                            class_norm="sigmoid")[1] == pytest.approx(expected.item())
+
     def test_the_soft_target_lands_on_the_person_column_and_not_on_a_wheelchairs(self):
         """A beam near a person is a soft person positive whatever else it is labelled; raising the person
         column's logit where the Gaussian is high must cost less than raising it where the Gaussian is zero."""
