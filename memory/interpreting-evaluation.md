@@ -30,6 +30,32 @@ val against 20.73% test here, 27.73% against 23.45% there). Nothing guarantees t
 same caution as the agnostic-column swap and the `memory_ms_per_frame` host-load reading: a derived figure
 inherits every defect of both its terms.
 
+## A single-seed DROW stage-2 AP carries about 3 pp of noise, and the stopping rule is why
+
+**Measured 2026-11-07.** The headline recipe, re-run at seed 1 with nothing else changed, scores **26.26%**
+against seed 0's **29.45%** -- a **3.19 pp** spread on two seeds. The same quantity on FROG spreads **0.16 pp
+over three seeds**. A second pair agrees: the fixed sigmoid arm reads 28.79% and 31.01%, a 2.22 pp spread.
+
+| | seed 0 | seed 1 | spread |
+| --- | ---: | ---: | ---: |
+| the headline recipe on DROW | 29.45% | 26.26% | 3.19 pp |
+| the sigmoid head on DROW | 28.79% | 31.01% | 2.22 pp |
+| the adopted recipe on FROG | -- | -- | 0.16 pp (3 seeds) |
+
+**So no DROW lever worth less than about 3.5 pp can be priced at one seed**, and several that were reported as
+findings are not: a -0.88 pp kernel arm, a +2.65 pp head arm, a -3.13 pp dropout arm. The tell was available
+before the replicates existed -- `kernel5` and `kernel3` came out 4.37 pp apart in a direction no mechanism
+explains, and that gap is this spread.
+
+**The mechanism is the stopping rule rather than the initialisation**, which matters because it is the half
+this project controls. Val AP is evaluated every 0.25 epochs on 3,919 annotated DROW val frames, which is few
+enough that the curve dips; `--patience 8` then fires during a dip. The three arms measured here took their
+best val AP at epochs **3.74**, **7.74** and **7.99**, so one seed trained to a third of another's depth before
+the rule ended it. On FROG the same rule is quiet because the val split is an order of magnitude larger in
+annotated frames. Two consequences: **quote DROW stage-2 AP as a mean over seeds or not at all**, and treat a
+DROW arm that stopped early as an incomplete run rather than a worse architecture -- the epoch of the best
+checkpoint is the thing to read first.
+
 ## Training cost is not inference cost, and a queued latency row is not a comparable one (2026-10-24)
 
 **Two mistakes from the Hungarian-association arm, both worth not repeating.**

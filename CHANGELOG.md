@@ -38,6 +38,73 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A DROW seed is worth 3.19 pp, and that demotes most of the day's table (2026-11-07)
+
+*keywords: item 90 answered, item 88 answered, item 91 added, drow_headline_s1 26.26, drow_sigmoid_fixed_s0 28.79, drow_sigmoid_fixed_s1 31.01, DROW seed spread 3.19 pp, kernel non-monotonicity explained, early stopping variance, dropout 26.32 demoted*
+
+**The headline recipe, re-run at seed 1 and nothing else changed, scores 26.26% against seed 0's 29.45%.** That
+is a **3.19 pp** spread on two seeds of the reference arm, on the dataset where every number this project has
+published was a single seed. FROG's spread on the same quantity is **0.16 pp over three seeds**, which is why
+nobody thought to ask.
+
+| arm | seed 0 | seed 1 | mean | spread |
+| --- | ---: | ---: | ---: | ---: |
+| the headline recipe (binary) | 29.45% | **26.26%** | 27.86% | **3.19 pp** |
+| the sigmoid head, `pos_weight` fixed | **28.79%** | **31.01%** | 29.90% | 2.22 pp |
+
+**What that does to 2026-11-07's findings**, measured one seed each and now read against a 3.19 pp range on the
+reference:
+
+| effect | measured | verdict |
+| --- | ---: | --- |
+| the ignore region | +0.14 | inside the spread, as already assumed |
+| `kernel3` | -0.88 | **inside** -- demoted |
+| the sigmoid head (confounded) | +2.65 | **inside** -- demoted, and the fix removed it anyway |
+| dropout 0.3 (2026-11-05) | -3.13 | **inside** -- demoted |
+| the metric gather at 1.66 m | -4.80 | 1.6 pp outside: likely but no longer a figure |
+| `kernel5` | -5.24 | the same, and see below |
+| capacity at (16, 32, 64) (2026-11-05) | -4.90 | the same |
+| **the range span** (item 86, matched labels) | **+5.20** | **the only one with margin** -- and it has a second seed below |
+
+**The kernel non-monotonicity is explained, and it was the warning.** `kernel5` (24.20%) and `kernel3` (28.57%)
+sat 4.37 pp apart with no mechanism that makes a 5-beam arc worse than a 3-beam one. That gap *is* the seed
+spread, measured here directly. Flagging it as "either a non-monotone response or several points of spread" was
+the right call and the second branch is the true one.
+
+**Item 88's re-run: the head's own contribution is not distinguishable from zero.** With the class balance put
+back the sigmoid arm scores 28.79% at seed 0 -- **3.31 pp below the confounded run's 32.10%**, which confirms
+the confound was most of that win -- and 31.01% at seed 1. Mean 29.90% against the headline's 27.86% is
+**+2.04 pp**, smaller than either arm's own two-seed range, so the honest statement is that a multi-class
+sigmoid head neither clearly helps nor clearly hurts stage 2 on DROW. It does reliably move the *operating
+point*: both sigmoid seeds fire harder than their binary counterpart (9.669 and 6.672 FP/frame at 93.7% and
+91.0% recall, against 8.279 and 6.103 at 90.6% and 82.1%).
+
+**The range result survives, and it is the only one that does.** The restricted column
+(`within_10m_labels_and_detections`, the comparable reading) now has two seeds on its 29.99 m side:
+
+| | seed 0 | seed 1 | mean |
+| --- | ---: | ---: | ---: |
+| trained at 29.99 m, scored inside 10 m | 31.16% | **28.18%** | 29.67% |
+| trained at 10 m, scored inside 10 m (one seed) | **36.36%** | -- | -- |
+
+So **+5.20 pp against the better 29.99 m seed and +6.69 against their mean**, on identical labels, against a
+2.98 pp spread on that column. Larger than the noise either way, and the only effect measured on DROW this week
+that clears it.
+
+**The mechanism of the spread looks like the stopping rule, not the initialisation**, which is the actionable
+half. The three arms stopped in very different places: `headline_s1` took its best val AP at epoch **3.74** and
+ran 27 evaluations, while both sigmoid arms peaked near epoch **7.9** over 43-44 evaluations, and the seed-0
+headline ran 34. Val AP is evaluated every 0.25 epochs on 3,919 annotated val frames and is noisy at that
+granularity, so `--patience 8` can fire during a dip and end a run at a third of another seed's training. That
+is a variance source this project controls, unlike the seed, and item 91 is the measurement of it.
+
+**What has to change in how DROW is reported.** Every DROW cell in `memory/performance-log.md` is a single
+seed, and the "Four levers" section now says so at the top. Nothing on this dataset should be called a result
+at one seed again, and a lever worth less than ~3.5 pp cannot be priced here at all without replicates --
+which, at 10-15 minutes an arm, is affordable and simply was not done.
+
+---
+
 ## The sigmoid arm's second variable, removed, and the seed spread that decides what any of it meant (2026-11-07)
 
 *keywords: item 88 fixed, items 89 and 90 queued, compute_loss sigmoid pos_weight hard counted, queue_drow_seeds, drow_sigmoid_fixed_s0, drow_headline_s1 drow_sigmoid_fixed_s1, step3a --max-epochs 42, DROW single-seed spread*

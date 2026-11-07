@@ -213,6 +213,17 @@ It points at the anchor-decode geometry calibrated on 2026-09-10, whose angular 
 
 ### Four levers on DROW's 20.5 pp gap, one seed each (2026-11-07)
 
+**Every number in this section is one seed, and a DROW seed is worth 3.19 pp.** Measured 2026-11-07, after
+these arms: the headline recipe re-run at seed 1 and nothing else changed scores **26.26%** against seed 0's
+**29.45%**, where FROG's spread on the same quantity is 0.16 pp over three seeds. So the table below ranks
+arms whose differences are mostly smaller than their own noise, and only two conclusions in it survive: the
+**range span** (+5.20 pp on matched labels, which has a second seed on its 29.99 m side -- 31.16% and 28.18%,
+mean 29.67%, against the 10 m arm's 36.36%), and the fact that the **softmax head collapses** (-9.95 pp, three
+times the spread). Everything between -5.3 and +2.7 pp is a guess, including the kernel arms -- whose
+non-monotonicity *is* this spread -- and the sigmoid arm, whose +2.65 pp did not survive having its class
+balance fixed (28.79% and 31.01% at two seeds, mean 29.90% against the headline's 27.86%). The stopping rule is
+the likely mechanism: these runs took their best val AP anywhere between epoch 3.7 and epoch 8.0.
+
 Seven stage-2 arms off one chain, all on DROW test's 2,428 annotated frames at 29.99 m, AP at 0.5 m, one seed
 each, read against the headline recipe's **29.45%**. The chain's first job was a FROG regression arm that had
 to reproduce `a71_freeze_s0` exactly and did -- candidates **82.7578%**, whole detector **86.1306%** -- and
