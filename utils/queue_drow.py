@@ -60,7 +60,9 @@ DROW = ("--dataset", "drow")
 LIMIT = ("--max-range-m", "29.99")
 #: The adopted recipe, spelled out rather than defaulted, so this run reads against the FROG runs it will be
 #: compared with: no whole-scan aggregator, the soft Gaussian beam target at 0.3 m.
-RECIPE = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3")
+#: Pinned at 0.6 m: every run on file from this queue trained there, before DROW's default became its own per-class
+#: radii (2026-11-09). An arm's own --label-radius comes after it on the command line and wins.
+RECIPE = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3", "--label-radius", "0.6")
 #: The frozen memory: no slot exchange, no learned matching, no coasting head.
 FROZEN = ("--no-exchange", "--no-learned-match", "--no-coast")
 

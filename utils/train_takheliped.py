@@ -189,6 +189,12 @@ class DatasetSpec:
     #: whatever its class. The head's columns follow `classes`, not these ids, so the person is column 0 on every
     #: dataset; `class_columns` maps one to the other.
     class_ids: Tuple[int, ...]
+    #: The recommended stage-2 label radius of each entry of `classes`, in that order -- `--label-radius`'s default.
+    #: DROW's are its own published targets (wheelchair 0.6, walker 0.4, person 0.35 m), adopted 2026-11-09: five seeds
+    #: put the person's 0.35 m 2.24 pp above 0.6 m, short of the bar but ahead on four seeds of five, and at 0.6 m an
+    #: eighth to a sixth of a person's disk lies nearer a wheelchair or walker (`memory/dataset-properties.md`). FROG
+    #: annotates people alone, so nothing claims its disks, and keeps the 0.6 m it was tuned at.
+    label_radii_m: Tuple[float, ...]
     dt_average_frames: int
     grid: Callable[[int], np.ndarray]
     loader: Callable[[str, Optional[float], str], object]
@@ -259,13 +265,14 @@ def _drow_loader(split: str, missing_return_m: Optional[float], mode: str):
 #: FROG, whose `rate_hz` is the corrected 40.01 Hz, not the 26.2 Hz median of its bunched stamps.
 FROG = DatasetSpec(name="frog", source_beams=720, fov_deg=180.0, source_spacing_deg=0.25, rate_hz=40.01,
                    max_range_m=MAX_RANGE_M, rated_range_m=61.0, annotated_share=1.0, people_per_annotated_frame=3.06,
-                   classes=("pedestrian",), other_detections=(), class_ids=(3,), dt_average_frames=32,
+                   classes=("pedestrian",), other_detections=(), class_ids=(3,), label_radii_m=(LABEL_RADIUS_M,), dt_average_frames=32,
                    grid=frog_laser_angles, loader=_frog_loader)
 #: DROW at its own sensor limit, the owner's call: a 10 m model cannot represent the 7.3% of its labels past 10 m.
 DROW = DatasetSpec(name="drow", source_beams=450, fov_deg=224.5, source_spacing_deg=0.5, rate_hz=12.70,
                    max_range_m=29.99, rated_range_m=30.0, annotated_share=0.05, people_per_annotated_frame=0.81,
                    classes=("pedestrian", "wheelchair", "walker"), other_detections=("det_wc", "det_wa"),
-                   class_ids=(3, 1, 2), dt_average_frames=32, grid=drow_laser_angles, loader=_drow_loader)
+                   class_ids=(3, 1, 2), label_radii_m=(0.35, 0.6, 0.4), dt_average_frames=32, grid=drow_laser_angles,
+                   loader=_drow_loader)
 DATASETS = {spec.name: spec for spec in (FROG, DROW)}
 DEFAULT_DATASET = "frog"        # so every command and every number measured before this flag existed is unchanged
 
@@ -1062,6 +1069,12 @@ def class_annotations(spec: DatasetSpec, people, others, head: str) -> Dict[int,
     for class_id, objects in zip(spec.class_ids[1:], others, strict=True):
         gt[class_id] = [tuple(o) for o in np.asarray(objects, np.float64).reshape(-1, 2)]
     return gt
+
+
+def default_radii(spec: DatasetSpec, radii: Optional[Sequence[float]]) -> List[float]:
+    """`--label-radius` as given, or `spec`'s recommended radii when it was not. The trainer stores this list, never the
+    unset flag, which would read back as `stage2_training`'s historical 0.6 m."""
+    return list(spec.label_radii_m if radii is None else radii)
 
 
 def class_radii(spec: DatasetSpec, radii: Sequence[float]) -> Dict[int, float]:
@@ -1882,6 +1895,7 @@ def train_calibration(args) -> None:
         if note:
             print(note, flush=True)
     angles = spec.angles()
+    args.label_radius = default_radii(spec, args.label_radius)
     radii = class_radii(spec, args.label_radius)
     print("label radius " + ", ".join(f"{name} {radii[class_id]} m" for name, class_id in zip(spec.classes, spec.class_ids, strict=True)), flush=True)
     stored_args = {k: str(v) for k, v in vars(args).items()}
@@ -2735,10 +2749,11 @@ def build_parser() -> argparse.ArgumentParser:
     step2.add_argument("--label-assign", choices=("last", "nearest"), default="nearest", help="which person a beam inside two people's radius "
                        "trains for: its nearest, as the official DR-SPAAM code does (the default since 2026-10-06), or the last listed, as every "
                        "run before it did")
-    step2.add_argument("--label-radius", type=float, nargs="+", default=[LABEL_RADIUS_M], help="distance from an annotation's centre within "
+    step2.add_argument("--label-radius", type=float, nargs="+", default=None, help="distance from an annotation's centre within "
                        "which a beam is a positive and votes for it: one value for every class, or one per class in the dataset's class "
-                       "order (DROW: pedestrian wheelchair walker), where DROW's own targets use 0.35 0.6 0.4; FROG's circles are 0.4 m. "
-                       "A beam inside two disks goes to the one it is deepest inside under the nearest assignment")
+                       "order (DROW: pedestrian wheelchair walker). Default: the dataset's recommended radii -- DROW's own 0.35 0.6 0.4 "
+                       "since 2026-11-09, FROG's tuned 0.6. A beam inside two disks goes to the one it is deepest inside under the "
+                       "nearest assignment")
     step2.add_argument("--label-sigma-m", type=float, default=0.3,
                        help="replace the hard per-beam label with a Gaussian of this width in METRES, keeping the vote "
                             "head and nms-mean; 0.3 is the default since it was adopted at three seeds, and 0 restores "

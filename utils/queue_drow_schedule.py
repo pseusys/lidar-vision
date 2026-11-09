@@ -33,7 +33,9 @@ LIMIT = ("--max-range-m", "29.99")
 #: Item 82's column at stage 2, kept because the headline carries it.
 RESTRICTED = ("--eval-max-range-m", "10")
 #: The adopted recipe, spelled out as the headline's queue spells it.
-RECIPE = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3")
+#: Pinned at 0.6 m: every run on file from this queue trained there, before DROW's default became its own per-class
+#: radii (2026-11-09). An arm's own --label-radius comes after it on the command line and wins.
+RECIPE = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3", "--label-radius", "0.6")
 #: The published schedule: a fixed decay to 1e-6 that cannot stop early, and the weights it ends on.
 PUBLISHED_SCHEDULE = ("--schedule", "exponential", "--min-lr", "1e-6", "--max-epochs", "40", "--min-epochs", "40",
                       "--select", "last")

@@ -30,7 +30,9 @@ DROW = ("--dataset", "drow")
 LIMIT = ("--max-range-m", "29.99")
 RESTRICTED = ("--eval-max-range-m", "10")
 #: The adopted recipe, spelled out as the headline's queue spells it.
-RECIPE = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3")
+#: Pinned at 0.6 m: every run on file from this queue trained there, before DROW's default became its own per-class
+#: radii (2026-11-09). An arm's own --label-radius comes after it on the command line and wins.
+RECIPE = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3", "--label-radius", "0.6")
 #: DROW's and DR-SPAAM's own radii in `DatasetSpec.classes` order: pedestrian, wheelchair, walker.
 DROW_RADII = ("--label-radius", "0.35", "0.6", "0.4")
 

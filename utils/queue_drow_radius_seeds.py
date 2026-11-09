@@ -10,6 +10,11 @@ paired, on the headline's exact recipe; with the existing seeds 0-1 each radius 
 by more than twice the standard error of the difference; otherwise the tie stands and the owner decides with the
 numbers in hand. Seeds 0-1 are `drow_stage2_s0` / `drow_headline_s1` and `drow_person_radius_s0` / `_s1`.
 
+**Then the new default itself** (owner, 2026-11-09: the tie went to 0.35 m, with DROW's own radius for each class).
+`drow_person_radius` set every class to 0.35 m, and on the binary head the wheelchair's and walker's radii still draw
+their ignore regions, so DROW's 0.35 / 0.6 / 0.4 is a neighbouring setting rather than the measured one: five seeds of
+it, `drow_default_radii`, read against `drow_person_radius` seed for seed. Finished jobs are skipped.
+
     python queue_drow_radius_seeds.py --list
     python queue_drow_radius_seeds.py
 
@@ -22,7 +27,9 @@ DROW = ("--dataset", "drow")
 LIMIT = ("--max-range-m", "29.99")
 RESTRICTED = ("--eval-max-range-m", "10")
 #: The adopted recipe, spelled out as the headline's queue spells it.
-RECIPE = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3")
+#: Pinned at 0.6 m: every run on file from this queue trained there, before DROW's default became its own per-class
+#: radii (2026-11-09). An arm's own --label-radius comes after it on the command line and wins.
+RECIPE = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3", "--label-radius", "0.6")
 ARMS = {"drow_headline": (), "drow_person_radius": ("--label-radius", "0.35")}
 SEEDS = (2, 3, 4)
 
@@ -37,6 +44,7 @@ def stage2(name: str, flags, seed: int) -> Job:
 
 
 JOBS = [stage2(name, flags, seed) for seed in SEEDS for name, flags in ARMS.items()]
+JOBS += [stage2("drow_default_radii", ("--label-radius", "0.35", "0.6", "0.4"), seed) for seed in range(5)]
 
 
 if __name__ == "__main__":

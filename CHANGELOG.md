@@ -38,6 +38,38 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## DROW's label radii become its own published ones, 0.35 / 0.6 / 0.4 m, on the owner's tie call (2026-11-09)
+
+*keywords: item 100 adopted, DatasetSpec.label_radii_m, default_radii, --label-radius default None, DROW 0.35 0.6 0.4, FROG 0.6 unchanged, stored resolved not None, queue recipes pinned at 0.6, drow_default_radii_s0-s4, queue_drow_radius_seeds.py, ignore region radii, item 106 geometry-balanced DROW planned*
+
+**The decision** (owner, 2026-11-09, option (a) of the report): five seeds put DROW's 0.35 m person radius 2.24 pp
+above 0.6 m -- short of the 2-SE bar, ahead on four seeds of five -- and the tie goes to the published mechanism, with
+DROW's own radius for each class as DROW's recipe does it.
+
+**What the code now does.** `DatasetSpec` carries `label_radii_m`, one recommended radius per class in its `classes`
+order: DROW (pedestrian, wheelchair, walker) **0.35 / 0.6 / 0.4 m**, DROW's and DR-SPAAM's `_closest_detection`
+radii; FROG **0.6 m**, the radius it was tuned at, so **no FROG number moves**. `step2 --label-radius` now defaults to
+the dataset's radii, and the trainer stores the resolved list (`default_radii`), never the unset flag -- which
+`stage2_training` would read back as its historical 0.6 m and hand stage 3 targets the weights were never trained on.
+The reason is a measured property of DROW's labels rather than its name: at 0.6 m an eighth to a sixth of a person's
+disk lies nearer a wheelchair or walker annotation, at 0.35 m 1-3%, and FROG annotates people alone.
+
+**What it invalidated, and what was done about each.**
+
+- **Every DROW queue on file** (`queue_drow.py` and seven `queue_drow_*.py`) ran its control arm with no radius, at 0.6
+  m. Their shared recipe now pins `--label-radius 0.6`, so a rerun means what was recorded; an arm's own radius comes
+  later on the command line and still wins. Two queue tests caught the one recipe left unpinned at first.
+- **The headline at the new default is not yet measured.** `drow_person_radius` set every class to 0.35 m; on the binary
+  head the wheelchair's and walker's radii still draw their ignore regions, so 0.35 / 0.6 / 0.4 is a neighbouring
+  setting. Five seeds of it, `drow_default_radii_s0-s4`, run now from `queue_drow_radius_seeds.py`, to be read seed for
+  seed against `drow_person_radius`. Until they report, DROW's headline at the new default is **not a number**; 29.36%
+  is the 0.35 m-for-every-class arm's.
+- **Item 102's readings are unaffected**: they read the 0.6 m checkpoints as what they are, and the mechanism they found
+  does not run through the radius.
+
+**Also agreed**: item 106, a geometry-balanced DROW repartition to confirm 102's reading before 104 -- plan in
+`TODO.md`, awaiting the owner's confirmation.
+
 ## DROW's test scans are enclosed, its training scans are not, and our stage 2's score level breaks on enclosed scans (2026-11-09)
 
 *keywords: item 102, readings 7 8 9, score-level, geometry, val-geometry, scan_levels, scan_statistics, reference_bins, sister_recordings, median return range, returns within 10 m, DROW test 1.74 m, DROW train 4.33 m, train p10 2.08 m p25 3.25 m, FROG test inside FROG train, 98% of DROW test under train p25, val spans both regimes, density check, within-scan hits flat 0.80 / 0.81, populated over within-scan 0.54-0.71 enclosed against 0.81-0.88 typical, geometry shift, not a dataset defect, results/drow_score_level.json, drow_geometry.json, drow_val_geometry.json*

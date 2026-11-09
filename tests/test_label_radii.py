@@ -19,7 +19,7 @@ if str(UTILS) not in sys.path:
     sys.path.insert(0, str(UTILS))
 
 from train import beam_heatmap, make_targets  # noqa: E402
-from train_takheliped import DROW, FROG, build_parser, class_radii, stage2_training  # noqa: E402
+from train_takheliped import DROW, FROG, build_parser, class_radii, default_radii, stage2_training  # noqa: E402
 
 #: A fan dense enough that a 0.35 m disk at 4 m holds several beams.
 ANGLES = np.linspace(-0.6, 0.6, 241)
@@ -125,10 +125,22 @@ class TestTheFlag:
     def parse(self, *argv):
         return build_parser().parse_args(["step2", *argv])
 
-    def test_the_default_is_one_radius_for_every_class(self):
+    def test_the_default_is_each_dataset_s_recommended_radii(self):
+        """DROW's published per-class radii since 2026-11-09 (the owner's call on row 100); FROG keeps its tuned 0.6 m,
+        so no FROG number moves."""
         args = self.parse()
-        assert class_radii(DROW, args.label_radius) == {3: 0.6, 1: 0.6, 2: 0.6}
-        assert class_radii(FROG, args.label_radius) == {3: 0.6}
+        assert args.label_radius is None
+        assert class_radii(DROW, default_radii(DROW, args.label_radius)) == PUBLISHED
+        assert class_radii(FROG, default_radii(FROG, args.label_radius)) == {3: 0.6}
+
+    def test_a_radius_given_is_kept(self):
+        assert default_radii(DROW, [0.6]) == [0.6]
+
+    def test_the_resolved_default_is_what_a_checkpoint_stores(self):
+        """Stored unresolved, the flag would read back as "None" and stage 3 would rebuild 0.6 m targets for weights
+        trained at 0.35 m: the trainer stores `default_radii`'s list, and that list reads back as the person's radius."""
+        assert stage2_training({"label_radius": str(default_radii(DROW, None))})["vote_collect_radius"] == 0.35
+        assert stage2_training({"label_radius": str(default_radii(FROG, None))})["vote_collect_radius"] == 0.6
 
     def test_one_value_per_class_follows_the_spec_s_class_order(self):
         """`DatasetSpec.classes` is pedestrian, wheelchair, walker on DROW, so the values land on ids 3, 1, 2."""

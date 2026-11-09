@@ -86,7 +86,9 @@ LIMIT_10M = ("--max-range-m", "10")
 RESTRICTED = ("--eval-max-range-m", "10")
 #: The adopted recipe, spelled out as `queue_drow.py` spells it, so every arm here is comparable with the
 #: headline rather than with a default that has moved since.
-RECIPE = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3")
+#: Pinned at 0.6 m: every run on file from this queue trained there, before DROW's default became its own per-class
+#: radii (2026-11-09). An arm's own --label-radius comes after it on the command line and wins.
+RECIPE = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3", "--label-radius", "0.6")
 #: The multi-class head. The class count is the dataset's and is not a flag: DROW annotates three.
 MULTICLASS = ("--head", "multiclass")
 #: The frozen memory: no slot exchange, no learned matching, no coasting head.
