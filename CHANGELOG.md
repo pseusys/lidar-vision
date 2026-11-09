@@ -38,6 +38,42 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Our stage 2's scores compare between scans on FROG and not on DROW: the failure is DROW's (2026-11-09)
+
+*keywords: item 102, reading 6, frog-ranking, ranking_summary, populated_ap, pooled / top-k 1.03 on FROG, 0.47-0.50 on DROW, cutout 0.86, a69_no_aggregator_s0 80.89 reproduced, 1,026 of 2,428 DROW test frames person-free, FROG official test populated only, cross-scan score level, not temporal, --readings, results/drow_locality_frog_ranking.json*
+
+**The reading agreed after the last entry, thresholds written into `TODO.md` row 102 before the run**: pooled AP over
+within-frame hits for our FROG stage 2 on FROG test, 0.75 or more saying the failure is DROW's, 0.60 or less a trait of
+our model. Every model one pass, each scan scored on its own (stage 2 alone, no temporal input anywhere):
+
+| | pooled AP | pooled AP, populated scans only | each scan's own `k` best detections | pooled / within-scan | populated / within-scan |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ours s0, DROW test | 29.45% | 41.39% | 58.86% | 0.50 | 0.70 |
+| ours s1, DROW test | 26.26% | 37.13% | 55.47% | 0.47 | 0.67 |
+| cutout, DROW test | 63.20% | 71.78% | 73.53% | 0.86 | 0.98 |
+| **ours, FROG test** (`a69_no_aggregator_s0`, every 5th frame) | **80.89%** | 80.89% | 78.72% | **1.03** | 1.03 |
+
+**Verdict by the rule: the failure is DROW's.** On FROG our scores rank people above false positives as well across
+scans as within them (1.03, and 80.89% reproduces item 96's figure exactly); on DROW they do not (0.47-0.50), where the
+cutout does (0.86).
+
+**Two parts, measured.**
+
+- **Scans with nobody in them are a small part.** 1,026 of DROW test's 2,428 annotated scans hold no person -- they were
+  annotated for a wheelchair or a walker, or for nothing -- where FROG's `official` test is populated scans only.
+  Dropping them lifts ours by 11-12 pp and the cutout by 8.6 pp, so they account for only 2-3 pp of the 34-37 pp
+  deficit. A DROW property FROG's test never asks about, but not the main one.
+- **Among scans with people, our score level moves from scan to scan.** There ours keeps 67-70% of its within-scan
+  hits pooled, the cutout 98%, ours on FROG 103%. In ratio to the cutout, ours keeps 75-80% within a scan and 52-58%
+  pooled over populated scans: roughly half the deficit is people found in their own scan and outranked by false
+  positives from other scans, the rest wrong rankings within a scan.
+
+**Not temporal.** "Frame to frame" in the last entry's wording meant any two scans of the test split, not consecutive
+ones: each scan is scored alone, on both datasets, and the cutout that keeps its scores comparable reads one scan too.
+What differs is how each beam's score is formed -- the cutout's from a one-metre window, ours from the whole scan -- so
+a scan-wide shift of our score level is what a whole-scan decision can produce and a window cannot. **What in DROW's
+scans moves that level is the property still unnamed**, and the next reading (`TODO.md` row 102).
+
 ## None of the three DROW properties carries our deficit, scene novelty does not separate DROW from FROG, and what is left is our scores across frames (2026-11-09)
 
 *keywords: item 102, drow_locality_property.py, results/drow_locality_property.json, results/drow_locality_ranking.json, scene novelty, sector medians, look-alike bins, recording kinds, deficit flat 28-34 pp, repetition refuted, FROG test median 0.765 m, DROW test median 0.541 m, exact twins 0, clip 10 m and 30 m, top_k_hits, exact_twins, within-frame ranking 0.75-0.80, pooled AP 0.42-0.47, scores not comparable across frames, ROCm torch.cdist p=1 wrong above a few thousand rows, --no-train-pass*

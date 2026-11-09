@@ -15,8 +15,8 @@ UTILS = Path(__file__).resolve().parents[1] / "utils"
 if str(UTILS) not in sys.path:
     sys.path.insert(0, str(UTILS))
 
-from drow_locality_property import (ap_by_bin, confuser_bins, exact_twins, nearest_distance, recording_type,  # noqa: E402
-                                    scan_descriptor, top_k_hits)
+from drow_locality_property import (ap_by_bin, confuser_bins, exact_twins, nearest_distance, ranking_summary,  # noqa: E402
+                                    recording_type, scan_descriptor, top_k_hits)
 from train_takheliped import score_detections  # noqa: E402
 
 SPACING_DEG = 0.5
@@ -129,6 +129,29 @@ class TestWithinFrameRanking:
         shifted = [(s * rng.uniform(0.05, 1.0), xy, gt) for s, xy, gt in frames]
         assert top_k_hits(shifted) == pytest.approx(top_k_hits(frames))
         assert score_detections(shifted)["ap"] != pytest.approx(score_detections(frames)["ap"])
+
+
+class TestRankingSummary:
+    """Three readings of one pass: what separates pooled AP from AP over populated frames is confident detections on
+    scans with nobody there; what separates that from `top_k_hits` is how scores compare between populated scans."""
+
+    @staticmethod
+    def _frames():
+        f = TestWithinFrameRanking._frame
+        return [f([0.9, 0.2], [[0, 2], [4, 4]], [[0, 2]]), f([0.6], [[1, 3]], [[1, 3]]),
+                f([0.95, 0.8], [[2, 2], [3, 1]], np.zeros((0, 2)))]
+
+    def test_populated_ap_is_pooled_ap_over_the_frames_with_people(self):
+        frames = self._frames()
+        r = ranking_summary(frames)
+        assert r["populated_ap"] == pytest.approx(score_detections(frames[:2])["ap"])
+        assert r["pooled_ap"] == pytest.approx(score_detections(frames)["ap"])
+        assert r["populated_ap"] > r["pooled_ap"]
+
+    def test_it_counts_the_person_free_frames_and_carries_top_k_hits(self):
+        r = ranking_summary(self._frames())
+        assert (r["frames"], r["person_free"]) == (3, 1)
+        assert r["top_k_hits"] == pytest.approx(top_k_hits(self._frames()))
 
 
 class TestExactTwins:

@@ -450,10 +450,11 @@ python train_takheliped.py score --dataset drow --stage2 ../checkpoints_three_ho
 cd utils && ../.venv/Scripts/python.exe check_drow_scoring.py   # not -I: it imports its sibling scripts
 # Which DROW property makes locality matter: scene novelty against the training scenes (DROW and FROG, at a 10 m and a
 # 30 m clip, with byte-identical scans counted), look-alikes near people, the kind of training recording, and ranking
-# inside each frame against pooled AP -- our stage 2 and the retrained cutout scored per bin of each. Not -I: it
-# imports its sibling scripts. ~30 min, 20 of them the cutout over DROW train on the CPU; --no-train-pass skips those.
+# inside each frame against pooled AP -- our stage 2 and the retrained cutout scored per bin of each -- and the same
+# ranking readings for our FROG stage 2 on FROG test. Not -I: it imports its sibling scripts. ~35 min, 20 of them the
+# cutout over DROW train on the CPU; --readings picks any of novelty, drow-test, drow-train, frog-ranking.
 cd utils && ../.venv/Scripts/python.exe drow_locality_property.py
-cd utils && ../.venv/Scripts/python.exe drow_locality_property.py --no-train-pass --out ../results/drow_locality_ranking.json
+cd utils && ../.venv/Scripts/python.exe drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_frog_ranking.json
 # Where DROW's labels sit on its scans, what a 0.6 m and a 0.35 m person disk take in, and how often a walker or a
 # wheelchair has a person on top of it. Model-free, minutes.
 cd utils && ../.venv/Scripts/python.exe drow_label_geometry.py   # not -I: it imports its sibling scripts

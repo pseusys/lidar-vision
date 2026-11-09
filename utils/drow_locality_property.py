@@ -20,18 +20,21 @@ fails on unseen scenes; a deficit concentrated where look-alikes stand next to p
 them apart; our train AP towering over the cutout's on the stationary recordings says repetition is what is learnt.
 
 **The second pass, added after the first** found the deficit flat at ~30 pp in every novelty and look-alike bin, and
-FROG's test scenes at distance zero from its training ones:
+what looked like FROG's test scenes at distance zero from its training ones -- a ROCm `cdist` fault, which reading 5 is
+what caught (`memory/gotchas.md`):
 
 4. **Ranking within a frame against ranking across frames.** Pooled AP puts every frame's detections on one scale;
-   `top_k_hits` asks only whether each frame's own best detections are its people. Near the cutout there and far below
-   it in pooled AP says our scores carry a scene-dependent offset, which a wide view can learn and a one-metre window
-   cannot; as far below there says our detections are wrong inside the frame too. AP per test recording reads the same
-   offset at the scale of a whole recording.
+   `top_k_hits` asks only whether each frame's own best detections are its people, and AP over the frames with a person
+   in them drops the scans with nobody there. Near the cutout within frames and far below it pooled says our scores do
+   not compare between scans; AP per test recording reads the same at the scale of a whole recording.
 5. **Whether FROG's zero is real.** The share of descriptor sectors at the clip, the distance again at the sensor's
    30 m, and the share of test scans found byte for byte in train.
+6. **Whether 4's gap is DROW's.** The same readings for our FROG stage 2 on FROG test, every 5th annotated frame (its
+   80.89%): pooled AP over within-frame hits at 0.75 or more says DROW's, 0.60 or less a trait of our model that FROG's
+   test tolerates, written before the run (`TODO.md` row 102).
 
     python drow_locality_property.py
-    python drow_locality_property.py --no-train-pass --out ../results/drow_locality_ranking.json
+    python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
 """
 
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
@@ -56,6 +59,10 @@ CHECKPOINTS = _HERE.parent / "checkpoints_three_horizon"
 OURS = {"ours_s0": CHECKPOINTS / "drow_stage2_s0" / "step2_calibration.best.pth",
         "ours_s1": CHECKPOINTS / "drow_headline_s1" / "step2_calibration.best.pth"}
 CUTOUT = _HERE.parent / "checkpoints_drow" / "drow_t1_drspaam_recipe.pth"
+#: Our FROG stage 2 whose train and test AP (93.66% / 80.89%) item 96 measured, and the stride that 80.89% is at.
+OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
+FROG_TEST_STRIDE = 5
+READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking")
 #: The descriptor: 2.5 deg sectors of ranges clipped at FROG's 10 m annotation limit, so both datasets are read alike.
 SECTOR_DEG = 2.5
 CLIP_M = 10.0
@@ -141,6 +148,22 @@ def top_k_hits(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]], radius: 
     return hits / people if people else float("nan")
 
 
+def ranking_summary(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]]) -> Dict[str, float]:
+    """Pooled AP over every frame, pooled AP over the frames with a person in them, and `top_k_hits`. What separates the
+    first two is confident detections on scans with nobody there; what separates the last two is how scores compare
+    between scans that do have people."""
+    populated = [f for f in frames if len(f[2])]
+    return dict(pooled_ap=score_detections(frames)["ap"], populated_ap=score_detections(populated)["ap"],
+                top_k_hits=top_k_hits(frames), frames=len(frames), person_free=len(frames) - len(populated))
+
+
+def print_ranking(title: str, table: Dict[str, Dict[str, float]]) -> None:
+    print(f"\n{title}: pooled AP, the same over populated frames only, and each frame's own k best detections (k = its people)", flush=True)
+    for m, r in table.items():
+        print(f"  {m:<10} pooled AP {r['pooled_ap']:.2%}   populated only {r['populated_ap']:.2%}   top-k hits {r['top_k_hits']:.2%}   "
+              f"pooled / top-k {r['pooled_ap'] / r['top_k_hits']:.2f}   ({r['person_free']} of {r['frames']} frames person-free)", flush=True)
+
+
 def exact_twins(query: np.ndarray, bank: np.ndarray) -> np.ndarray:
     """Whether each query scan occurs byte for byte among the bank's scans."""
     seen = {row.tobytes() for row in np.ascontiguousarray(bank, np.float32)}
@@ -192,15 +215,18 @@ def print_table(title: str, table: Dict[str, Dict[str, Dict[str, float]]], bins:
 def main() -> int:
     ap = ArgumentParser(description=__doc__, formatter_class=RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, default=_HERE.parent / "results" / "drow_locality_property.json")
-    ap.add_argument("--no-train-pass", action="store_true", help="skip reading 3, twenty minutes of the cutout on the CPU")
+    ap.add_argument("--readings", nargs="+", choices=READINGS, default=list(READINGS),
+                    help="which readings to run (default all); drow-test bins by DROW's novelty, so it computes that either "
+                         "way, and drow-train is twenty minutes of the cutout on the CPU")
     args = ap.parse_args()
     device, _ = detect_device()
     results = {"novelty": {}}
 
-    # 1. Scene novelty, both datasets: test frames against the scenes their own training split shows, at both clips,
-    # with the share of test scans recorded byte for byte in train (reading 5).
+    # 1. Scene novelty: test frames against the scenes their own training split shows, at both clips, with the share
+    # of test scans recorded byte for byte in train (reading 5).
     novelty = {}
-    for spec, name in ((DROW, "drow"), (FROG, "frog")):
+    specs = ((DROW, "drow"), (FROG, "frog")) if "novelty" in args.readings else ((DROW, "drow"),) if "drow-test" in args.readings else ()
+    for spec, name in specs:
         train = load_frames("train", "official", spec)
         test = load_frames("test", "official", spec)
         rows = np.arange(len(test.annotated)) if name == "drow" else np.arange(0, len(test.annotated), FROG_QUERY_STRIDE)
@@ -222,30 +248,29 @@ def main() -> int:
         results["novelty"][name] = entry
         del train, test, bank
 
-    # 2. Both models on DROW test, scored per novelty quartile and per look-alike bin.
-    ds, cfg = _load_dataset(SimpleNamespace(dataset="drow", split="test"))
-    split = frames_from_dataset(ds, DROW)
-    played = {**ours_frames(split, device), "cutout": cutout_frames(ds, cfg, split)}
-    quartile = np.digitize(novelty["drow"], np.percentile(novelty["drow"], [25, 50, 75]))
-    look_alike = confuser_bins(split.people_xy, others_xy(split))
-    results["test_by_novelty"] = {m: ap_by_bin(f, quartile, NOVELTY_BINS) for m, f in played.items()}
-    results["test_by_look_alike"] = {m: ap_by_bin(f, look_alike, CONFUSER_BINS) for m, f in played.items()}
-    results["novelty_quartile_edges_m"] = np.percentile(novelty["drow"], [25, 50, 75]).tolist()
-    print_table("DROW test AP by scene novelty (q1 most familiar)", results["test_by_novelty"], NOVELTY_BINS)
-    print_table("DROW test AP by look-alikes near people", results["test_by_look_alike"], CONFUSER_BINS)
+    if "drow-test" in args.readings:
+        # 2. Both models on DROW test, scored per novelty quartile and per look-alike bin.
+        ds, cfg = _load_dataset(SimpleNamespace(dataset="drow", split="test"))
+        split = frames_from_dataset(ds, DROW)
+        played = {**ours_frames(split, device), "cutout": cutout_frames(ds, cfg, split)}
+        quartile = np.digitize(novelty["drow"], np.percentile(novelty["drow"], [25, 50, 75]))
+        look_alike = confuser_bins(split.people_xy, others_xy(split))
+        results["test_by_novelty"] = {m: ap_by_bin(f, quartile, NOVELTY_BINS) for m, f in played.items()}
+        results["test_by_look_alike"] = {m: ap_by_bin(f, look_alike, CONFUSER_BINS) for m, f in played.items()}
+        results["novelty_quartile_edges_m"] = np.percentile(novelty["drow"], [25, 50, 75]).tolist()
+        print_table("DROW test AP by scene novelty (q1 most familiar)", results["test_by_novelty"], NOVELTY_BINS)
+        print_table("DROW test AP by look-alikes near people", results["test_by_look_alike"], CONFUSER_BINS)
 
-    # 4. Ranking inside each frame against the pooled ranking, and AP per test recording.
-    recordings = [Path(ds.filenames[r]).stem for r in range(len(ds.filenames))]
-    results["test_ranking"] = {m: dict(pooled_ap=score_detections(f)["ap"], top_k_hits=top_k_hits(f)) for m, f in played.items()}
-    results["test_by_recording"] = {m: ap_by_bin(f, annotated_recordings(split), recordings) for m, f in played.items()}
-    print("\nDROW test, pooled AP against each frame's own k best detections (k = its people)", flush=True)
-    for m, r in results["test_ranking"].items():
-        print(f"  {m:<10} pooled AP {r['pooled_ap']:.2%}   top-k hits {r['top_k_hits']:.2%}", flush=True)
-    print_table("DROW test AP per recording", results["test_by_recording"], recordings)
-    del ds, split, played
+        # 4. Ranking inside each frame against the pooled ranking, and AP per test recording.
+        recordings = [Path(ds.filenames[r]).stem for r in range(len(ds.filenames))]
+        results["test_ranking"] = {m: ranking_summary(f) for m, f in played.items()}
+        results["test_by_recording"] = {m: ap_by_bin(f, annotated_recordings(split), recordings) for m, f in played.items()}
+        print_ranking("DROW test", results["test_ranking"])
+        print_table("DROW test AP per recording", results["test_by_recording"], recordings)
+        del ds, split, played
 
-    # 3. Train AP per kind of training recording, for one seed of ours and the cutout.
-    if not args.no_train_pass:
+    if "drow-train" in args.readings:
+        # 3. Train AP per kind of training recording, for one seed of ours and the cutout.
         ds, cfg = _load_dataset(SimpleNamespace(dataset="drow", split="train"))
         split = frames_from_dataset(ds, DROW)
         kinds = np.array([RECORDING_KINDS.index(recording_type(ds.filenames[r])) for r in annotated_recordings(split)])
@@ -254,6 +279,15 @@ def main() -> int:
                         "cutout": cutout_frames(ds, cfg, split)}
         results["train_by_recording_kind"] = {m: ap_by_bin(f, kinds, RECORDING_KINDS) for m, f in train_played.items()}
         print_table("DROW train AP by kind of recording", results["train_by_recording_kind"], RECORDING_KINDS)
+        del ds, split, train_played
+
+    if "frog-ranking" in args.readings:
+        # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.
+        split = load_frames("test", "official", FROG)
+        net = calibration_network(torch.load(OURS_FROG, map_location="cpu"), FROG.angles()).to(device)
+        frames = calibration_frames(net, split, np.arange(0, len(split.annotated), FROG_TEST_STRIDE), device, EVAL_BATCH)
+        results["frog_test_ranking"] = {"ours_frog": ranking_summary(frames)}
+        print_ranking(f"FROG test, every {FROG_TEST_STRIDE}th annotated frame", results["frog_test_ranking"])
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(dumps(results, indent=1), encoding="utf-8")
