@@ -38,6 +38,102 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## None of the three DROW properties carries our deficit, scene novelty does not separate DROW from FROG, and what is left is our scores across frames (2026-11-09)
+
+*keywords: item 102, drow_locality_property.py, results/drow_locality_property.json, results/drow_locality_ranking.json, scene novelty, sector medians, look-alike bins, recording kinds, deficit flat 28-34 pp, repetition refuted, FROG test median 0.765 m, DROW test median 0.541 m, exact twins 0, clip 10 m and 30 m, top_k_hits, exact_twins, within-frame ranking 0.75-0.80, pooled AP 0.42-0.47, scores not comparable across frames, ROCm torch.cdist p=1 wrong above a few thousand rows, --no-train-pass*
+
+**The three candidates `TODO.md` row 102 set, each scored as written before the run** (`utils/drow_locality_property.py`):
+our headline stage 2 (seeds 0 and 1) and DROW3's cutout retrained here (63.20%), one pass over DROW test, AP per bin.
+The rule set beforehand: a property is the cause if our deficit to the cutout grows along it while the cutout stays flat.
+
+| DROW test bin | frames | people | ours, s0 / s1 | cutout | deficit (mean of ours) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| novelty q1, under 0.40 m from a training scene | 607 | 333 | 31.64 / 35.86% | 65.89% | 32.1 pp |
+| novelty q2, 0.40-0.54 m | 607 | 567 | 37.91 / 32.57% | 66.07% | 30.8 pp |
+| novelty q3, 0.54-0.71 m | 607 | 584 | 43.64 / 32.13% | 71.96% | 34.1 pp |
+| novelty q4, over 0.71 m | 607 | 492 | 19.12 / 16.02% | 50.65% | 33.1 pp |
+| a wheelchair or walker within 1 m of a person | 1,009 | 1,422 | 41.50 / 37.74% | 72.29% | 32.7 pp |
+| one in the frame, near no person | 1,118 | 329 | 10.78 / 8.69% | 39.76% | 30.0 pp |
+| no wheelchair or walker | 301 | 225 | 39.52 / 44.10% | 69.43% | 27.6 pp |
+
+| DROW **train** AP, by kind of recording | frames | ours s0 | cutout |
+| --- | ---: | ---: | ---: |
+| driving (`run_*`) | 10,578 | 61.29% | 66.38% |
+| one lunch room | 2,623 | 77.15% | 75.02% |
+| staged, robot stationary | 3,181 | **54.73%** | **69.23%** |
+| turning in place | 1,283 | 47.59% | 40.38% |
+
+**No candidate meets its criterion.** The deficit is 28-34 pp in every novelty and look-alike bin; both models lose ~15-20
+pp together on the most novel quartile, so that is harder frames rather than a locality effect (in ratio terms ours keeps
+51-53% of the cutout on q1-q3 and 35% on q4, the one gradient there is). **Repetition is refuted outright**: on the
+stationary recordings, where a background never changes, ours is 14.5 pp *below* the cutout, not above it. Row 102's (b)
+driving-only retrain was conditional on that and does not run.
+
+**Two readings added after seeing those, flagged as post hoc** (the script's docstring says so):
+
+| scene novelty of the test split against its own train split | under 1 mm | p10 | median | p90 | scans repeated byte for byte |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| DROW test, clip 10 m | 0.0% | 0.298 m | **0.541 m** | 0.999 m | 0.00% |
+| FROG `official` test, clip 10 m (every 10th annotated frame) | 0.4% | 0.251 m | **0.765 m** | 1.344 m | 0.00% |
+| DROW test, clip 30 m | 0.0% | 0.536 m | 0.867 m | 1.380 m | -- |
+| FROG `official` test, clip 30 m | 0.0% | 0.763 m | 1.615 m | 3.667 m | -- |
+
+| DROW test | pooled AP | each frame's own `k` best detections (`k` = its people) |
+| --- | ---: | ---: |
+| ours s0 | 29.45% | 58.86% |
+| ours s1 | 26.26% | 55.47% |
+| cutout | 63.20% | 73.53% |
+| ours / cutout | **0.42-0.47** | **0.75-0.80** |
+
+- **Scene novelty does not separate the datasets either.** FROG's test frames are at least as far from FROG's training
+  scenes as DROW's are from DROW's -- farther at the median at either clip (the sensors differ, 180 against 225 degrees,
+  so read the direction, not the ratio). A whole-scan model that transfers on FROG does so to scenes it has not seen,
+  so "unseen environments favour local evidence" is not the rule DROW teaches. Candidate (a) is closed at both levels.
+- **Most of the deficit is in the pooled ranking, not inside a frame.** Ranked inside each frame, ours finds 75-80% of
+  what the cutout finds; pooled across frames, 42-47%. Our scores are not comparable from frame to frame on DROW test --
+  the two sparsest test recordings (50 and 98 people) fall to 5.8% and 2.5% against the cutout's 21.1% and 27.3% --
+  which is a behaviour of our model, not yet a property of DROW: whether FROG's test shows the same gap for ours is the
+  next reading (`TODO.md` row 102).
+
+**A tool fault caught on the way, and what it touched.** The first pass put 81.8% of FROG's test frames within 1 mm of
+a training scene. That figure was wrong: on this machine's ROCm build `torch.cdist(p=1)` returns wrong distances, most of
+them zero, for a 5,009 x 4,096 block (81.77% of entries), and raises a HIP error at 4,096 x 4,096; every block up to
+3,000 rows was exact. `nearest_distance` now takes explicit differences in 512 x 512 blocks and matches a float64 CPU
+reference to 2e-7 on the failing case. DROW's 2,428 queries were below the fault, so every DROW bin above is unchanged
+between the two passes; the FROG percentiles in `results/drow_locality_property.json` are the faulty ones, and
+`results/drow_locality_ranking.json` carries the corrected figures (`memory/gotchas.md`).
+
+## DROW's 0.35 m person radius is +2.24 pp at five seeds, short of the bar set for it (2026-11-09)
+
+*keywords: item 100, drow_headline_s2 s3 s4, drow_person_radius_s2 s3 s4, five seeds, 29.36 vs 27.12, standard error 1.31, t 1.71, paired 4 of 5, DROW seed sd 2.0, owner's call, queue_drow_radius_seeds.py, the 2026-11-09 order 102 104 103, outcomes A1 A2 B*
+
+**The measurement row 100 asked for, before DROW's default label radius moves** (owner, 2026-11-09): seeds 2-4 of the
+binary headline at the adopted 0.6 m and at DROW's own 0.35 m, the headline's exact recipe otherwise, beside the seeds
+0-1 already on file. DROW test, stride 1, stage 2 alone:
+
+| person radius | seed 0 | seed 1 | seed 2 | seed 3 | seed 4 | mean | sd |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.6 m (adopted) | 29.45% | 26.26% | 28.64% | 26.97% | 24.29% | **27.12%** | 2.03 |
+| 0.35 m (DROW's, DR-SPAAM's) | 28.26% | 32.21% | 29.63% | 30.14% | 26.55% | **29.36%** | 2.11 |
+| 0.35 m minus 0.6 m, same seed | -1.18 | +5.94 | +0.99 | +3.17 | +2.26 | **+2.24** | -- |
+
+**The rule written before the run is not met**: 0.35 m was to become DROW's default if its five-seed mean cleared 0.6
+m's by more than twice the standard error of the difference. The difference is +2.24 pp against a standard error of
+1.31 (t = 1.71; paired by seed, 1.18 and t = 1.89), so the bar of 2.62 pp is missed. The direction is consistent --
+0.35 m ahead on four seeds of five -- and the size is the same as at two seeds (+2.38), so the effect is probably real and
+probably about two points; what five seeds cannot do is separate it from noise at the bar the owner set. **So it is the
+owner's call on the tie rule**, the numbers in hand, as row 100 said it would be.
+
+**Two side readings.** The headline's DROW stage 2 at five seeds is **27.12%** (sd 2.03), a little under the 27.86% its
+first two seeds gave; every DROW comparison in the 2026-11-08 entry was read against 27.86%, and none of those
+conclusions moves by 0.7 pp. And a DROW stage-2 seed is worth about **2.0 pp** of standard deviation, which is the
+number to size future DROW arms by -- two seeds resolve a ~6 pp effect, five seeds a ~4 pp one.
+
+**Also decided today** (owner, recorded in `TODO.md` group 1b): the order is item 102, then 104, then 103 only if the
+cause is still unclear; a fix that works ends either as the new default with every FROG figure recomputed or as an
+optional drop-in switched on by a measured property, never by a dataset's name; and if neither cause nor fix is found,
+the honest DROW result goes into the paper with what was tried (row 105).
+
 ## DROW training here is sound -- a cutout retrained on DR-SPAAM's recipe scores 63.2% -- and our gap is transfer (2026-11-08)
 
 *keywords: item 92, item 93, item 94, item 95d, item 96, item 99, owner approved group 1b, drow_schedule_s0 18.10, drow_schedule_s1 15.86, published schedule loses on DROW, overfitting not under-training, train.py --detector drow, --person-only, --drow-cutout drspaam, --no-class-balance, --vote-loss euclidean, --amsgrad, --lr-schedule exponential, --min-lr, LidarFrameDataset win_sz thresh_dist, train and eval cutout mismatch, vote_total, _closest_detection, deepest inside, --label-radius per class, class_radii, other_polar removed, score without --memory, score_stage2, evaluate.py --out, --input-features tunnel, TUNNEL_DEPTH_M, check_drow_scoring.py, drow_label_geometry.py, queue_drow_schedule.py, queue_drow_validation.py, queue_drow_levers.py, FROG 180 deg not 270, item 98, --annotation-pattern drow, drow_annotation_pattern, frog_drow_pattern_s0 80.29, supervision count withdrawn, train test gap, fit_drow_stage2_s0 63.57 29.45, fit_a69 93.66 80.89, check_drow_scoring 66.48, walker double label unconfirmed, drow_t1_drspaam_recipe 63.20, DROW training path sound, val loss flat 40 epochs, cutout generalises, drow_t1_drspaam_recipe_train 66.50, cutout train test 1.05, levers null, drow_person_radius 30.24, drow_lfe_input 27.90, drow_tunnel_input 29.21, drow_radii_sigmoid 29.10, drow_radii_softmax 29.77, softmax collapse is the 0.6 m disks, item 101, capacity not the lever, drow_widths8 22.97, drow_widths4 24.15, drow_lfe_shaped 25.38, ratio stays near 2, items 102 103 104 queued*

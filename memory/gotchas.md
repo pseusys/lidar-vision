@@ -367,3 +367,15 @@ non-finite readings in the test split alone. `NaN != NaN`, so
 
 Pass `equal_nan=True`, or compare the finite part and the NaN masks separately. This cost one false alarm
 while verifying that the decimated FROG grid really is every second beam of the full one (it is).
+
+## `torch.cdist(p=1)` on this machine's ROCm build returns wrong distances on large blocks, silently
+
+Found 2026-11-09 by `utils/drow_locality_property.py`'s scene-novelty distance. A 5,009 x 4,096 `cdist(p=1)` on the
+RX 9060 XT returned 81.77% wrong entries, most of them exactly zero, with no error; at 4,096 x 4,096 it raised `HIP
+error: invalid configuration argument`; every block up to 3,000 x 4,096 was exact. The symptom was a result too good to
+be true -- four FROG test frames in five "within a millimetre" of a training scene, whose beams then differed by metres.
+
+Take explicit differences in bounded blocks instead (`nearest_distance` uses 512 x 512), and check any large GPU
+distance against a float64 CPU reference once. The project's two other `torch.cdist` calls (`train_takheliped.py`,
+`memory_diagnosis.py`) are slots x annotations, a few dozen rows, far below the fault; the evaluation path uses SciPy's.
+

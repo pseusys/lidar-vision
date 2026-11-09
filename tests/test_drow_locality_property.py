@@ -1,0 +1,143 @@
+"""The pieces of item 102's measurement: which property of DROW makes locality matter.
+
+Our stage 2 fits DROW's training recordings and does not carry it to the test ones, where a cutout -- a local,
+depth-normalised window per beam -- does. The script bins DROW's test frames by each candidate property and scores both
+models per bin; these tests pin the binning, the scene-novelty distance it bins by, and the recording types.
+"""
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+import torch
+
+UTILS = Path(__file__).resolve().parents[1] / "utils"
+if str(UTILS) not in sys.path:
+    sys.path.insert(0, str(UTILS))
+
+from drow_locality_property import (ap_by_bin, confuser_bins, exact_twins, nearest_distance, recording_type,  # noqa: E402
+                                    scan_descriptor, top_k_hits)
+from train_takheliped import score_detections  # noqa: E402
+
+SPACING_DEG = 0.5
+
+
+class TestTheSceneDescriptor:
+    def test_one_value_per_sector_of_the_requested_width(self):
+        d = scan_descriptor(np.full((3, 450), 4.0, np.float32), SPACING_DEG, sector_deg=2.5, clip_m=10.0)
+        assert d.shape == (3, 90) and np.allclose(d, 4.0)
+
+    def test_far_and_missing_returns_read_as_the_clip(self):
+        scans = np.array([[3.0, 29.99, np.inf, np.nan, 61.0, 3.0]], np.float32)
+        assert np.allclose(scan_descriptor(scans, SPACING_DEG, sector_deg=0.5, clip_m=10.0), [[3.0, 10, 10, 10, 10, 3.0]])
+
+    def test_a_person_a_few_beams_wide_barely_moves_its_sector(self):
+        """The median keeps the room's shape: two beams on a leg inside a five-beam sector change nothing."""
+        scan = np.full((1, 450), 6.0, np.float32)
+        scan[0, 101:103] = 2.0
+        assert np.allclose(scan_descriptor(scan, SPACING_DEG, sector_deg=2.5, clip_m=10.0), 6.0)
+
+
+class TestNearestDistance:
+    def _bank(self):
+        rng = np.random.default_rng(0)
+        return rng.uniform(1.0, 10.0, (50, 40)).astype(np.float32)
+
+    def test_a_scene_in_the_bank_is_at_distance_zero(self):
+        bank = self._bank()
+        assert nearest_distance(bank[[7, 30]], bank, max_shift=0, device="cpu") == pytest.approx([0.0, 0.0], abs=1e-6)
+
+    def test_a_rotated_copy_is_found_within_the_shift_and_missed_without_it(self):
+        bank = self._bank()
+        rotated = np.roll(bank[[5]], 2, axis=1)
+        assert nearest_distance(rotated, bank, max_shift=2, device="cpu")[0] == pytest.approx(0.0, abs=1e-6)
+        assert nearest_distance(rotated, bank, max_shift=0, device="cpu")[0] > 0.5
+
+    def test_it_takes_the_closest_entry_in_mean_absolute_metres(self):
+        bank = np.stack([np.full(40, 5.0), np.full(40, 9.0)]).astype(np.float32)
+        query = np.full((1, 40), 6.0, np.float32)
+        assert nearest_distance(query, bank, max_shift=1, device="cpu")[0] == pytest.approx(1.0)
+
+    def test_chunking_does_not_change_the_answer(self):
+        """Blocks over the queries and over the bank both, against a brute-force reference."""
+        bank, query = self._bank(), self._bank()[:9] + 0.3
+        s = query.shape[1]
+        reference = np.array([min(np.abs(q[k:] - b[:s - k]).mean() if k >= 0 else np.abs(q[:s + k] - b[-k:]).mean()
+                                  for b in bank for k in range(-2, 3)) for q in query])
+        assert np.allclose(nearest_distance(query, bank, max_shift=2, device="cpu", chunk=7), reference, atol=1e-5)
+        assert np.allclose(nearest_distance(query, bank, max_shift=2, device="cpu", chunk=4), reference, atol=1e-5)
+
+
+class TestConfusers:
+    def test_three_bins_by_how_close_a_wheelchair_or_walker_is_to_a_person(self):
+        people = [np.array([[0.0, 4.0]]), np.array([[0.0, 4.0]]), np.zeros((0, 2)), np.array([[0.0, 4.0]])]
+        others = [np.array([[0.8, 4.0]]), np.array([[3.0, 4.0]]), np.array([[1.0, 2.0]]), np.zeros((0, 2))]
+        assert confuser_bins(people, others, radius=1.0).tolist() == [0, 1, 1, 2]
+
+
+class TestApByBin:
+    def test_each_bin_is_scored_exactly_as_its_own_frames_alone(self):
+        rng = np.random.default_rng(1)
+        frames = [(rng.uniform(0, 1, 3).astype(np.float32), rng.uniform(-3, 3, (3, 2)).astype(np.float32),
+                   rng.uniform(-3, 3, (2, 2))) for _ in range(12)]
+        bins = np.array([0, 1] * 6)
+        result = ap_by_bin(frames, bins, ("even", "odd"))
+        assert result["even"]["ap"] == pytest.approx(score_detections(frames[0::2])["ap"])
+        assert result["odd"]["frames"] == 6
+
+
+class TestRecordingTypes:
+    @pytest.mark.parametrize("name,kind", [("run_2015-11-25-14-58-49-a.bag", "driving"), ("run_t_2015-11-26-11-22-03.bag", "driving"),
+                                           ("lunch_2015-11-26-12-04-23.bag", "lunch"), ("rot-1w_2015-11-24.bag", "turning"),
+                                           ("n-1r_2015-11-24-18-08-31.bag", "stationary"), ("s2w2p_2015-11-24.bag", "stationary")])
+    def test_the_four_kinds_of_drow_recording(self, name, kind):
+        assert recording_type(name) == kind
+
+
+class TestWithinFrameRanking:
+    """Pooled AP ranks every detection of every frame on one scale; `top_k_hits` asks only whether each frame's own
+    `k` best detections are its `k` people, so a score offset that differs from scene to scene cannot move it."""
+
+    @staticmethod
+    def _frame(scores, xy, people):
+        return np.asarray(scores, np.float32), np.asarray(xy, np.float32).reshape(-1, 2), np.asarray(people, np.float64).reshape(-1, 2)
+
+    def test_the_k_best_detections_of_a_frame_with_k_people(self):
+        right = self._frame([0.9, 0.8, 0.1], [[0, 2], [1, 3], [5, 5]], [[0, 2], [1, 3]])
+        wrong_first = self._frame([0.9, 0.8, 0.7], [[5, 5], [0, 2], [1, 3]], [[0, 2], [1, 3]])
+        assert top_k_hits([right]) == pytest.approx(1.0)
+        assert top_k_hits([wrong_first]) == pytest.approx(0.5)
+        assert top_k_hits([right, wrong_first]) == pytest.approx(0.75)
+
+    def test_two_detections_on_one_person_count_once(self):
+        assert top_k_hits([self._frame([0.9, 0.8], [[0, 2], [0.1, 2]], [[0, 2], [3, 3]])]) == pytest.approx(0.5)
+
+    def test_a_detection_beyond_the_radius_is_a_miss(self):
+        assert top_k_hits([self._frame([0.9], [[0, 2.6]], [[0, 2]])], radius=0.5) == 0.0
+
+    def test_frames_without_people_are_not_counted(self):
+        empty = self._frame([0.99], [[4, 4]], np.zeros((0, 2)))
+        assert top_k_hits([empty, self._frame([0.2], [[0, 2]], [[0, 2]])]) == pytest.approx(1.0)
+
+    def test_a_per_frame_score_offset_moves_pooled_ap_and_not_this(self):
+        rng = np.random.default_rng(3)
+        frames = []
+        for _ in range(20):
+            people = rng.uniform(-4, 4, (2, 2))
+            xy = np.concatenate([people + rng.normal(0, 0.05, people.shape), rng.uniform(-4, 4, (3, 2))])
+            frames.append(self._frame(rng.uniform(0, 1, 5), xy, people))
+        shifted = [(s * rng.uniform(0.05, 1.0), xy, gt) for s, xy, gt in frames]
+        assert top_k_hits(shifted) == pytest.approx(top_k_hits(frames))
+        assert score_detections(shifted)["ap"] != pytest.approx(score_detections(frames)["ap"])
+
+
+class TestExactTwins:
+    def test_a_query_scan_found_byte_for_byte_in_the_bank(self):
+        bank = np.arange(12, dtype=np.float32).reshape(4, 3)
+        query = np.stack([bank[2], bank[2] + np.float32(1e-3), bank[0]])
+        assert exact_twins(query, bank).tolist() == [True, False, True]
+
+
+def test_the_distance_runs_on_the_given_device():
+    bank = np.ones((4, 8), np.float32)
+    assert nearest_distance(bank[:1], bank, max_shift=1, device=torch.device("cpu")).dtype == np.float64

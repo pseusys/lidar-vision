@@ -447,10 +447,16 @@ python train_takheliped.py score --dataset drow --stage2 ../checkpoints_three_ho
 
 # Is the path every TAKHeLiPeD DROW number came through the same as evaluate.py's, on the real files? FrameSplit
 # against DROW_Dataset on every split, then DROW3's own detections re-scored on FrameSplit's labels (CPU, ~30 min).
-.venv/Scripts/python.exe -I utils/check_drow_scoring.py
+cd utils && ../.venv/Scripts/python.exe check_drow_scoring.py   # not -I: it imports its sibling scripts
+# Which DROW property makes locality matter: scene novelty against the training scenes (DROW and FROG, at a 10 m and a
+# 30 m clip, with byte-identical scans counted), look-alikes near people, the kind of training recording, and ranking
+# inside each frame against pooled AP -- our stage 2 and the retrained cutout scored per bin of each. Not -I: it
+# imports its sibling scripts. ~30 min, 20 of them the cutout over DROW train on the CPU; --no-train-pass skips those.
+cd utils && ../.venv/Scripts/python.exe drow_locality_property.py
+cd utils && ../.venv/Scripts/python.exe drow_locality_property.py --no-train-pass --out ../results/drow_locality_ranking.json
 # Where DROW's labels sit on its scans, what a 0.6 m and a 0.35 m person disk take in, and how often a walker or a
 # wheelchair has a person on top of it. Model-free, minutes.
-.venv/Scripts/python.exe -I utils/drow_label_geometry.py
+cd utils && ../.venv/Scripts/python.exe drow_label_geometry.py   # not -I: it imports its sibling scripts
 
 # the published schedule on DROW's stage 2 (40 epochs on a fixed decay, last weights), two seeds; then the levers
 # that need no code, two seeds each (DROW's person radius, LFE's input, DROW's three radii on the multi-class head)
