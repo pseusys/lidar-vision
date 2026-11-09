@@ -226,6 +226,7 @@ class TestTransferSummary:
         alone = ranking_summary(test[:2])
         assert r["enclosed"]["comparability"] == pytest.approx(alone["populated_ap"] / alone["top_k_hits"])
         assert r["enclosed"]["scans"] == 2 and r["typical"]["scans"] == 2
+        assert r["all"]["scans"] == 4 and r["all"]["frames"] == 4
 
 
 class TestPartitionVerdict:

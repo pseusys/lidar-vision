@@ -29,7 +29,8 @@ NEIGHBOUR_OFFSETS = (-2, -1, 1, 2)
 N_BEAM_FEATURES = 2 + 2 * len(NEIGHBOUR_OFFSETS)
 LFE_NEAR_M = 0.2                     # LFE clips readings below this (`lfe_detector._SCAN_NEAR`)
 TUNNEL_DEPTH_M = 1.0                 # DROW3's cutout depth: "tunnel" clips the depth deltas to it
-INPUT_CHANNELS = {"beam": N_BEAM_FEATURES, "lfe": 1, "tunnel": N_BEAM_FEATURES}
+INPUT_CHANNELS = {"beam": N_BEAM_FEATURES, "lfe": 1, "tunnel": N_BEAM_FEATURES, "scan-norm": N_BEAM_FEATURES}
+LOCAL_WIDTH_M = 1.0                  # the local level's metric window: DR-SPAAM's 1.0 m cutout width
 LEGACY_VALIDITY_CHANNEL = 2          # index of the validity input that checkpoints before 2026-09-17 carried
 LAST_TEMPORAL_COMMIT = "e76aa94"     # the last commit with stage 2's coarse temporal convolution
 SLOT_STATISTICS = 8
@@ -58,12 +59,21 @@ def sanitize_ranges(ranges: Tensor, max_range_m: float) -> Tensor:
     return where(isfinite(ranges) & (ranges > 0) & (ranges < max_range_m), ranges, full_like(ranges, max_range_m))
 
 
+def scan_scale(ranges: Tensor, max_range_m: float = MAX_RANGE_M) -> Tensor:
+    """Each scan's median return range `[...]`, over the beams with a return within `max_range_m`; a scan with none reads
+    `max_range_m`, so its ratio channel is 1 everywhere rather than undefined."""
+    r = sanitize_ranges(ranges, max_range_m)
+    median = where(r < max_range_m, r, full_like(r, float("nan"))).nanmedian(dim=-1).values
+    return where(isfinite(median), median, full_like(median, max_range_m))
+
+
 def beam_features(ranges: Tensor, angles: Tensor, max_range_m: float = MAX_RANGE_M, median_window_deg: float = MEDIAN_WINDOW_DEG,
-                  depth_m: Optional[float] = None) -> Tensor:
+                  depth_m: Optional[float] = None, scan_normalised: bool = False) -> Tensor:
     """Per-beam input channels `[..., N] -> [..., 10, N]`: range, range minus local median, and each neighbour's endpoint
     (along, across) in the beam's own frame relative to the beam's endpoint. Ranges pass through `sanitize_ranges` first.
     `depth_m` clips every depth delta -- range minus median and each along offset -- to +-depth_m, the depth axis of a
-    cutout's window; the range and the across offsets are left as they are."""
+    cutout's window; the range and the across offsets are left as they are. `scan_normalised` reads the range channel
+    as a ratio to the scan's median return range (`scan_scale`), the other nine staying metric."""
     clip = (lambda delta: delta) if depth_m is None else (lambda delta: delta.clamp(-depth_m, depth_m))
     n = ranges.shape[-1]
     step = float(angles[1] - angles[0])
@@ -76,7 +86,7 @@ def beam_features(ranges: Tensor, angles: Tensor, max_range_m: float = MAX_RANGE
     reach = max(abs(o) for o in NEIGHBOUR_OFFSETS)
     r_pad = pad(flat, (reach, reach), mode="replicate").reshape(*r.shape[:-1], n + 2 * reach)
     a_pad = pad(angles.view(1, 1, n), (reach, reach), mode="replicate").view(n + 2 * reach)
-    channels = [r, clip(r - median)]
+    channels = [r / scan_scale(r, max_range_m).unsqueeze(-1) if scan_normalised else r, clip(r - median)]
     for offset in NEIGHBOUR_OFFSETS:
         neighbour = r_pad[..., reach + offset:reach + offset + n]
         dphi = a_pad[reach + offset:reach + offset + n] - angles
@@ -1012,13 +1022,16 @@ class CalibrationNetwork(nn.Module):
     `vote_frame` records which frame the head's two outputs are an offset in -- DROW's beam-relative `(across, along)` by
     default, or the sensor's shared Cartesian frame -- and `block` which block carries the depth,
     ConvNeXt by default or a plain residual one.
+    Item 104's two DROW arms, both off by default: `input_features` "scan-norm" reads the range channel as a ratio to the
+    scan's median return range (`scan_scale`); `local_level` adds a cutout-like branch that sets each beam's logit, the
+    U-Net's being added with its mean over the scan removed (`local_logit`, `forward`).
     """
 
     def __init__(self, angles: Tensor, channels: Tuple[int, int, int] = (32, 64, 128), blocks: Tuple[int, int, int] = (2, 2, 2),
                  bottleneck_blocks: int = 2, kernel_size: int = 7, expansion: int = 4,
                  prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M, input_features: str = "beam",
                  gather_width_m: float = 0.0, gather_samples: int = 9, vote_frame: str = "beam", block: str = "convnext",
-                 aggregator: bool = True, head: str = "binary", class_norm: str = "softmax", classes: int = 1):
+                 aggregator: bool = True, head: str = "binary", class_norm: str = "softmax", classes: int = 1, local_level: bool = False):
         super().__init__()
         if input_features not in INPUT_CHANNELS:
             raise ValueError(f"input_features must be one of {sorted(INPUT_CHANNELS)}, not {input_features!r}")
@@ -1069,6 +1082,17 @@ class CalibrationNetwork(nn.Module):
         self.head_kind, self.class_norm, self.classes = head, class_norm, classes
         self.class_columns = class_channels(head, class_norm, classes)
         self.head = nn.Conv1d(c0, self.class_columns + 2, 1)
+        # Item 104's arm L, absent unless asked for so every checkpoint on file loads unchanged. Its input is the
+        # tunnel's depth-clipped features without the absolute range, read over a 1 m metric window: what a cutout sees.
+        # Not `MetricGather`, whose GroupNorm(1, C) normalises over every beam of the scan -- a scan-level statistic,
+        # which is the one thing this branch exists to keep out; nothing here mixes beams beyond the window.
+        self.local_level = local_level
+        if local_level:
+            self.local_samples, self.step_rad = gather_samples, float(angles[1] - angles[0])
+            self.local_stem = nn.Sequential(nn.Conv1d(N_BEAM_FEATURES - 1, c0, 1), nn.GELU())
+            self.local_window = nn.Conv2d(c0, c0, (1, gather_samples), groups=c0)
+            self.local_mix = nn.Sequential(nn.GELU(), nn.Conv1d(c0, c0, 1), nn.GELU())
+            self.local_head = nn.Conv1d(c0, self.class_columns, 1)
 
     @property
     def person_column(self) -> int:
@@ -1104,7 +1128,8 @@ class CalibrationNetwork(nn.Module):
         """Person logits `[B, N]`, votes `[B, N, 2]` and decoder features `[B, C, N]` for scans `[B, N]`, with the memory prior
         `[B, prior_channels, N/8]` when the network has prior channels."""
         x = lfe_features(ranges, self.max_range_m) if self.input_features == "lfe" else beam_features(
-            ranges, self.angles, self.max_range_m, depth_m=TUNNEL_DEPTH_M if self.input_features == "tunnel" else None)
+            ranges, self.angles, self.max_range_m, depth_m=TUNNEL_DEPTH_M if self.input_features == "tunnel" else None,
+            scan_normalised=self.input_features == "scan-norm")
         lifted = self.stem(x)
         if self.gather is not None:
             lifted = self.gather(lifted, sanitize_ranges(ranges, self.max_range_m))
@@ -1117,7 +1142,19 @@ class CalibrationNetwork(nn.Module):
         logit, votes, features = self._decode(self.context(bottom), skips)
         if left or features.shape[-1] != n:
             logit, votes, features = logit[:, left:left + n], votes[:, left:left + n], features[..., left:left + n]
+        if self.local_level:
+            # The whole-scan logit with its mean over the scan's beams removed: it can re-rank beams inside a scan,
+            # and only the local branch sets how high the scan as a whole scores.
+            logit = self.local_logit(ranges) + logit - logit.mean(dim=1, keepdim=True)
         return logit, votes, features
+
+    def local_logit(self, ranges: Tensor) -> Tensor:
+        """Arm L's own logit, shaped like the head's: each beam's, from its 1 m metric window of depth-clipped features."""
+        x = self.local_stem(beam_features(ranges, self.angles, self.max_range_m, depth_m=TUNNEL_DEPTH_M)[:, 1:])
+        offsets = metric_offsets(sanitize_ranges(ranges, self.max_range_m), self.step_rad, LOCAL_WIDTH_M, self.local_samples)
+        x = self.local_mix(x + self.local_window(gather_beams(x, offsets))[..., 0])
+        out = self.local_head(x)
+        return out[:, 0] if self.head_kind == "binary" else out.transpose(1, 2)
 
 
 def fold_legacy_calibration(state: dict) -> dict:

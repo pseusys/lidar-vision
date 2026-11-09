@@ -461,6 +461,8 @@ cd utils && ../.venv/Scripts/python.exe drow_locality_property.py --readings val
 # datasets/drow_partitions.py, never edited by hand -- then train two seeds on each and read the verdict (~1 h).
 cd utils && ../.venv/Scripts/python.exe drow_geometry_partition.py
 cd utils && ../.venv/Scripts/python.exe queue_drow_partitions.py --list   # then launch detached, memory/long-running-tasks.md
+# Item 104's two DROW arms (scan-normalised range, local level), two seeds each beside the headline, then reading 11 (~1 h).
+cd utils && ../.venv/Scripts/python.exe queue_drow_locality_arms.py --list   # then launch detached
 # Where DROW's labels sit on its scans, what a 0.6 m and a 0.35 m person disk take in, and how often a walker or a
 # wheelchair has a person on top of it. Model-free, minutes.
 cd utils && ../.venv/Scripts/python.exe drow_label_geometry.py   # not -I: it imports its sibling scripts

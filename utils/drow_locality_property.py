@@ -45,11 +45,14 @@ what caught (`memory/gotchas.md`):
 
 10. **The geometry partitions** (`partitions`, `TODO.md` row 106): each partition's stage-2 seeds scored on their own
     partition's train and test, and the verdict by the rule written before any of them trained.
+11. **Item 104's arms** (`arms`): the scan-normalised range and the local level beside the headline at the same seeds,
+    read the same way on official DROW.
 
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
     python drow_locality_property.py --readings val-geometry --out ../results/drow_val_geometry.json
     python drow_locality_property.py --readings partitions --out ../results/drow_partitions.json
+    python drow_locality_property.py --readings arms --out ../results/drow_locality_arms.json
 """
 
 import re
@@ -57,7 +60,7 @@ from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from json import dumps
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Mapping, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -80,13 +83,17 @@ CUTOUT = _HERE.parent / "checkpoints_drow" / "drow_t1_drspaam_recipe.pth"
 #: Our FROG stage 2 whose train and test AP (93.66% / 80.89%) item 96 measured, and the stride that 80.89% is at.
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
-READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions")
+READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions", "arms")
 #: Reading 10's stage-2 runs, one directory per geometry partition and seed (`queue_drow_partitions.py` trains them), and
 #: the rule written into `TODO.md` row 106 before any of them ran.
 PARTITION_SEEDS = (0, 1)
 PARTITION_RUNS = {mode: [CHECKPOINTS / f"drow_{mode.replace('-', '_')}_s{seed}" / "step2_calibration.best.pth" for seed in PARTITION_SEEDS]
                   for mode in ("geometry-balanced", "geometry-shifted")}
 PARTITION_RULE = dict(balanced_ratio=1.4, balanced_comparability=0.80, shifted_ratio=1.8, shifted_comparability=0.72)
+#: Reading 11: item 104's two arms (`queue_drow_locality_arms.py` trains them) and the headline at the same two seeds.
+ARM_SEEDS = (0, 1)
+ARM_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in ARM_SEEDS]
+            for name in ("drow_default_radii", "drow_scan_norm", "drow_local_level")}
 #: The rule for reading 7, written before its run (`TODO.md` row 102): a statistic moves our level at |rho| >= 0.3 for
 #: both seeds with the cutout under half of ours, and is the property if DROW test's median also leaves the
 #: interquartile range of both DROW train and FROG test.
@@ -252,7 +259,7 @@ def transfer_summary(train_frames: list, test_frames: list, enclosed: np.ndarray
         # A bin whose scans hold no hit at all has no within-scan ranking to compare against: undefined, not infinite.
         return dict(r, scans=len(frames), comparability=r["populated_ap"] / r["top_k_hits"] if r["top_k_hits"] else float("nan"))
     train_ap, test_ap = score_detections(train_frames)["ap"], score_detections(test_frames)["ap"]
-    return dict(train_ap=train_ap, test_ap=test_ap, ratio=train_ap / test_ap,
+    return dict(train_ap=train_ap, test_ap=test_ap, ratio=train_ap / test_ap, all=ranking(test_frames),
                 enclosed=ranking([f for f, e in zip(test_frames, enclosed, strict=True) if e]),
                 typical=ranking([f for f, e in zip(test_frames, enclosed, strict=True) if not e]))
 
@@ -273,24 +280,34 @@ def partition_verdict(balanced: Sequence[dict], shifted: Sequence[dict]) -> Dict
                 shifted=dict(ratio=ratio_s, enclosed_comparability=comp_s, reproduces=shifted_reproduces))
 
 
-def partition_reading(device) -> Dict[str, object]:
-    """Reading 10: each geometry partition's stage-2 seeds on their own partition's train and test (`TODO.md` row 106)."""
+def score_runs(mode: str, runs: Mapping[str, Sequence[Path]], device) -> Dict[str, list]:
+    """Every stage-2 checkpoint in `runs` scored on partition `mode`'s train and test by `transfer_summary`, keyed as
+    `runs` is; the partition is loaded once for all of them."""
+    train, test = load_frames("train", mode, DROW), load_frames("test", mode, DROW)
+    enclosed = scan_statistics(test.scans[test.annotated], test.people_xy, DROW.spacing_deg)["median_range_m"] < ENCLOSED_M
     out = {}
-    for mode, paths in PARTITION_RUNS.items():
-        train, test = load_frames("train", mode, DROW), load_frames("test", mode, DROW)
-        medians = scan_statistics(test.scans[test.annotated], test.people_xy, DROW.spacing_deg)["median_range_m"]
-        enclosed = medians < ENCLOSED_M
-        rows = []
+    for name, paths in runs.items():
+        out[name] = []
         for path in paths:
             net = calibration_network(torch.load(path, map_location="cpu"), DROW.angles()).to(device)
-            rows.append(transfer_summary(calibration_frames(net, train, np.arange(len(train.annotated)), device, EVAL_BATCH),
-                                         calibration_frames(net, test, np.arange(len(test.annotated)), device, EVAL_BATCH), enclosed))
-            r = rows[-1]
+            r = transfer_summary(calibration_frames(net, train, np.arange(len(train.annotated)), device, EVAL_BATCH),
+                                 calibration_frames(net, test, np.arange(len(test.annotated)), device, EVAL_BATCH), enclosed)
+            out[name].append(r)
             print(f"{mode} {path.parent.name}: train AP {r['train_ap']:.2%}  test AP {r['test_ap']:.2%}  ratio {r['ratio']:.2f}  "
-                  f"enclosed comparability {r['enclosed']['comparability']:.2f} ({r['enclosed']['scans']} scans)  typical "
-                  f"{r['typical']['comparability']:.2f} ({r['typical']['scans']} scans)", flush=True)
-        out[mode] = rows
-        del train, test
+                  f"comparability {r['all']['comparability']:.2f}, enclosed {r['enclosed']['comparability']:.2f} "
+                  f"({r['enclosed']['scans']} scans), typical {r['typical']['comparability']:.2f} ({r['typical']['scans']} scans)  "
+                  f"within-scan hits {r['all']['top_k_hits']:.2%}", flush=True)
+    return out
+
+
+def arms_reading(device) -> Dict[str, object]:
+    """Reading 11: item 104's arms beside the headline at the same seeds, on official DROW (`TODO.md` row 104)."""
+    return score_runs("official", ARM_RUNS, device)
+
+
+def partition_reading(device) -> Dict[str, object]:
+    """Reading 10: each geometry partition's stage-2 seeds on their own partition's train and test (`TODO.md` row 106)."""
+    out = {mode: score_runs(mode, {mode: paths}, device)[mode] for mode, paths in PARTITION_RUNS.items()}
     out["verdict"] = partition_verdict(out["geometry-balanced"], out["geometry-shifted"])
     v = out["verdict"]
     print(f"\nverdict: {v['verdict']}  (balanced ratio {v['balanced']['ratio']:.2f}, enclosed {v['balanced']['enclosed_comparability']:.2f}; "
@@ -532,6 +549,9 @@ def main() -> int:
 
     if "partitions" in args.readings:
         results["partitions"] = partition_reading(device)
+
+    if "arms" in args.readings:
+        results["arms"] = arms_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.

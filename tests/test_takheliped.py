@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
 from takheliped.detectors.takheliped import (
     BLOCKS, N_BEAM_FEATURES, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, ConvNeXtBlock, MetricGather, ObjectMemory,
-    ResidualBlock, SlotRules, beam_features,
+    ResidualBlock, SlotRules, beam_features, scan_scale,
     fold_legacy_calibration, gather_beams, metric_offsets,
     Slots, free_range_profile, initial_slots, lfe_features, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
     sensor_to_world, visibility_feature, world_to_sensor,
@@ -147,6 +147,100 @@ class TestTheDepthTunnel:
         net.stem.register_forward_hook(lambda module, inputs, output: seen.update(features=inputs[0]))
         net(ranges[None])
         assert torch.equal(seen["features"], beam_features(ranges[None], angles, 30.0, depth_m=1.0))
+
+
+class TestTheScanNormalisedRange:
+    """Item 104's arm N: the beam's absolute range, the one input channel that states the room's size outright, read
+    as a ratio to the scan's median return range; the nine local channels stay metric, so a person stays person-sized."""
+
+    def _room(self):
+        angles = _angles(64, 60.0)
+        return 2.0 + 0.5 * torch.sin(torch.arange(64.0) / 5) + 0.05 * torch.cos(torch.arange(64.0)), angles
+
+    def test_channel_zero_is_the_range_over_the_scan_s_median_return(self):
+        ranges, angles = self._room()
+        ranges[60:] = 30.0                                    # no return: excluded from the median
+        expected = ranges / ranges[:60].median()
+        assert torch.allclose(beam_features(ranges, angles, 30.0, scan_normalised=True)[0], expected)
+        assert scan_scale(ranges, 30.0) == pytest.approx(float(ranges[:60].median()))
+
+    def test_the_same_room_reads_the_same_at_any_size(self):
+        ranges, angles = self._room()
+        small = beam_features(ranges, angles, 30.0, scan_normalised=True)[0]
+        large = beam_features(2.5 * ranges, angles, 30.0, scan_normalised=True)[0]
+        assert torch.allclose(small, large, atol=1e-5)
+
+    def test_the_other_nine_channels_are_the_adopted_ones(self):
+        ranges, angles = self._room()
+        assert torch.equal(beam_features(ranges, angles, 30.0, scan_normalised=True)[1:], beam_features(ranges, angles, 30.0)[1:])
+
+    def test_a_scan_with_no_return_reads_finite(self):
+        angles = _angles(64, 60.0)
+        assert torch.isfinite(beam_features(torch.full((64,), 30.0), angles, 30.0, scan_normalised=True)).all()
+
+    def test_the_network_reads_it_when_asked(self):
+        ranges, angles = self._room()
+        net = CalibrationNetwork(angles, channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, max_range_m=30.0,
+                                 input_features="scan-norm").eval()
+        seen = {}
+        net.stem.register_forward_hook(lambda module, inputs, output: seen.update(features=inputs[0]))
+        net(ranges[None])
+        assert torch.equal(seen["features"], beam_features(ranges[None], angles, 30.0, scan_normalised=True))
+
+
+class TestTheLocalLevel:
+    """Item 104's arm L: a cutout-like branch -- the 1 m depth clip and a 1 m metric window -- sets each beam's logit, and
+    the U-Net's logit is added with its mean over the scan removed, so whole-scan context can re-rank beams inside a
+    scan but cannot raise or lower the scan as a whole: the level that item 102 found moving between scans."""
+
+    @staticmethod
+    def _net(local_level=True, seed=0):
+        torch.manual_seed(seed)
+        return CalibrationNetwork(_angles(64, 60.0), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, max_range_m=30.0,
+                                  local_level=local_level).eval()
+
+    @staticmethod
+    def _scans():
+        wall = torch.full((64,), 4.0)
+        legs = wall.clone()
+        legs[20:23] = 2.0
+        return torch.stack([wall, legs])
+
+    def test_off_it_adds_no_weights(self):
+        assert set(self._net(False).state_dict()) == set(CalibrationNetwork(_angles(64, 60.0), channels=(8, 16, 32), blocks=(1, 1, 1),
+                                                                            bottleneck_blocks=1, max_range_m=30.0).state_dict())
+        assert not any(k.startswith("local") for k in self._net(False).state_dict())
+
+    def test_the_whole_scan_part_cannot_move_a_scan_s_level(self):
+        net = self._net()
+        with torch.no_grad():
+            for p in net.local_head.parameters():
+                p.zero_()
+            logit = net(self._scans())[0]
+        assert torch.allclose(logit.mean(dim=-1), torch.zeros(2), atol=1e-5)
+
+    def test_the_logit_is_the_local_one_plus_the_centred_whole_scan_one(self):
+        net = self._net()
+        with torch.no_grad():
+            net.head.weight.zero_()
+            net.head.bias.zero_()
+            logit = net(self._scans())[0]
+            assert torch.allclose(logit, net.local_logit(self._scans()), atol=1e-6)
+
+    def test_the_local_logit_reads_only_its_metric_window(self):
+        """At 4 m the 1 m window spans about 15 beams of this fan; beams 45 and on are more than 2 m of arc from beam 10."""
+        net, scans = self._net(), self._scans()
+        moved = scans.clone()
+        moved[:, 45:] = 1.5
+        with torch.no_grad():
+            assert torch.allclose(net.local_logit(scans)[:, 10], net.local_logit(moved)[:, 10], atol=1e-6)
+            assert not torch.allclose(net(scans)[0][:, 10], net(moved)[0][:, 10], atol=1e-6), "the whole-scan part does see it"
+
+    def test_the_votes_are_the_u_net_s(self):
+        on, off = self._net(True), self._net(False)
+        off.load_state_dict({k: v for k, v in on.state_dict().items() if not k.startswith("local")})
+        with torch.no_grad():
+            assert torch.equal(on(self._scans())[1], off(self._scans())[1])
 
 
 def _pose(x, y, th):

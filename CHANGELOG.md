@@ -38,6 +38,32 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Item 104's two DROW arms, built: the scan-normalised range and the local level (2026-11-09)
+
+*keywords: item 104, --input-features scan-norm, scan_scale, --local-level, local_logit, LOCAL_WIDTH_M 1.0, centred whole-scan logit, network_shape local_level, MetricGather GroupNorm pools the whole scan, queue_drow_locality_arms.py, reading 11, score_runs, arms_reading*
+
+**What the owner confirmed** (2026-11-09): both arms, official DROW first, and no adoption bar -- the results are read,
+nothing is adopted automatically. Both sit behind flags that leave the network bit-identical when off:
+
+- **N, `--input-features scan-norm`**: the range channel becomes the beam's range over the scan's median return range
+  (`scan_scale`, over the beams with a return in range; a scan with none reads 1); the nine local channels stay metric.
+  The across offsets still carry distance as range times the beam step, so this removes the explicit size channel,
+  not all of it.
+- **L, `--local-level`**: a cutout-like branch -- the tunnel's depth-clipped features without the absolute range, read
+  over a 1 m metric window -- gives each beam its logit, and the U-Net's logit is added **with its mean over the scan
+  removed**. Whole-scan context can re-rank beams inside a scan and cannot move the scan's level, the quantity item 102
+  found moving. Votes stay the U-Net's. `network_shape` stores it as a shape key, since it adds weights.
+
+**Found while building L: the metric gather was never local.** `MetricGather`, the arm rejected on FROG at -1.42 pp,
+normalises its output with `GroupNorm(1, C)`, which on a `[B, C, N]` tensor pools over every beam of the scan. The
+local-window test caught it, when beams more than 2 m away moved a beam's local logit. L reads its window through
+`gather_beams` with no cross-beam normalisation; the old gather arm's rejection stands as measured, with that caveat on
+what it measured.
+
+**The run**: `utils/queue_drow_locality_arms.py`, two seeds per arm on the headline's exact recipe at DROW's default
+radii, then reading 11 (`drow_locality_property.py --readings arms`) scoring both arms and the headline seeds
+(`drow_default_radii_s0` / `_s1`) on official DROW's train and test the way items 102 and 106 were read.
+
 ## A geometry-balanced DROW does not make our stage 2 transfer: by the rule, geometry is not the trigger (2026-11-09)
 
 *keywords: item 106 phase 1, queue_drow_partitions.py, drow_geometry_balanced_s0 s1, drow_geometry_shifted_s0 s1, results/drow_partitions.json, partition_verdict, ratio 1.76 against 1.4, enclosed comparability 0.82, shifted ratio 2.63 comparability 0.68, official test fails on open scans too 0.61-0.63, item 102 stays open, phase 2 owner's call*

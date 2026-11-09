@@ -316,14 +316,23 @@ class TestAttributionArmShapes:
         assert network_shape(self._stored([])) == dict(max_range_m=MAX_RANGE_M, input_features="beam", channels=(32, 64, 128),
                                                        gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext", aggregator=False,
                                                        kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2,
-                                                       head="binary", class_norm="softmax", classes=1)
+                                                       head="binary", class_norm="softmax", classes=1, local_level=False)
 
     def test_the_arms_flags_describe_their_network(self):
         shape = network_shape(self._stored(["--input-features", "lfe", "--channels", "8", "16", "32"]))
         assert shape == dict(max_range_m=MAX_RANGE_M, input_features="lfe", channels=(8, 16, 32),
                              gather_width_m=0.0, gather_samples=9, vote_frame="beam", block="convnext", aggregator=False,
                              kernel_size=7, expansion=4, blocks=(2, 2, 2), bottleneck_blocks=2,
-                             head="binary", class_norm="softmax", classes=1)
+                             head="binary", class_norm="softmax", classes=1, local_level=False)
+
+    def test_the_local_level_describes_its_network(self):
+        """Item 104's arm L adds a branch of weights, so it is a shape key, and a checkpoint written before it
+        existed rebuilds without it."""
+        assert network_shape(self._stored(["--local-level"]))["local_level"] is True
+        assert network_shape({"max_range_m": "10.0"})["local_level"] is False
+
+    def test_the_scan_normalised_input_is_an_input_like_the_others(self):
+        assert network_shape(self._stored(["--input-features", "scan-norm"]))["input_features"] == "scan-norm"
 
     def test_the_gather_flag_describes_its_network(self):
         """the metric window is part of the shape, so a checkpoint trained with it rebuilds with it."""

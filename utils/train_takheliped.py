@@ -920,7 +920,9 @@ def network_shape(args: Dict[str, str]) -> Dict[str, object]:
             # keys like `channels`, not options like `dropout`.
             "head": parameters["head"].default if args.get("head") in unset else args["head"],
             "class_norm": parameters["class_norm"].default if args.get("class_norm") in unset else args["class_norm"],
-            "classes": parameters["classes"].default if args.get("classes") in unset else int(args["classes"])}
+            "classes": parameters["classes"].default if args.get("classes") in unset else int(args["classes"]),
+            # Item 104's arm L adds weights, so it is a shape key; a checkpoint written before it existed has none.
+            "local_level": parameters["local_level"].default if args.get("local_level") in unset else literal_eval(args["local_level"])}
 
 
 def stage2_training(args: Dict[str, str]) -> Dict[str, object]:
@@ -2712,9 +2714,13 @@ def build_parser() -> argparse.ArgumentParser:
     step2.add_argument("--annotation-pattern", choices=("all", "drow"), default="all", help="which training frames keep their "
                        "labels: all, or DROW's pattern -- bursts of 20 at every 5th scan, one per 400 scans of each recording -- "
                        "so a FROG run prices DROW's supervision density at stage 2 (val and test are untouched)")
-    step2.add_argument("--input-features", choices=("beam", "lfe", "tunnel"), default="beam", help="beam: the ten per-beam features; lfe: LFE's "
-                       "1 - r/max_range alone, the attribution arm F1; tunnel: the ten with every depth delta clipped to DROW3's 1 m "
-                       "cutout depth")
+    step2.add_argument("--input-features", choices=("beam", "lfe", "tunnel", "scan-norm"), default="beam", help="beam: the ten per-beam "
+                       "features; lfe: LFE's 1 - r/max_range alone, the attribution arm F1; tunnel: the ten with every depth delta clipped "
+                       "to DROW3's 1 m cutout depth; scan-norm: the ten with the range channel read as a ratio to the scan's median "
+                       "return range (item 104's arm N)")
+    step2.add_argument("--local-level", action="store_true", help="item 104's arm L: a cutout-like branch over a 1 m metric window "
+                       "sets each beam's logit, and the U-Net's logit is added with its mean over the scan removed, so whole-scan "
+                       "context re-ranks beams inside a scan and cannot move the scan's level")
     step2.add_argument("--channels", type=int, nargs=3, default=None, metavar="C", help="U-Net widths at N, N/2 and N/4 beams; unset is "
                        "the constructor's (32 64 128); LFE's 8 16 32 are the attribution arm W, and 64 128 256 are "
                        "the widening arm")
