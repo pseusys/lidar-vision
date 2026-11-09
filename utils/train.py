@@ -246,6 +246,11 @@ from takheliped.utils.tracking import SimpleTracker, odom_xya_delta_to_tracker_f
 # Dataset / configuration helpers
 # ---------------------------------------------------------------------------
 
+#: Every partition `--frog-mode` names, on train.py and evaluate.py alike: FROG's three, then DROW's (`official` shared).
+#: Each loader refuses the other dataset's names.
+PARTITIONS = ("official", "transferred", "balanced", "geometry-balanced", "geometry-shifted")
+
+
 def _setup_datasets(args):
     """Load train and validation datasets; return (train_ds, val_ds, cfg)."""
     _time_frame_size = getattr(args, "time_frame", 5)
@@ -285,13 +290,14 @@ def _setup_datasets(args):
         )
     else:
         from takheliped.datasets import DROW_Dataset
-        from takheliped.utils.file_utils import DROW_TRAIN_SET, DROW_VALIDATION_SET
-        print("Loading DROW train set ...")
-        train_ds = DROW_Dataset(dataset=DROW_TRAIN_SET, time_frame_size=_time_frame_size)
+        # DROW's partition: its three directories (`official`) or one of the geometry tables (TODO.md row 106).
+        _mode = getattr(args, "frog_mode", "official")
+        print(f"Loading DROW train set ('{_mode}') ...")
+        train_ds = DROW_Dataset(split="train", mode=_mode, time_frame_size=_time_frame_size)
         val_ds = None
         if args.val_split:
-            print("Loading DROW val set ...")
-            val_ds = DROW_Dataset(dataset=DROW_VALIDATION_SET, time_frame_size=_time_frame_size)
+            print(f"Loading DROW val set ('{_mode}') ...")
+            val_ds = DROW_Dataset(split="val", mode=_mode, time_frame_size=_time_frame_size)
         cfg = SimpleNamespace(
             name="drow",
             angles_fn=laser_angles,
@@ -1808,7 +1814,7 @@ def train_model(args) -> dict:
     _history_mode   = getattr(args, "history_mode", "full")
     _dtime          = getattr(args, "dtime", 1)
     _frog_mode      = (getattr(args, "frog_mode", "official")
-                       if cfg.name == "frog" else None)
+                       if cfg.name in ("frog", "drow") else None)
     _beam_shift_aug = getattr(args, "beam_shift_aug", 0)
     _diff_channels  = getattr(args, "diff_channels", False)
     _global_normalize = getattr(args, "global_normalize", False)
@@ -2186,9 +2192,10 @@ def main():
     )
     # Dataset
     parser.add_argument("--dataset",     choices=["drow", "frog", "jrdb"], default="frog")
-    parser.add_argument("--frog-mode",   choices=["official", "transferred", "balanced"],
+    parser.add_argument("--frog-mode",   choices=PARTITIONS,
                         default="official",
-                        help="FROG partition (default: official, the published "
+                        help="the partition; DROW's are official, geometry-balanced and "
+                             "geometry-shifted (TODO.md row 106). FROG partition (default: official, the published "
                              "benchmark). 'transferred' trains identically and "
                              "tests on person-free frames; 'balanced' gives every "
                              "split crowded, sparse and empty scenes. Stored in the "

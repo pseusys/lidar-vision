@@ -65,7 +65,7 @@ from takheliped.utils.tracking import (
     SimpleTracker, odom_xya_delta_to_tracker_frame,
 )
 from train import (
-    _make_optimizer, _build_model, _default_args,
+    PARTITIONS, _make_optimizer, _build_model, _default_args,
     evaluate_auc, _safe_auc,
 )
 
@@ -136,8 +136,9 @@ def _load_dataset(args):
         )
     else:
         from takheliped.datasets import DROW_Dataset
-        print(f"Loading DROW dataset (split='{args.split}') ...")
-        ds = DROW_Dataset(split=args.split, time_frame_size=time_frame_size)
+        mode = getattr(args, "frog_mode", None) or "official"
+        print(f"Loading DROW dataset (mode='{mode}', split='{args.split}') ...")
+        ds = DROW_Dataset(split=args.split, time_frame_size=time_frame_size, mode=mode)
         cfg = SimpleNamespace(
             name="drow",
             angles_fn=laser_angles,
@@ -1073,9 +1074,10 @@ def main():
                         help="also write each detector's AUCs here as JSON, so a queue can tell a finished "
                              "evaluation from an interrupted one")
     parser.add_argument("--frog-mode",
-                        choices=["official", "transferred", "balanced"],
+                        choices=PARTITIONS,
                         default=None,
-                        help="FROG partition. Defaults to the one "
+                        help="the partition -- FROG's, or DROW's official, geometry-balanced or "
+                             "geometry-shifted (TODO.md row 106). Defaults to the one "
                              "stored in the checkpoint(s) being evaluated, i.e. the "
                              "partition the weights were actually trained under; "
                              "'official' for checkpoints saved before that field "
@@ -1284,7 +1286,7 @@ def main():
     run_eval  = not args.no_eval
     run_bench = not args.no_bench
 
-    if args.dataset == "frog" and args.frog_mode is None:
+    if args.dataset in ("frog", "drow") and args.frog_mode is None:
         args.frog_mode = _resolve_frog_mode(nn_weights.values())
 
     # ── Load dataset (only if needed) ─────────────────────────────────────────

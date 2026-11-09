@@ -10,6 +10,7 @@ the official composition: the staged, lunch and turning recordings in train, val
 import itertools
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -166,6 +167,55 @@ class TestTheCommittedTables:
     def test_the_control_stays_shifted(self):
         rows = SUMMARY["geometry-shifted"]
         assert rows["test"]["enclosed"] / rows["test"]["annotated"] > 0.6 > 0.2 > rows["train"]["enclosed"] / rows["train"]["annotated"]
+
+
+class TestTheCutoutPathReadsThePartition:
+    """Phase 2 trains DROW3's cutout through `train.py` and scores it through `evaluate.py`, so both have to load the
+    partition they are given -- each used to read DROW's three directories whatever `--frog-mode` said."""
+
+    class Stop(Exception):
+        """Raised once the loader has asked for what the test checks, so nothing real loads."""
+
+    @classmethod
+    def fake(cls, calls, stop_after):
+        def build(**kwargs):
+            calls.append(kwargs)
+            if len(calls) == stop_after:
+                raise cls.Stop
+            return SimpleNamespace()
+        return build
+
+    def test_train_py_loads_its_train_and_val_from_the_partition(self, monkeypatch):
+        import takheliped.datasets
+        import train
+        calls = []
+        monkeypatch.setattr(takheliped.datasets, "DROW_Dataset", self.fake(calls, stop_after=2))
+        with pytest.raises(self.Stop):
+            train._setup_datasets(SimpleNamespace(dataset="drow", frog_mode="geometry-balanced", train_split="train", val_split="val",
+                                                  time_frame=1))
+        assert [(c["split"], c["mode"]) for c in calls] == [("train", "geometry-balanced"), ("val", "geometry-balanced")]
+
+    def test_evaluate_py_scores_the_partition_it_is_given(self, monkeypatch):
+        import evaluate
+        import takheliped.datasets
+        calls = []
+        monkeypatch.setattr(takheliped.datasets, "DROW_Dataset", self.fake(calls, stop_after=1))
+        with pytest.raises(self.Stop):
+            evaluate._load_dataset(SimpleNamespace(dataset="drow", split="test", frog_mode="geometry-balanced"))
+        assert (calls[0]["split"], calls[0]["mode"]) == ("test", "geometry-balanced")
+
+    def test_without_a_partition_both_read_the_official_one(self, monkeypatch):
+        import evaluate
+        import takheliped.datasets
+        calls = []
+        monkeypatch.setattr(takheliped.datasets, "DROW_Dataset", self.fake(calls, stop_after=1))
+        with pytest.raises(self.Stop):
+            evaluate._load_dataset(SimpleNamespace(dataset="drow", split="test"))
+        assert calls[0]["mode"] == "official"
+
+    def test_the_flag_offers_every_dataset_s_partitions(self):
+        import train
+        assert set(DROW.partitions) | set(FROG.partitions) == set(train.PARTITIONS)
 
 
 class TestEachDatasetRefusesTheOther_sPartitions:

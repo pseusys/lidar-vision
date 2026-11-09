@@ -463,6 +463,9 @@ cd utils && ../.venv/Scripts/python.exe drow_geometry_partition.py
 cd utils && ../.venv/Scripts/python.exe queue_drow_partitions.py --list   # then launch detached, memory/long-running-tasks.md
 # Item 104's two DROW arms (scan-normalised range, local level), two seeds each beside the headline, then reading 11 (~1 h).
 cd utils && ../.venv/Scripts/python.exe queue_drow_locality_arms.py --list   # then launch detached
+# Phase 2 of row 106: DROW3's cutout on geometry-balanced, DR-SPAAM's recipe, then scored on its test and train (~5 h).
+# train.py and evaluate.py read DROW's partitions through --frog-mode, as train_takheliped.py does.
+cd utils && ../.venv/Scripts/python.exe queue_drow_partition_cutout.py --list   # then launch detached
 # Where DROW's labels sit on its scans, what a 0.6 m and a 0.35 m person disk take in, and how often a walker or a
 # wheelchair has a person on top of it. Model-free, minutes.
 cd utils && ../.venv/Scripts/python.exe drow_label_geometry.py   # not -I: it imports its sibling scripts

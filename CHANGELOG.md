@@ -38,6 +38,12 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Phase 2 scheduled: the cutout on the geometry-balanced DROW (2026-11-09)
+
+*keywords: item 106 phase 2, queue_drow_partition_cutout.py, train.py PARTITIONS, evaluate.py --frog-mode DROW, drow_t1_drspaam_recipe_geometry_balanced.pth, DROW checkpoints store frog_mode*
+
+**As the owner asked, after item 104 reported**: DROW3's cutout on `geometry-balanced`, one seed, DR-SPAAM's recipe exactly as validated on official DROW, scored on the partition's test and train, to say whether our stage 2's 1.76 train / test there is far from what a model that transfers scores on it. `train.py` and `evaluate.py` used to read DROW's three directories whatever `--frog-mode` said; both now pass it to `DROW_Dataset`, share one `PARTITIONS` list, and `train.py` stores the partition in DROW checkpoints too, so `evaluate.py` scores a DROW checkpoint on the partition it trained on unless told otherwise (one written before carries none and reads `official`).
+
 ## Neither of item 104's arms moves DROW's gap, and the local level shows the cross-scan failure is not a per-scan offset (2026-11-09)
 
 *keywords: item 104 results, drow_scan_norm_s0 s1, drow_local_level_s0 s1, drow_default_radii_s0 s1 train/test 2.48 2.33, results/drow_locality_arms.json, reading 11, pooled over within-scan unchanged 0.49-0.51, populated over within-scan 0.70-0.77, not an additive per-scan offset, false-positive peaks, local branch trained 1,729 parameters, epochs 5.99, phase 2 next*
