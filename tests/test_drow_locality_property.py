@@ -16,7 +16,8 @@ if str(UTILS) not in sys.path:
     sys.path.insert(0, str(UTILS))
 
 from drow_locality_property import (ap_by_bin, confuser_bins, exact_twins, nearest_distance, ranking_summary,  # noqa: E402
-                                    recording_type, scan_descriptor, top_k_hits)
+                                    recording_type, reference_bins, scan_descriptor, scan_levels, scan_statistics, sister_recordings,
+                                    top_k_hits)
 from train_takheliped import score_detections  # noqa: E402
 
 SPACING_DEG = 0.5
@@ -152,6 +153,59 @@ class TestRankingSummary:
         r = ranking_summary(self._frames())
         assert (r["frames"], r["person_free"]) == (3, 1)
         assert r["top_k_hits"] == pytest.approx(top_k_hits(self._frames()))
+
+
+class TestScanLevels:
+    """Per scan: the mean score of the detections matched one to one to its people, and the highest score of the rest."""
+
+    def test_true_positive_mean_and_top_false_positive(self):
+        f = TestWithinFrameRanking._frame
+        frames = [f([0.9, 0.7, 0.4, 0.2], [[0, 2], [0.1, 2], [3, 3], [1, 3]], [[0, 2], [1, 3]])]
+        tp, fp = scan_levels(frames)
+        assert tp[0] == pytest.approx((0.9 + 0.2) / 2)
+        assert fp[0] == pytest.approx(0.7), "the second detection on a taken person is a false positive"
+
+    def test_undefined_where_there_is_nothing_to_average(self):
+        f = TestWithinFrameRanking._frame
+        tp, fp = scan_levels([f([0.8], [[0, 2]], [[0, 2]]), f([0.5], [[5, 5]], [[0, 2]])])
+        assert np.isnan(fp[0]) and tp[0] == pytest.approx(0.8)
+        assert np.isnan(tp[1]) and fp[1] == pytest.approx(0.5)
+
+
+class TestScanStatistics:
+    def test_returns_within_range_their_median_and_jumps_per_ten_degrees(self):
+        scan = np.full((1, 40), 4.0, np.float32)          # 20 degrees at 0.5 deg
+        scan[0, 10:14] = 2.0                               # one object: two jumps of 2 m
+        scan[0, 30:] = np.inf                              # ten beams with no return
+        s = scan_statistics(scan, [np.array([[0.0, 2.0], [3.0, 4.0]])], spacing_deg=0.5)
+        assert s["returns_within_10m"][0] == pytest.approx(0.75)
+        assert s["median_range_m"][0] == pytest.approx(4.0)
+        assert s["jumps_per_10deg"][0] == pytest.approx(2 / 2.0)
+        assert s["people"][0] == 2
+        assert s["people_range_m"][0] == pytest.approx((2.0 + 5.0) / 2)
+
+    def test_a_jump_into_a_missing_return_is_not_clutter(self):
+        scan = np.full((1, 20), 3.0, np.float32)
+        scan[0, 5:8] = np.nan
+        assert scan_statistics(scan, [np.zeros((0, 2))], spacing_deg=0.5)["jumps_per_10deg"][0] == 0.0
+
+
+class TestReferenceBins:
+    def test_bins_by_the_reference_distribution_s_percentiles(self):
+        reference = np.arange(1.0, 101.0)                  # p10 = 10.9, p25 = 25.75
+        values = np.array([5.0, 10.9, 11.0, 25.0, 26.0, 500.0])
+        assert reference_bins(values, reference, (10, 25)).tolist() == [0, 1, 1, 1, 2, 2]
+
+    def test_an_undefined_value_reads_as_the_open_end(self):
+        """A scan with no return within range has no median range: it is as open as a scan can be."""
+        assert reference_bins(np.array([np.nan]), np.arange(1.0, 11.0), (10, 25)).tolist() == [2]
+
+
+class TestSisterRecordings:
+    def test_a_segment_whose_twin_is_in_train(self):
+        train = ["run_2015-11-26-14-07-15-b", "lunch_2015-11-26-12-04-23", "run_2015-11-25-14-58-49-a"]
+        val = ["run_2015-11-26-14-07-15-a", "run_2015-11-25-14-58-49-a", "run_2015-11-27-10-00-00-a", "run_2015-11-28-10-00-00"]
+        assert sister_recordings(val, train).tolist() == [True, True, False, False]
 
 
 class TestExactTwins:

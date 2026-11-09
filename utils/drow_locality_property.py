@@ -33,10 +33,22 @@ what caught (`memory/gotchas.md`):
    80.89%): pooled AP over within-frame hits at 0.75 or more says DROW's, 0.60 or less a trait of our model that FROG's
    test tolerates, written before the run (`TODO.md` row 102).
 
+7. **What moves our score level** (`score-level`): per populated DROW test scan, the rank correlation of model-free
+   scan statistics with each model's top false positive and mean true positive, and each statistic's quartiles on DROW
+   train and FROG test. It found no statistic that moves ours and not the cutout's, and one pair that separates the
+   splits: DROW test's returns are close (median 1.74 m against DROW train's 4.33 m).
+8. **Geometry inside DROW test** (`geometry`): AP per bin of where a scan's median return range falls in DROW train's.
+   Almost every test scan is in the bottom bin, so it could not reach the familiar regime.
+9. **Geometry on DROW val** (`val-geometry`), which spans both regimes, with and without val's sister segments of train
+   recordings, and per bin the readings no person-free scan moves. Prediction written before the run: geometry is the
+   trigger if ours' deficit in the top bin is at most half the bottom bin's in both scopes.
+
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
+    python drow_locality_property.py --readings val-geometry --out ../results/drow_val_geometry.json
 """
 
+import re
 from argparse import ArgumentParser, RawDescriptionHelpFormatter
 from json import dumps
 from pathlib import Path
@@ -45,6 +57,7 @@ from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 import torch
+from scipy.stats import spearmanr
 
 from check_drow_scoring import detections_by_frame
 from evaluate import _load_dataset, eval_nn_model
@@ -62,7 +75,16 @@ CUTOUT = _HERE.parent / "checkpoints_drow" / "drow_t1_drspaam_recipe.pth"
 #: Our FROG stage 2 whose train and test AP (93.66% / 80.89%) item 96 measured, and the stride that 80.89% is at.
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
-READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking")
+READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry")
+#: The rule for reading 7, written before its run (`TODO.md` row 102): a statistic moves our level at |rho| >= 0.3 for
+#: both seeds with the cutout under half of ours, and is the property if DROW test's median also leaves the
+#: interquartile range of both DROW train and FROG test.
+LEVEL_RHO = 0.3
+LEVELS = ("fp_top", "tp_mean")
+#: Reading 8's bins: where a DROW test scan's median return range falls in DROW train's distribution.
+GEOMETRY_PERCENTILES = (10, 25)
+GEOMETRY_BINS = ("under DROW train's p10", "DROW train's p10-p25", "DROW train's p25 or above")
+GEOMETRY_STATS = ("returns_within_10m", "median_range_m")
 #: The descriptor: 2.5 deg sectors of ranges clipped at FROG's 10 m annotation limit, so both datasets are read alike.
 SECTOR_DEG = 2.5
 CLIP_M = 10.0
@@ -157,6 +179,60 @@ def ranking_summary(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]]) -> 
                 top_k_hits=top_k_hits(frames), frames=len(frames), person_free=len(frames) - len(populated))
 
 
+def scan_levels(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]], radius: float = MATCH_RADIUS_M) -> Tuple[np.ndarray, np.ndarray]:
+    """Per scan, the mean score of its true positives and the highest score of its false positives (NaN where it has
+    none), each detection in score order taking the nearest person within `radius` that no better detection took."""
+    tp_mean, fp_top = np.full(len(frames), np.nan), np.full(len(frames), np.nan)
+    for f, (scores, xy, gt) in enumerate(frames):
+        gt = np.asarray(gt, np.float64).reshape(-1, 2)
+        free, tps, fps = np.ones(len(gt), bool), [], []
+        for j in np.argsort(-np.asarray(scores), kind="stable"):
+            d = np.where(free, np.linalg.norm(gt - xy[j], axis=1), np.inf) if len(gt) else np.array([np.inf])
+            i = int(d.argmin())
+            if d[i] <= radius:
+                free[i] = False
+                tps.append(scores[j])
+            else:
+                fps.append(scores[j])
+        if tps:
+            tp_mean[f] = float(np.mean(tps))
+        if fps:
+            fp_top[f] = float(max(fps))
+    return tp_mean, fp_top
+
+
+def scan_statistics(scans: np.ndarray, people_xy: Sequence[np.ndarray], spacing_deg: float, near_m: float = CLIP_M,
+                    jump_m: float = 0.5) -> Dict[str, np.ndarray]:
+    """Per scan, model-free: the share of beams with a return within `near_m`, those returns' median range, range
+    jumps over `jump_m` between neighbouring returns per 10 degrees of field of view (clutter), and its people's count
+    and mean range."""
+    r = np.asarray(scans, np.float64)
+    near = np.isfinite(r) & (r > 0) & (r < near_m)
+    with np.errstate(invalid="ignore"):                    # inf - inf between two missing returns; masked out below
+        jumps = (np.abs(np.diff(r, axis=1)) > jump_m) & near[:, 1:] & near[:, :-1]
+    median = np.array([np.median(row[m]) if m.any() else np.nan for row, m in zip(r, near, strict=True)])
+    return dict(returns_within_10m=near.mean(axis=1), median_range_m=median,
+                jumps_per_10deg=jumps.sum(axis=1) / (r.shape[1] * spacing_deg / 10.0),
+                people=np.array([len(p) for p in people_xy], np.float64),
+                people_range_m=np.array([np.hypot(*np.asarray(p).T).mean() if len(p) else np.nan for p in people_xy]))
+
+
+def reference_bins(values: np.ndarray, reference: np.ndarray, percentiles: Sequence[float]) -> np.ndarray:
+    """Each value's bin among `reference`'s `percentiles`: 0 below the first, then one bin per edge passed. An undefined
+    value -- a scan with no return in range has no median range -- reads as the open end."""
+    edges = np.nanpercentile(reference, percentiles)
+    return np.digitize(np.where(np.isnan(values), np.inf, values), edges)
+
+
+def sister_recordings(names: Sequence[str], train_names: Sequence[str]) -> np.ndarray:
+    """Whether each recording is a lettered segment (`-a`, `-b`, ...) of a recording another segment of which is in
+    `train_names`: the same place, minutes apart."""
+    def base(n: str) -> str:
+        return re.sub(r"-[a-z]$", "", n)
+    train_bases = {base(n) for n in train_names}
+    return np.array([bool(re.search(r"-[a-z]$", n)) and base(n) in train_bases for n in names])
+
+
 def print_ranking(title: str, table: Dict[str, Dict[str, float]]) -> None:
     print(f"\n{title}: pooled AP, the same over populated frames only, and each frame's own k best detections (k = its people)", flush=True)
     for m, r in table.items():
@@ -212,6 +288,106 @@ def print_table(title: str, table: Dict[str, Dict[str, Dict[str, float]]], bins:
         print(f"  {b:<42}" + "".join(f"{table[m][b]['ap']:>10.2%}" for m in table) + f"{any_model['frames']:>8}{any_model['people']:>8}")
 
 
+def score_level_reading(split: FrameSplit, played: Dict[str, list], novelty_m: np.ndarray) -> Dict[str, object]:
+    """Reading 7: over populated DROW test scans, each statistic's rank correlation with each model's per-scan levels,
+    and its distribution on DROW train, DROW test and FROG test; the verdict by `LEVEL_RHO`'s rule."""
+    stats = scan_statistics(split.scans[split.annotated], split.people_xy, DROW.spacing_deg)
+    populated = stats["people"] > 0
+    test_stats = {**stats, "novelty_m": novelty_m}
+    levels = {m: dict(zip(LEVELS, scan_levels(f)[::-1])) for m, f in played.items()}
+    rho = {s: {m: {lv: float(spearmanr(v[populated], levels[m][lv][populated], nan_policy="omit")[0]) for lv in LEVELS}
+               for m in played} for s, v in test_stats.items()}
+    quartiles = {"drow_test": {s: np.nanpercentile(v[populated], [25, 50, 75]).tolist() for s, v in stats.items()}}
+    for spec, name, split_name, stride in ((DROW, "drow_train", "train", 1), (FROG, "frog_test", "test", FROG_TEST_STRIDE)):
+        other = load_frames(split_name, "official", spec)
+        rows = np.arange(0, len(other.annotated), stride)
+        s = scan_statistics(other.scans[other.annotated[rows]], [other.people_xy[a] for a in rows], spec.spacing_deg)
+        quartiles[name] = {k: np.nanpercentile(v[s["people"] > 0], [25, 50, 75]).tolist() for k, v in s.items()}
+        del other
+    verdict = {}
+    for s in test_stats:
+        moves = [lv for lv in LEVELS
+                 if min(abs(rho[s]["ours_s0"][lv]), abs(rho[s]["ours_s1"][lv])) >= LEVEL_RHO
+                 and np.sign(rho[s]["ours_s0"][lv]) == np.sign(rho[s]["ours_s1"][lv])
+                 and abs(rho[s]["cutout"][lv]) < 0.5 * min(abs(rho[s]["ours_s0"][lv]), abs(rho[s]["ours_s1"][lv]))]
+        separates = s in stats and all(not quartiles[o][s][0] <= quartiles["drow_test"][s][1] <= quartiles[o][s][2]
+                                       for o in ("drow_train", "frog_test"))
+        verdict[s] = dict(moves_our_level=moves, separates_the_splits=bool(separates), is_the_property=bool(moves and separates))
+    print("\nDROW test, populated scans: Spearman rho of each statistic with each model's level (fp = top false positive, "
+          "tp = mean true positive)", flush=True)
+    print(f"  {'statistic':<20}" + "".join(f"{m + ' ' + lv[:2]:>13}" for lv in LEVELS for m in played) + "   verdict", flush=True)
+    for s in test_stats:
+        v = verdict[s]
+        print(f"  {s:<20}" + "".join(f"{rho[s][m][lv]:>13.2f}" for lv in LEVELS for m in played)
+              + f"   moves {','.join(v['moves_our_level']) or '-'}; separates {v['separates_the_splits']}", flush=True)
+    print("\nThe same statistics, populated scans, quartiles p25 / p50 / p75", flush=True)
+    for s in stats:
+        print(f"  {s:<20}" + "".join(f"   {o}: " + " / ".join(f"{x:.3g}" for x in quartiles[o][s]) for o in ("drow_train", "drow_test", "frog_test")),
+              flush=True)
+    return dict(rho=rho, quartiles=quartiles, verdict=verdict, populated_scans=int(populated.sum()))
+
+
+def geometry_reading(split: FrameSplit, played: Dict[str, list]) -> Dict[str, object]:
+    """Reading 8: DROW test scored per bin of where each scan's median return range falls in DROW train's, and the two
+    geometry statistics' quartiles on every split that matters -- DROW train, val and test, FROG train and test."""
+    train = load_frames("train", "official", DROW)
+    reference = scan_statistics(train.scans[train.annotated], train.people_xy, DROW.spacing_deg)["median_range_m"]
+    del train
+    test_stats = scan_statistics(split.scans[split.annotated], split.people_xy, DROW.spacing_deg)
+    bins = reference_bins(test_stats["median_range_m"], reference, GEOMETRY_PERCENTILES)
+    by_bin = {m: ap_by_bin(f, bins, GEOMETRY_BINS) for m, f in played.items()}
+    print_table("DROW test AP by where the scan's median return range falls in DROW train's", by_bin, GEOMETRY_BINS)
+    quartiles = {}
+    for spec, name, split_name, stride in ((DROW, "drow_train", "train", 1), (DROW, "drow_val", "val", 1), (DROW, "drow_test", "test", 1),
+                                           (FROG, "frog_train", "train", 25), (FROG, "frog_test", "test", FROG_TEST_STRIDE)):
+        other = load_frames(split_name, "official", spec)
+        rows = np.arange(0, len(other.annotated), stride)
+        s = scan_statistics(other.scans[other.annotated[rows]], [other.people_xy[a] for a in rows], spec.spacing_deg)
+        quartiles[name] = {k: np.nanpercentile(s[k], [25, 50, 75]).tolist() for k in GEOMETRY_STATS}
+        del other
+    print("\nGeometry of every annotated scan, quartiles p25 / p50 / p75", flush=True)
+    for k in GEOMETRY_STATS:
+        print(f"  {k}", flush=True)
+        for name, q in quartiles.items():
+            print(f"    {name:<12}" + " / ".join(f"{x:.3g}" for x in q[k]), flush=True)
+    edges = np.nanpercentile(reference, GEOMETRY_PERCENTILES).tolist()
+    return dict(by_bin=by_bin, train_edges_m=edges, quartiles=quartiles,
+                test_scans_per_bin=np.bincount(bins, minlength=len(GEOMETRY_BINS)).tolist())
+
+
+def val_geometry_reading(device) -> Dict[str, object]:
+    """Reading 9: reading 8's bins on DROW val, which spans both geometries where DROW test does not, scored over every
+    val recording and over the ones with no sister segment in train alone (a familiar scene would flatter the wide view)."""
+    train_ds = DROW.load("train", None, "official")
+    train = frames_from_dataset(train_ds, DROW)
+    reference = scan_statistics(train.scans[train.annotated], train.people_xy, DROW.spacing_deg)["median_range_m"]
+    train_names = [Path(n).stem for n in train_ds.filenames]
+    del train_ds, train
+    ds, cfg = _load_dataset(SimpleNamespace(dataset="drow", split="val"))
+    split = frames_from_dataset(ds, DROW)
+    played = {**ours_frames(split, device), "cutout": cutout_frames(ds, cfg, split)}
+    names = [Path(n).stem for n in ds.filenames]
+    sister = sister_recordings(names, train_names)[annotated_recordings(split)]
+    bins = reference_bins(scan_statistics(split.scans[split.annotated], split.people_xy, DROW.spacing_deg)["median_range_m"],
+                          reference, GEOMETRY_PERCENTILES)
+    out = dict(no_sister_recordings=[n for n, s in zip(names, sister_recordings(names, train_names), strict=True) if not s])
+    for scope, keep in (("all_val", np.ones(len(bins), bool)), ("no_sister_in_train", ~sister)):
+        idx = np.nonzero(keep)[0]
+        table = {m: ap_by_bin([f[i] for i in idx], bins[idx], GEOMETRY_BINS) for m, f in played.items()}
+        # The density check: the enclosed bins are sparse in people, which pooled AP punishes on its own, so each bin also
+        # gets the two readings no person-free scan moves -- AP over populated scans, and the within-scan hits.
+        ranking = {b: {m: ranking_summary([f[i] for i in idx[bins[idx] == k]]) for m, f in played.items()}
+                   for k, b in enumerate(GEOMETRY_BINS)}
+        out[scope] = dict(by_bin=table, by_bin_ranking=ranking, scans_per_bin=np.bincount(bins[idx], minlength=len(GEOMETRY_BINS)).tolist(),
+                          whole={m: ranking_summary([f[i] for i in idx]) for m, f in played.items()})
+        print_table(f"DROW val ({scope.replace('_', ' ')}) AP by where the scan's median return range falls in DROW train's",
+                    table, GEOMETRY_BINS)
+        for b in GEOMETRY_BINS:
+            print_ranking(f"  {b}", ranking[b])
+    print(f"\nval recordings with no sister segment in train: {', '.join(out['no_sister_recordings'])}", flush=True)
+    return out
+
+
 def main() -> int:
     ap = ArgumentParser(description=__doc__, formatter_class=RawDescriptionHelpFormatter)
     ap.add_argument("--out", type=Path, default=_HERE.parent / "results" / "drow_locality_property.json")
@@ -225,7 +401,8 @@ def main() -> int:
     # 1. Scene novelty: test frames against the scenes their own training split shows, at both clips, with the share
     # of test scans recorded byte for byte in train (reading 5).
     novelty = {}
-    specs = ((DROW, "drow"), (FROG, "frog")) if "novelty" in args.readings else ((DROW, "drow"),) if "drow-test" in args.readings else ()
+    drow_test = bool({"drow-test", "score-level", "geometry"} & set(args.readings))
+    specs = ((DROW, "drow"), (FROG, "frog")) if "novelty" in args.readings else ((DROW, "drow"),) if drow_test else ()
     for spec, name in specs:
         train = load_frames("train", "official", spec)
         test = load_frames("test", "official", spec)
@@ -248,7 +425,7 @@ def main() -> int:
         results["novelty"][name] = entry
         del train, test, bank
 
-    if "drow-test" in args.readings:
+    if drow_test:
         # 2. Both models on DROW test, scored per novelty quartile and per look-alike bin.
         ds, cfg = _load_dataset(SimpleNamespace(dataset="drow", split="test"))
         split = frames_from_dataset(ds, DROW)
@@ -267,6 +444,10 @@ def main() -> int:
         results["test_by_recording"] = {m: ap_by_bin(f, annotated_recordings(split), recordings) for m, f in played.items()}
         print_ranking("DROW test", results["test_ranking"])
         print_table("DROW test AP per recording", results["test_by_recording"], recordings)
+        if "score-level" in args.readings:
+            results["score_level"] = score_level_reading(split, played, novelty["drow"])
+        if "geometry" in args.readings:
+            results["geometry"] = geometry_reading(split, played)
         del ds, split, played
 
     if "drow-train" in args.readings:
@@ -280,6 +461,9 @@ def main() -> int:
         results["train_by_recording_kind"] = {m: ap_by_bin(f, kinds, RECORDING_KINDS) for m, f in train_played.items()}
         print_table("DROW train AP by kind of recording", results["train_by_recording_kind"], RECORDING_KINDS)
         del ds, split, train_played
+
+    if "val-geometry" in args.readings:
+        results["val_geometry"] = val_geometry_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.

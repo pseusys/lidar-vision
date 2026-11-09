@@ -452,9 +452,11 @@ cd utils && ../.venv/Scripts/python.exe check_drow_scoring.py   # not -I: it imp
 # 30 m clip, with byte-identical scans counted), look-alikes near people, the kind of training recording, and ranking
 # inside each frame against pooled AP -- our stage 2 and the retrained cutout scored per bin of each -- and the same
 # ranking readings for our FROG stage 2 on FROG test. Not -I: it imports its sibling scripts. ~35 min, 20 of them the
-# cutout over DROW train on the CPU; --readings picks any of novelty, drow-test, drow-train, frog-ranking.
+# cutout over DROW train on the CPU; --readings picks any of novelty, drow-test, drow-train, frog-ranking, score-level,
+# geometry, val-geometry (the last three: what moves our score level, and DROW's scan geometry against its train split's).
 cd utils && ../.venv/Scripts/python.exe drow_locality_property.py
 cd utils && ../.venv/Scripts/python.exe drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_frog_ranking.json
+cd utils && ../.venv/Scripts/python.exe drow_locality_property.py --readings val-geometry --out ../results/drow_val_geometry.json
 # Where DROW's labels sit on its scans, what a 0.6 m and a 0.35 m person disk take in, and how often a walker or a
 # wheelchair has a person on top of it. Model-free, minutes.
 cd utils && ../.venv/Scripts/python.exe drow_label_geometry.py   # not -I: it imports its sibling scripts

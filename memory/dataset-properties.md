@@ -563,6 +563,23 @@ Measured read-only from DROW's `.wp` / `.wc` / `.wa` and `.odom2` files, by reco
 - **The 0.6 m disk reaches into the other classes.** An eighth to a sixth of the beams a 0.6 m person disk trains as person are nearer a wheelchair or walker annotation; at DROW's own 0.35 m it is 1-3%.
 - **"A walker user is labelled twice" is not what the files show at 0.3 m.** If walker users carry a person label too, it sits more than 0.3 m from the walker's centre -- plausible, since the frame is held in front of the body -- and the share at a wider radius is not measured yet. The wheelchair rule holds as written.
 
+**The scan geometry of each split, measured 2026-11-09** (`utils/drow_locality_property.py --readings geometry`,
+model-free, every annotated scan, `results/drow_geometry.json`):
+
+| p25 / p50 / p75 | DROW train | DROW val | DROW test | FROG train (every 25th) | FROG test (every 5th) |
+| --- | --- | --- | --- | --- | --- |
+| median range of the returns within 10 m | 3.25 / 4.33 / 5.21 m | 1.47 / 1.92 / 3.77 m | 1.46 / 1.74 / 2.12 m | 2.64 / 3.61 / 4.90 m | 2.66 / 3.72 / 5.15 m |
+| share of beams returning within 10 m | 0.71 / 0.80 / 0.88 | 0.84 / 0.94 / 0.96 | 0.94 / 0.95 / 0.97 | 0.75 / 0.86 / 0.92 | 0.72 / 0.83 / 0.90 |
+
+- **DROW's test is enclosed and its train is open.** 72% of test scans fall under train's 10th percentile of median
+  return range (2.08 m), 98% under its 25th (3.25 m); FROG's test sits on FROG's train. Val spans both.
+- **This is what our stage 2 fails on** (`CHANGELOG.md`, 2026-11-09): on DROW val its scores stay comparable between
+  scans of typical geometry and break on enclosed ones, while a cutout's do not -- so a DROW test number for a
+  whole-scan model measures generalisation to an unseen geometric regime as much as detection.
+- **Scene novelty, as nearest-neighbour distance of coarse sector medians, does not show it**: FROG test is as far from
+  its nearest training scan (median 0.765 m) as DROW test (0.541 m). A nearest neighbour can be close while the
+  distribution is not, which is why the shift is read off the quartiles instead.
+
 ## What the false positives are, and what that rules out
 
 Detector-dependent, but stable across the two published models and therefore more a property of the scenes than of either model.

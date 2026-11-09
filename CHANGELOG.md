@@ -38,6 +38,70 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## DROW's test scans are enclosed, its training scans are not, and our stage 2's score level breaks on enclosed scans (2026-11-09)
+
+*keywords: item 102, readings 7 8 9, score-level, geometry, val-geometry, scan_levels, scan_statistics, reference_bins, sister_recordings, median return range, returns within 10 m, DROW test 1.74 m, DROW train 4.33 m, train p10 2.08 m p25 3.25 m, FROG test inside FROG train, 98% of DROW test under train p25, val spans both regimes, density check, within-scan hits flat 0.80 / 0.81, populated over within-scan 0.54-0.71 enclosed against 0.81-0.88 typical, geometry shift, not a dataset defect, results/drow_score_level.json, drow_geometry.json, drow_val_geometry.json*
+
+**The question the last entry left**: what in DROW's scans moves our stage 2's score level between scans. Three readings,
+each rule written into `TODO.md` row 102 before its run (`utils/drow_locality_property.py`).
+
+**Reading 7, statistics against score levels inside DROW test: no statistic moves ours selectively** (|rho| >= 0.3
+for both seeds with the cutout under half): clutter correlates with ours' top false positive at 0.41 / 0.37 and with the
+cutout's at 0.32; the people's range with ours' true positives at -0.50 / -0.58 and the cutout's at -0.34. **But two
+statistics separate the splits outright** -- and FROG's test sits on its train split where DROW's does not:
+
+| every annotated scan, p25 / p50 / p75 | DROW train | DROW val | DROW test | FROG train (every 25th) | FROG test (every 5th) |
+| --- | --- | --- | --- | --- | --- |
+| median range of the returns within 10 m | 3.25 / **4.33** / 5.21 m | 1.47 / 1.92 / 3.77 m | 1.46 / **1.74** / 2.12 m | 2.64 / **3.61** / 4.90 m | 2.66 / **3.72** / 5.15 m |
+| share of beams returning within 10 m | 0.71 / 0.80 / 0.88 | 0.84 / 0.94 / 0.96 | 0.94 / 0.95 / 0.97 | 0.75 / 0.86 / 0.92 | 0.72 / 0.83 / 0.90 |
+
+DROW's test recordings are enclosed -- half the returns of a typical scan within 1.74 m -- and its training recordings
+are open; 72% of test scans fall under DROW train's 10th percentile (2.08 m) and 98% under its 25th (3.25 m). Inside
+the test split that statistic barely varies, which is why no within-test correlation could find it.
+
+**Reading 8, DROW test binned by DROW train's percentiles: the prediction misses.** The deficit is 37.7 / 27.9 / 19.7 pp
+over 1,756 / 631 / 41 scans -- the right direction, not half -- and the cutout itself falls 68 -> 56 -> 28%. The split has
+41 typical scans; it cannot test the typical regime.
+
+**Reading 9, the same bins on DROW val, which spans both: the prediction is met in both scopes.**
+
+| DROW val | scans | people | ours s0 / s1 | cutout | deficit | ours / cutout |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| all val, enclosed (under train's p10) | 2,124 | 763 | 22.63 / 18.71% | 51.29% | 30.6 pp | 0.40 |
+| all val, train's p10-p25 | 542 | 428 | 18.43 / 18.16% | 34.91% | 16.6 pp | 0.52 |
+| all val, typical (train's p25 or above) | 1,253 | 1,911 | 32.29 / 30.78% | 44.57% | **13.0 pp** | 0.71 |
+| no sister segment in train, enclosed | 177 | 124 | 25.13 / 20.19% | 52.27% | 29.6 pp | 0.43 |
+| no sister segment in train, typical | 1,178 | 1,890 | 33.34 / 31.35% | 44.61% | **12.3 pp** | 0.73 |
+
+**The density check, added before reading it as geometry**: the enclosed bins are sparse in people (72% of enclosed val
+scans are person-free), which pooled AP punishes on its own. Per bin, the two readings no person-free scan moves:
+
+| DROW val, populated scans | ours s0 / s1: populated AP over within-scan hits | cutout | ours / cutout, within-scan hits |
+| --- | ---: | ---: | ---: |
+| all val, enclosed | 0.71 / 0.67 | 0.97 | 0.80 |
+| all val, typical | 0.88 / 0.81 | 0.94 | 0.81 |
+| no sister in train, enclosed | 0.62 / 0.54 | 0.96 | 0.80 |
+| no sister in train, typical | 0.88 / 0.81 | 0.94 | 0.81 |
+
+**What this says.** Inside a scan, ours finds 80% of what the cutout finds whatever the geometry. Across scans, its
+scores compare nearly as well as the cutout's on scans shaped like its training scans (0.81-0.88 against 0.94; 1.03 on
+FROG) and break on enclosed ones (0.54-0.71 against 0.96-0.97), where it also fires confidently on the empty scans.
+DROW test is almost all enclosed. So the trigger of the mechanism measured in the last entry is **scan geometry outside
+the training distribution**, and the property is DROW's split: training recordings in open spaces, test recordings in
+corridors, where FROG's test geometry sits on its training geometry.
+
+**How far it is settled.** The rule written beforehand is met in both scopes, and the density check holds; but it is a
+correlational reading on one split -- val's typical bin is mostly one recording (`run_2015-11-26-14-07-15-a`, 71% of
+val's people), its enclosed no-sister bin small (177 scans, 124 people), and both checkpoints were selected on val. The
+causal test is an intervention: a stage 2 made indifferent to global geometry should recover on enclosed scans and
+leave typical ones alone (`TODO.md` row 104). And a smaller, geometry-independent deficit remains: 20% fewer hits than
+the cutout inside a scan, in every bin.
+
+**What it is not**: a defect in DROW. Its labels sit on the returns (95-99% within 0.2 m), its harness is exact, and a
+cutout scores 63.2% on the same split. The shift is a legitimate test of generalisation -- train in open spaces, deploy
+in corridors -- that DROW sets and FROG does not, and the caveats DROW does carry (val unrepresentative of test and
+partly leaked, 42% of test scans person-free) are measurement caveats, not grounds for retiring it.
+
 ## Our stage 2's scores compare between scans on FROG and not on DROW: the failure is DROW's (2026-11-09)
 
 *keywords: item 102, reading 6, frog-ranking, ranking_summary, populated_ap, pooled / top-k 1.03 on FROG, 0.47-0.50 on DROW, cutout 0.86, a69_no_aggregator_s0 80.89 reproduced, 1,026 of 2,428 DROW test frames person-free, FROG official test populated only, cross-scan score level, not temporal, --readings, results/drow_locality_frog_ranking.json*
