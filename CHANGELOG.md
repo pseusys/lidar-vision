@@ -38,6 +38,33 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Phase 2: the cutout on the geometry-balanced DROW transfers at 1.27, our stage 2 at 1.76 (2026-11-09)
+
+*keywords: item 106 phase 2, drow_t1_drspaam_recipe_geometry_balanced.pth, cutout balanced test 53.75 train 68.07 ratio 1.27, ours balanced 41.89 ratio 1.76, ours over cutout 0.78 balanced against 0.46 official, gap 12 pp against 34 pp, item 106 closed*
+
+**DROW3's cutout on `geometry-balanced`**, one seed, DR-SPAAM's recipe as validated on official DROW, last weights
+(epoch 40), scored by `evaluate.py` on the partition's own splits -- set beside our stage 2 on the same partition and
+both on official DROW (person AP at 0.5 m):
+
+| | test AP | train AP | train / test | ours over the cutout, test AP | gap to the cutout |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| cutout, `geometry-balanced` | **53.75%** | 68.07% | **1.27** | -- | -- |
+| ours, `geometry-balanced` (two seeds) | 40.99 / 42.79%, mean 41.89% | 73.28 / 74.28% | 1.79 / 1.74 | **0.78** | **11.9 pp** |
+| cutout, official DROW | 63.20% | 66.50% | 1.05 | -- | -- |
+| ours, official DROW (headline, default radii, two seeds) | 28.62 / 29.43%, mean 29.03% | 71.05 / 68.55% | 2.48 / 2.33 | **0.46** | **34.2 pp** |
+
+**As measured, without revisiting row 106's verdict** (which stands as the rule gave it: geometry is not the trigger):
+
+- **The balanced partition is harder for the cutout too.** Its test AP falls from 63.20% to 53.75% and its train / test
+  ratio rises from 1.05 to 1.27, on the same recipe.
+- **Against that reference our stage 2 is much closer than on official DROW**: 78% of the cutout's test AP on the
+  balanced partition against 46% on the official one, a gap of 11.9 pp against 34.2 pp.
+- **It still transfers worse than the cutout** on the same partition: 1.76 against 1.27, its train AP above the
+  cutout's (73-74% against 68%) and its test AP below.
+
+One cutout seed, two of ours; DROW's seeds spread 2-3 pp. With this, row 106's two phases are both measured and the row
+closes; row 102 stays open on what makes the remaining 11.9 pp, and the 34.2 pp on official DROW.
+
 ## Phase 2 scheduled: the cutout on the geometry-balanced DROW (2026-11-09)
 
 *keywords: item 106 phase 2, queue_drow_partition_cutout.py, train.py PARTITIONS, evaluate.py --frog-mode DROW, drow_t1_drspaam_recipe_geometry_balanced.pth, DROW checkpoints store frog_mode*

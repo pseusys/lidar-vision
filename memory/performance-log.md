@@ -345,6 +345,18 @@ an ignore region only under `--ignore-other-classes`, which is off. Their differ
 -- see `interpreting-evaluation.md` -- so every DROW comparison above that was read against 27.86% or 27.12% stands, and
 reads about 1.8 pp further from the cutout's 63.20% against the new default.
 
+### On a geometry-balanced DROW the gap to the cutout is 11.9 pp, not 34.2 (2026-11-09)
+
+Each model trained and scored on one partition, person AP at 0.5 m (`CHANGELOG.md`; the partitions in `data-model.md`):
+
+| | official DROW | `geometry-balanced` |
+| --- | ---: | ---: |
+| cutout (DR-SPAAM's recipe, one seed): test AP, train / test | 63.20%, 1.05 | 53.75%, 1.27 |
+| our stage 2 (default radii, two seeds): test AP, train / test | 29.03%, 2.40 | 41.89%, 1.76 |
+| ours over the cutout, test AP | 0.46 | 0.78 |
+
+The test APs of the two columns are on different test splits and are read only against the same column's cutout.
+
 ### Item 104's two DROW arms leave the gap where it was (2026-11-09)
 
 Official DROW test, stage 2 alone, two seeds each at DROW's default radii, beside the headline at the same seeds:
