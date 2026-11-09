@@ -43,9 +43,11 @@ class TestTheFlagExists:
 
     @pytest.mark.parametrize("step", ("step2", "step3a", "step3b", "step4"))
     def test_it_offers_the_three_partitions_and_defaults_to_official(self, step):
+        """FROG's three, among every dataset's partitions since DROW gained its own (2026-11-09); each dataset refuses
+        the others' at load time (`tests/test_drow_partition.py`)."""
         flag = _flags(step)["frog_mode"]
 
-        assert tuple(flag.choices) == MODES
+        assert tuple(flag.choices) == tak.PARTITIONS and tak.FROG.partitions == MODES
         assert flag.default == "official", "the default must reproduce every number measured so far"
 
 

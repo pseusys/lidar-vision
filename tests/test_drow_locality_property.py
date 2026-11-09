@@ -15,9 +15,9 @@ UTILS = Path(__file__).resolve().parents[1] / "utils"
 if str(UTILS) not in sys.path:
     sys.path.insert(0, str(UTILS))
 
-from drow_locality_property import (ap_by_bin, confuser_bins, exact_twins, nearest_distance, ranking_summary,  # noqa: E402
-                                    recording_type, reference_bins, scan_descriptor, scan_levels, scan_statistics, sister_recordings,
-                                    top_k_hits)
+from drow_locality_property import (ap_by_bin, confuser_bins, exact_twins, nearest_distance, partition_verdict,  # noqa: E402
+                                    ranking_summary, recording_type, reference_bins, scan_descriptor, scan_levels, scan_statistics,
+                                    sister_recordings, top_k_hits, transfer_summary)
 from train_takheliped import score_detections  # noqa: E402
 
 SPACING_DEG = 0.5
@@ -206,6 +206,43 @@ class TestSisterRecordings:
         train = ["run_2015-11-26-14-07-15-b", "lunch_2015-11-26-12-04-23", "run_2015-11-25-14-58-49-a"]
         val = ["run_2015-11-26-14-07-15-a", "run_2015-11-25-14-58-49-a", "run_2015-11-27-10-00-00-a", "run_2015-11-28-10-00-00"]
         assert sister_recordings(val, train).tolist() == [True, True, False, False]
+
+
+class TestTransferSummary:
+    @staticmethod
+    def frames(n, hit=True):
+        f = TestWithinFrameRanking._frame
+        return [f([0.9, 0.3], [[0, 2] if hit else [3, 3], [4, 4]], [[0, 2]]) for _ in range(n)]
+
+    def test_the_ratio_is_train_ap_over_test_ap(self):
+        train, test = self.frames(4), self.frames(2) + self.frames(2, hit=False)
+        r = transfer_summary(train, test, np.array([True, False, True, False]))
+        assert r["train_ap"] == pytest.approx(score_detections(train)["ap"])
+        assert r["ratio"] == pytest.approx(r["train_ap"] / r["test_ap"])
+
+    def test_the_enclosed_reading_is_the_ranking_over_the_enclosed_test_scans_alone(self):
+        test = self.frames(2) + self.frames(2, hit=False)
+        r = transfer_summary(self.frames(2), test, np.array([True, True, False, False]))
+        alone = ranking_summary(test[:2])
+        assert r["enclosed"]["comparability"] == pytest.approx(alone["populated_ap"] / alone["top_k_hits"])
+        assert r["enclosed"]["scans"] == 2 and r["typical"]["scans"] == 2
+
+
+class TestPartitionVerdict:
+    """The rule written into `TODO.md` row 106 before any run, applied to the means over seeds."""
+
+    @staticmethod
+    def rows(ratio, comparability):
+        return [dict(ratio=ratio, enclosed=dict(comparability=comparability))] * 2
+
+    @pytest.mark.parametrize("balanced,shifted,verdict", [
+        ((1.3, 0.85), (2.0, 0.65), "geometry is the trigger"),
+        ((1.9, 0.62), (2.0, 0.65), "geometry is not the trigger"),
+        ((1.3, 0.85), (1.3, 0.85), "the construction, not the geometry"),
+        ((1.5, 0.85), (2.0, 0.65), "geometry is not the trigger"),
+    ])
+    def test_each_outcome(self, balanced, shifted, verdict):
+        assert partition_verdict(self.rows(*balanced), self.rows(*shifted))["verdict"] == verdict
 
 
 class TestExactTwins:

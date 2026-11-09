@@ -328,6 +328,23 @@ measured on DROW and all closed. What is left is **distance** -- real, +5.2 pp, 
 **temporal input**, which is untouched: DROW3's 71.7% is a five-scan odometry-aligned model, and this project's
 memory cannot learn across DROW's 24 s annotation gaps (footnote 14).
 
+### DROW's stage-2 headline at DROW's own label radii: 28.92% over five seeds (2026-11-09)
+
+Stage 2 alone, DROW test, every annotated frame, the adopted recipe; DROW's default label radii since 2026-11-09 are its
+own 0.35 / 0.6 / 0.4 m (`CHANGELOG.md`):
+
+| label radii | seed 0 | seed 1 | seed 2 | seed 3 | seed 4 | mean | sd |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0.6 m every class (the default until 2026-11-09) | 29.45% | 26.26% | 28.64% | 26.97% | 24.29% | 27.12% | 2.03 |
+| 0.35 m every class | 28.26% | 32.21% | 29.63% | 30.14% | 26.55% | 29.36% | 2.11 |
+| **0.35 / 0.6 / 0.4 m, DROW's own (the default)** | 28.62% | 29.43% | 29.63% | 30.40% | 26.55% | **28.92%** | 1.47 |
+
+**The headline is 28.92%**, +1.80 pp over 0.6 m (paired by seed, SE 0.78, ahead on four seeds of five). The last two rows
+are **one objective trained twice**: the binary head reads only the person's radius, and the other classes' radii draw
+an ignore region only under `--ignore-other-classes`, which is off. Their difference is this machine's run-to-run spread
+-- see `interpreting-evaluation.md` -- so every DROW comparison above that was read against 27.86% or 27.12% stands, and
+reads about 1.8 pp further from the cutout's 63.20% against the new default.
+
 ### DROW's gap is transfer, not fitting, and not the harness (2026-11-08)
 
 **Temporal input cannot be the gap at stage 2**: at one frame our stage 2 scores 80.89% on FROG against DROW3 `T=1`'s

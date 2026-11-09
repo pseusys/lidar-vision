@@ -68,6 +68,13 @@ annotated frames. Two consequences: **quote DROW stage-2 AP as a mean over seeds
 DROW arm that stopped early as an incomplete run rather than a worse architecture -- the epoch of the best
 checkpoint is the thing to read first.
 
+**A rerun of the same seed is not the same run either (measured 2026-11-09).** Five seeds of one objective trained
+twice -- the 0.35 m person radius, once with the other classes at 0.35 m and once at 0.6 / 0.4 m, which the binary head
+never reads -- agree to 1e-5 on two seeds, to 0.26-0.36 pp on two more where the val-best epoch is the same, and differ
+by **2.78 pp** on the one where it moved (epoch 11.2 against 7.7). This machine's GPU training is not bit-reproducible,
+and the stopping rule turns that drift into a different checkpoint. So a seed number names a draw, not a result: two
+DROW arms at the same seed are paired only as far as their best epochs agree.
+
 ## Training cost is not inference cost, and a queued latency row is not a comparable one (2026-10-24)
 
 **Two mistakes from the Hungarian-association arm, both worth not repeating.**

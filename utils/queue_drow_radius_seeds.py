@@ -11,9 +11,10 @@ by more than twice the standard error of the difference; otherwise the tie stand
 numbers in hand. Seeds 0-1 are `drow_stage2_s0` / `drow_headline_s1` and `drow_person_radius_s0` / `_s1`.
 
 **Then the new default itself** (owner, 2026-11-09: the tie went to 0.35 m, with DROW's own radius for each class).
-`drow_person_radius` set every class to 0.35 m, and on the binary head the wheelchair's and walker's radii still draw
-their ignore regions, so DROW's 0.35 / 0.6 / 0.4 is a neighbouring setting rather than the measured one: five seeds of
-it, `drow_default_radii`, read against `drow_person_radius` seed for seed. Finished jobs are skipped.
+`drow_default_radii`, five seeds of DROW's 0.35 / 0.6 / 0.4 m, read against `drow_person_radius` seed for seed. On the
+binary head the other classes' radii turned out to be unread -- they draw an ignore region only under
+--ignore-other-classes, which is off -- so the pair is one objective trained twice, and measured this machine's
+run-to-run spread (`CHANGELOG.md`, 2026-11-09). Finished jobs are skipped.
 
     python queue_drow_radius_seeds.py --list
     python queue_drow_radius_seeds.py

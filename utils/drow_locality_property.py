@@ -43,9 +43,13 @@ what caught (`memory/gotchas.md`):
    recordings, and per bin the readings no person-free scan moves. Prediction written before the run: geometry is the
    trigger if ours' deficit in the top bin is at most half the bottom bin's in both scopes.
 
+10. **The geometry partitions** (`partitions`, `TODO.md` row 106): each partition's stage-2 seeds scored on their own
+    partition's train and test, and the verdict by the rule written before any of them trained.
+
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
     python drow_locality_property.py --readings val-geometry --out ../results/drow_val_geometry.json
+    python drow_locality_property.py --readings partitions --out ../results/drow_partitions.json
 """
 
 import re
@@ -61,6 +65,7 @@ from scipy.stats import spearmanr
 
 from check_drow_scoring import detections_by_frame
 from evaluate import _load_dataset, eval_nn_model
+from takheliped.datasets.drow_partitions import ENCLOSED_M
 from takheliped.utils.drow_utils import project_cartesian_from_polar
 from train import detect_device
 from train_takheliped import (DROW, FROG, MATCH_RADIUS_M, EVAL_BATCH, FrameSplit, calibration_frames, calibration_network,
@@ -75,7 +80,13 @@ CUTOUT = _HERE.parent / "checkpoints_drow" / "drow_t1_drspaam_recipe.pth"
 #: Our FROG stage 2 whose train and test AP (93.66% / 80.89%) item 96 measured, and the stride that 80.89% is at.
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
-READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry")
+READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions")
+#: Reading 10's stage-2 runs, one directory per geometry partition and seed (`queue_drow_partitions.py` trains them), and
+#: the rule written into `TODO.md` row 106 before any of them ran.
+PARTITION_SEEDS = (0, 1)
+PARTITION_RUNS = {mode: [CHECKPOINTS / f"drow_{mode.replace('-', '_')}_s{seed}" / "step2_calibration.best.pth" for seed in PARTITION_SEEDS]
+                  for mode in ("geometry-balanced", "geometry-shifted")}
+PARTITION_RULE = dict(balanced_ratio=1.4, balanced_comparability=0.80, shifted_ratio=1.8, shifted_comparability=0.72)
 #: The rule for reading 7, written before its run (`TODO.md` row 102): a statistic moves our level at |rho| >= 0.3 for
 #: both seeds with the cutout under half of ours, and is the property if DROW test's median also leaves the
 #: interquartile range of both DROW train and FROG test.
@@ -231,6 +242,60 @@ def sister_recordings(names: Sequence[str], train_names: Sequence[str]) -> np.nd
         return re.sub(r"-[a-z]$", "", n)
     train_bases = {base(n) for n in train_names}
     return np.array([bool(re.search(r"-[a-z]$", n)) and base(n) in train_bases for n in names])
+
+
+def transfer_summary(train_frames: list, test_frames: list, enclosed: np.ndarray) -> Dict[str, object]:
+    """One stage 2 on one partition: train and test AP and their ratio, and the ranking readings over the test's
+    enclosed scans and over the rest, `comparability` being populated AP over within-scan hits."""
+    def ranking(frames):
+        r = ranking_summary(frames)
+        # A bin whose scans hold no hit at all has no within-scan ranking to compare against: undefined, not infinite.
+        return dict(r, scans=len(frames), comparability=r["populated_ap"] / r["top_k_hits"] if r["top_k_hits"] else float("nan"))
+    train_ap, test_ap = score_detections(train_frames)["ap"], score_detections(test_frames)["ap"]
+    return dict(train_ap=train_ap, test_ap=test_ap, ratio=train_ap / test_ap,
+                enclosed=ranking([f for f, e in zip(test_frames, enclosed, strict=True) if e]),
+                typical=ranking([f for f, e in zip(test_frames, enclosed, strict=True) if not e]))
+
+
+def partition_verdict(balanced: Sequence[dict], shifted: Sequence[dict]) -> Dict[str, object]:
+    """`TODO.md` row 106's rule, written before any run, on the means over seeds: geometry is the trigger if the balanced
+    partition transfers (train/test ratio <= 1.4, enclosed comparability >= 0.80) while the shifted control reproduces the
+    failure (ratio >= 1.8, enclosed comparability <= 0.72); a control that does not reproduce it says the construction
+    changed things; a balanced partition that does not transfer says geometry is not the trigger."""
+    def means(rows):
+        return float(np.mean([r["ratio"] for r in rows])), float(np.mean([r["enclosed"]["comparability"] for r in rows]))
+    (ratio_b, comp_b), (ratio_s, comp_s) = means(balanced), means(shifted)
+    balanced_transfers = ratio_b <= PARTITION_RULE["balanced_ratio"] and comp_b >= PARTITION_RULE["balanced_comparability"]
+    shifted_reproduces = ratio_s >= PARTITION_RULE["shifted_ratio"] and comp_s <= PARTITION_RULE["shifted_comparability"]
+    verdict = ("the construction, not the geometry" if not shifted_reproduces else
+               "geometry is the trigger" if balanced_transfers else "geometry is not the trigger")
+    return dict(verdict=verdict, balanced=dict(ratio=ratio_b, enclosed_comparability=comp_b, transfers=balanced_transfers),
+                shifted=dict(ratio=ratio_s, enclosed_comparability=comp_s, reproduces=shifted_reproduces))
+
+
+def partition_reading(device) -> Dict[str, object]:
+    """Reading 10: each geometry partition's stage-2 seeds on their own partition's train and test (`TODO.md` row 106)."""
+    out = {}
+    for mode, paths in PARTITION_RUNS.items():
+        train, test = load_frames("train", mode, DROW), load_frames("test", mode, DROW)
+        medians = scan_statistics(test.scans[test.annotated], test.people_xy, DROW.spacing_deg)["median_range_m"]
+        enclosed = medians < ENCLOSED_M
+        rows = []
+        for path in paths:
+            net = calibration_network(torch.load(path, map_location="cpu"), DROW.angles()).to(device)
+            rows.append(transfer_summary(calibration_frames(net, train, np.arange(len(train.annotated)), device, EVAL_BATCH),
+                                         calibration_frames(net, test, np.arange(len(test.annotated)), device, EVAL_BATCH), enclosed))
+            r = rows[-1]
+            print(f"{mode} {path.parent.name}: train AP {r['train_ap']:.2%}  test AP {r['test_ap']:.2%}  ratio {r['ratio']:.2f}  "
+                  f"enclosed comparability {r['enclosed']['comparability']:.2f} ({r['enclosed']['scans']} scans)  typical "
+                  f"{r['typical']['comparability']:.2f} ({r['typical']['scans']} scans)", flush=True)
+        out[mode] = rows
+        del train, test
+    out["verdict"] = partition_verdict(out["geometry-balanced"], out["geometry-shifted"])
+    v = out["verdict"]
+    print(f"\nverdict: {v['verdict']}  (balanced ratio {v['balanced']['ratio']:.2f}, enclosed {v['balanced']['enclosed_comparability']:.2f}; "
+          f"shifted ratio {v['shifted']['ratio']:.2f}, enclosed {v['shifted']['enclosed_comparability']:.2f})", flush=True)
+    return out
 
 
 def print_ranking(title: str, table: Dict[str, Dict[str, float]]) -> None:
@@ -464,6 +529,9 @@ def main() -> int:
 
     if "val-geometry" in args.readings:
         results["val_geometry"] = val_geometry_reading(device)
+
+    if "partitions" in args.readings:
+        results["partitions"] = partition_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.

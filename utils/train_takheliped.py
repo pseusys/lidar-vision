@@ -198,6 +198,9 @@ class DatasetSpec:
     dt_average_frames: int
     grid: Callable[[int], np.ndarray]
     loader: Callable[[str, Optional[float], str], object]
+    #: The partitions `--frog-mode` may name for this dataset, `official` first. FROG's are its loader's modes;
+    #: DROW's other two are tables drawn from its three directories (`takheliped/datasets/drow_partitions.py`).
+    partitions: Tuple[str, ...] = ("official",)
     decimate: int = 1
 
     @property
@@ -221,6 +224,8 @@ class DatasetSpec:
         return self if every == 1 else replace(self, decimate=self.decimate * every)
 
     def load(self, split: str, missing_return_m: Optional[float], mode: str = DEFAULT_MODE):
+        if mode not in self.partitions:
+            raise ValueError(f"{self.name} has no partition {mode!r}; it has {', '.join(self.partitions)}")
         return self.loader(split, missing_return_m, mode)
 
     def thin(self, scans: np.ndarray) -> np.ndarray:
@@ -252,28 +257,31 @@ def _frog_loader(split: str, missing_return_m: Optional[float], mode: str):
 
 
 def _drow_loader(split: str, missing_return_m: Optional[float], mode: str):
-    """DROW's three directories are its partition, so FROG's `mode` means nothing here and is not consulted.
+    """`mode` is the partition: `official` is DROW's three directories, the geometry partitions are tables of
+    recordings drawn from all three (`takheliped/datasets/drow_partitions.py`, TODO.md row 106).
 
-    Neither is `missing_return_m`: checked across train, val and test, DROW holds no non-finite and no
+    `missing_return_m` is not consulted: checked across train, val and test, DROW holds no non-finite and no
     non-positive reading, and writes a missing return as a finite value at the sensor limit (29.96-29.99 m).
     There is nothing to rewrite, and a 29.99 m range limit makes `sanitize_ranges` map the 29.99 marker onto
     "nothing within range" on its own -- which is also why `voting_beams` lets no such beam cast a vote.
     """
-    return DROW_Dataset(split=split, verbose=False)
+    return DROW_Dataset(split=split, verbose=False, mode=mode)
 
 
 #: FROG, whose `rate_hz` is the corrected 40.01 Hz, not the 26.2 Hz median of its bunched stamps.
 FROG = DatasetSpec(name="frog", source_beams=720, fov_deg=180.0, source_spacing_deg=0.25, rate_hz=40.01,
                    max_range_m=MAX_RANGE_M, rated_range_m=61.0, annotated_share=1.0, people_per_annotated_frame=3.06,
                    classes=("pedestrian",), other_detections=(), class_ids=(3,), label_radii_m=(LABEL_RADIUS_M,), dt_average_frames=32,
-                   grid=frog_laser_angles, loader=_frog_loader)
+                   grid=frog_laser_angles, loader=_frog_loader, partitions=("official", "transferred", "balanced"))
 #: DROW at its own sensor limit, the owner's call: a 10 m model cannot represent the 7.3% of its labels past 10 m.
 DROW = DatasetSpec(name="drow", source_beams=450, fov_deg=224.5, source_spacing_deg=0.5, rate_hz=12.70,
                    max_range_m=29.99, rated_range_m=30.0, annotated_share=0.05, people_per_annotated_frame=0.81,
                    classes=("pedestrian", "wheelchair", "walker"), other_detections=("det_wc", "det_wa"),
                    class_ids=(3, 1, 2), label_radii_m=(0.35, 0.6, 0.4), dt_average_frames=32, grid=drow_laser_angles,
-                   loader=_drow_loader)
+                   loader=_drow_loader, partitions=("official", "geometry-balanced", "geometry-shifted"))
 DATASETS = {spec.name: spec for spec in (FROG, DROW)}
+#: Every partition `--frog-mode` accepts; each dataset refuses the others' (`DatasetSpec.load`).
+PARTITIONS = tuple(dict.fromkeys(p for spec in DATASETS.values() for p in spec.partitions))
 DEFAULT_DATASET = "frog"        # so every command and every number measured before this flag existed is unchanged
 
 
@@ -2463,8 +2471,9 @@ def build_parser() -> argparse.ArgumentParser:
         # than by choice: `load_frames` used to name the partition in its own body. `balanced` is the only
         # partition with person-free frames in train and val, and its val holds recordings `official` trains
         # on, so it is never mixed with an `official` run -- `evaluate.py` enforces that from the checkpoints.
-        p.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
-                       help="FROG partition to train on; stored in the checkpoint, which is how evaluate.py "
+        p.add_argument("--frog-mode", choices=PARTITIONS, default="official",
+                       help="the partition to train on -- FROG's official, transferred or balanced, DROW's official, "
+                            "geometry-balanced or geometry-shifted; stored in the checkpoint, which is how evaluate.py "
                             "knows which partition to score on and refuses to mix two in one pass")
         p.add_argument("--dataset", choices=tuple(DATASETS), default=DEFAULT_DATASET,
                        help="which recording source to train on; stored in the checkpoint beside the partition, "
@@ -2635,7 +2644,7 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--memory", type=Path, default=None, help="step3a's stage 3, which rescores them; without it stage 2 "
                        "is scored alone, by the pass step2 scores its own test split with, on any split")
     score.add_argument("--eval-batch", type=int, default=EVAL_BATCH, help="frames per forward when stage 2 is scored alone")
-    score.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
+    score.add_argument("--frog-mode", choices=PARTITIONS, default="official",
                        help="the partition to score ON, which may differ from the one trained on; a mismatch is "
                             "reported in the output rather than refused, because that comparison is this mode's purpose")
     score.add_argument("--dataset", choices=tuple(DATASETS), default=DEFAULT_DATASET)
@@ -2653,7 +2662,7 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--out", type=Path, default=_HERE.parent / "results" / "score_results.json")
 
     step4 = sub.add_parser("step4")
-    step4.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
+    step4.add_argument("--frog-mode", choices=PARTITIONS, default="official",
                        help="FROG partition to run the ablations on; must match the one the checkpoints were "
                             "trained under, or the ablation scores a model on another partition's frames")
     step4.add_argument("--dataset", choices=tuple(DATASETS), default=DEFAULT_DATASET)

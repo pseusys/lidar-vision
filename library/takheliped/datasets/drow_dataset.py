@@ -8,7 +8,7 @@ https://github.com/VisualComputingInstitute/DROW/blob/master/v2/utils/__init__.p
 
 from json import loads
 from pathlib import Path
-from typing import Union, List, Dict, Optional, Tuple
+from typing import Union, List, Dict, Mapping, Optional, Sequence, Tuple
 
 from numpy import genfromtxt, fromregex, where, array, array_equal, vectorize, float32, uint32, arange, clip
 from numpy.typing import NDArray
@@ -16,29 +16,51 @@ from numpy.typing import NDArray
 from ..utils.file_utils import DROW_DATA_PATH, DROW_TEST_SET, DROW_TRAIN_SET, DROW_VALIDATION_SET
 from ..utils.drow_utils import laser_measures
 from ..utils.generic_utils import Logging
+from .drow_partitions import DROW_PARTITIONS
 
 _DATASET_PATH = Path(__file__).parent.parent / DROW_DATA_PATH
 
 #: Which directory each split name lives in, so a caller can ask for a split by the name the trainer uses for
-#: FROG's rather than by a path. DROW has no partitions of its own: these three directories are the partition.
+#: FROG's rather than by a path. These three directories are the `official` partition; the others are tables of
+#: recordings drawn from all three (`drow_partitions.py`).
 DROW_SPLITS = {"train": DROW_TRAIN_SET, "val": DROW_VALIDATION_SET, "test": DROW_TEST_SET}
+
+
+def partition_files(datapath: Union[Path, str], split: str, mode: str = "official",
+                    partitions: Mapping[str, Mapping[str, Sequence[str]]] = DROW_PARTITIONS) -> List[str]:
+    """The recordings (`<dir>/<stem>`, no extension) `split` holds under partition `mode`: the split's own directory
+    for `official`, otherwise the table's recordings, in its order, from whichever of the three directories holds each."""
+    if split not in DROW_SPLITS:
+        raise ValueError(f"unknown DROW split {split!r}; expected one of {', '.join(DROW_SPLITS)}")
+    if mode == "official":
+        return [f"{f.parent}/{f.stem}" for f in (Path(datapath) / DROW_SPLITS[split]).glob("*.csv")]
+    if mode not in partitions:
+        raise ValueError(f"unknown DROW partition {mode!r}; expected official or one of {', '.join(partitions)}")
+    located = {f.stem: f"{f.parent}/{f.stem}" for d in DROW_SPLITS.values() for f in (Path(datapath) / d).glob("*.csv")}
+    missing = [stem for stem in partitions[mode][split] if stem not in located]
+    if missing:
+        raise FileNotFoundError(f"DROW partition {mode!r} names recordings not on disk: {', '.join(missing)}")
+    return [located[stem] for stem in partitions[mode][split]]
 
 
 class DROW_Dataset(Logging):
     TIME_FRAME = 5
     _LOAD_JSON_VECTOR = vectorize(loads, otypes=[object])
 
-    def __init__(self, datapath: Union[Path, str] = _DATASET_PATH, dataset: Union[Path, str] = DROW_TEST_SET, laser_scans: int = laser_measures, time_frame_size: int = TIME_FRAME, verbose: bool = True, split: Optional[str] = None):
+    def __init__(self, datapath: Union[Path, str] = _DATASET_PATH, dataset: Union[Path, str] = DROW_TEST_SET, laser_scans: int = laser_measures, time_frame_size: int = TIME_FRAME, verbose: bool = True, split: Optional[str] = None,
+                 mode: str = "official"):
         """`split` names one of `DROW_SPLITS` and overrides `dataset`, so the same call shape serves this loader and
-        FROG's; without it the test set loads, which is what every caller predating the argument asked for."""
+        FROG's; without it the test set loads, which is what every caller predating the argument asked for. `mode`
+        is the partition the split is taken from (`partition_files`), and needs `split`."""
         Logging.__init__(self, verbose)
         self.time_frame = time_frame_size
         if split is not None:
-            if split not in DROW_SPLITS:
-                raise ValueError(f"unknown DROW split {split!r}; expected one of {', '.join(DROW_SPLITS)}")
-            dataset = DROW_SPLITS[split]
-        dataset_path = Path(datapath) / Path(dataset)
-        self.filenames = [f"{f.parent}/{f.stem}" for f in dataset_path.glob("*.csv")]
+            self.filenames = partition_files(datapath, split, mode)
+            dataset = DROW_SPLITS[split] if mode == "official" else f"{mode} {split}"
+        elif mode != "official":
+            raise ValueError("a DROW partition other than official needs a split")
+        else:
+            self.filenames = [f"{f.parent}/{f.stem}" for f in (Path(datapath) / Path(dataset)).glob("*.csv")]
 
         self.scan_id: NDArray[uint32]
         self.scan_time: NDArray[float32]

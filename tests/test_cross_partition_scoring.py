@@ -48,7 +48,8 @@ class TestTheSubcommandExists:
     def test_it_takes_the_partition_and_the_split_to_score_on(self):
         flags = _flags("score")
 
-        assert tuple(flags["frog_mode"].choices) == ("official", "transferred", "balanced")
+        assert tuple(flags["frog_mode"].choices) == tak.PARTITIONS
+        assert tak.FROG.partitions == ("official", "transferred", "balanced")
         assert tuple(flags["split"].choices) == ("train", "val", "test")
         assert flags["split"].default == "test"
 

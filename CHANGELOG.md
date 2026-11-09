@@ -38,9 +38,44 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## DROW repartitioned by scan geometry, and a control built the same way (2026-11-09)
+
+*keywords: item 106, drow_geometry_partition.py, drow_partitions.py, DROW_PARTITIONS, SUMMARY, ENCLOSED_M 2.08, geometry-balanced, geometry-shifted, partition_files, DROW_Dataset mode, DatasetSpec.partitions, --frog-mode DROW partitions, scipy milp, fewest scans moved, sister segments together, .bag suffix bug, place(), queue_drow_partitions.py, reading 10, transfer_summary, partition_verdict, phase 1 rule*
+
+**The owner's test of item 102's reading** (2026-11-09, plan confirmed the same day): if DROW's train/test geometry
+shift is what our stage 2 fails on, retraining it on a DROW whose every split carries DROW's overall share of enclosed
+scans should make it transfer. Built so that only the geometry differs, and as much of original DROW as possible kept:
+
+| partition | train | val | test | annotated scans moved from official |
+| --- | --- | --- | --- | ---: |
+| `official` | 17,665 scans, 9.9% enclosed | 3,919, 54.2% | 2,428, 72.3% | 0 |
+| `geometry-balanced` | 17,916, 22.8% | 3,759, 25.4% | 2,337, 25.2% | 6,418 |
+| `geometry-shifted` (control) | 17,564, 11.8% | 4,020, 44.5% | 2,428 (official), 72.3% | 1,735 |
+
+- **The rules of construction**: a place -- every lettered segment of one recording -- never crosses a split; the staged,
+  lunch and turning recordings stay in train and val and test stay driving runs, as officially; sizes within 5%; and an
+  exact integer program (SciPy's `milp`) moves the fewest annotated scans that satisfies the rest. The control keeps the
+  official test and differs from the official partition in the reunited sister segments alone, which is the val leak
+  removed.
+- **A bug caught on the real files before anything trained.** DROW's files are `<name>.bag.csv`, so a stem ends in `.bag`
+  and the segment-letter pattern never matched: every segment was a place of its own, the first table put three
+  segments of `10-34-20` in val and the fourth in test, and the control "moved 0 scans". The test meant to catch a place
+  in two splits shared the blind spot and would have passed on nothing. `place()` now strips `.bag`, the tests import it
+  rather than copy it, and a test asserts DROW has multi-segment places for that check to bite on.
+- **Verified on the real files**: every split of both partitions, loaded through the actual loader, matches its table to
+  the scan and the person; the official test still loads 2,428 annotated scans.
+- **The loader**: `DROW_Dataset(split=..., mode=...)` takes a partition, `partition_files` finds each recording in
+  whichever directory holds it, and `DatasetSpec.partitions` makes each dataset refuse the other's names under the one
+  `--frog-mode` flag.
+
+**Phase 1** (`utils/queue_drow_partitions.py`): two seeds of the unmodified stage 2 on each partition at DROW's default
+radii, then reading 10 of `drow_locality_property.py`, which applies row 106's rule in code -- geometry is the trigger
+if `geometry-balanced` transfers (train/test AP ratio <= 1.4, populated AP over within-scan hits on the test's enclosed
+scans >= 0.80) while `geometry-shifted` reproduces the failure (>= 1.8, <= 0.72).
+
 ## DROW's label radii become its own published ones, 0.35 / 0.6 / 0.4 m, on the owner's tie call (2026-11-09)
 
-*keywords: item 100 adopted, DatasetSpec.label_radii_m, default_radii, --label-radius default None, DROW 0.35 0.6 0.4, FROG 0.6 unchanged, stored resolved not None, queue recipes pinned at 0.6, drow_default_radii_s0-s4, queue_drow_radius_seeds.py, ignore region radii, item 106 geometry-balanced DROW planned*
+*keywords: item 100 adopted, DatasetSpec.label_radii_m, default_radii, --label-radius default None, DROW 0.35 0.6 0.4, FROG 0.6 unchanged, stored resolved not None, queue recipes pinned at 0.6, drow_default_radii_s0-s4 28.92, queue_drow_radius_seeds.py, ignore region off by default, same-seed rerun spread, item 106 geometry-balanced DROW planned*
 
 **The decision** (owner, 2026-11-09, option (a) of the report): five seeds put DROW's 0.35 m person radius 2.24 pp
 above 0.6 m -- short of the 2-SE bar, ahead on four seeds of five -- and the tie goes to the published mechanism, with
@@ -59,11 +94,7 @@ disk lies nearer a wheelchair or walker annotation, at 0.35 m 1-3%, and FROG ann
 - **Every DROW queue on file** (`queue_drow.py` and seven `queue_drow_*.py`) ran its control arm with no radius, at 0.6
   m. Their shared recipe now pins `--label-radius 0.6`, so a rerun means what was recorded; an arm's own radius comes
   later on the command line and still wins. Two queue tests caught the one recipe left unpinned at first.
-- **The headline at the new default is not yet measured.** `drow_person_radius` set every class to 0.35 m; on the binary
-  head the wheelchair's and walker's radii still draw their ignore regions, so 0.35 / 0.6 / 0.4 is a neighbouring
-  setting. Five seeds of it, `drow_default_radii_s0-s4`, run now from `queue_drow_radius_seeds.py`, to be read seed for
-  seed against `drow_person_radius`. Until they report, DROW's headline at the new default is **not a number**; 29.36%
-  is the 0.35 m-for-every-class arm's.
+- **The headline at the new default, measured: 28.92%** over five seeds (28.62 / 29.43 / 29.63 / 30.40 / 26.55, sd 1.47), +1.80 pp over 0.6 m paired by seed (SE 0.78, ahead on four of five). **One claim made before the run was wrong**: that on the binary head the wheelchair's and walker's radii still draw ignore regions. They do only under `--ignore-other-classes`, which is off, so the binary head reads the person's radius alone and the new default is the `drow_person_radius` objective exactly. The five seeds therefore measured this machine's run-to-run spread instead: -0.43 pp against `drow_person_radius` on average, within 1e-5 on two seeds, 0.26-0.36 pp on two more at the same val-best epoch, and -2.78 pp on the one whose val-best epoch moved (7.7 against 11.2) (`memory/interpreting-evaluation.md`). The other classes' radii matter to the multi-class head, measured at two seeds on 2026-11-08 (sigmoid 29.10%, softmax 29.77%).
 - **Item 102's readings are unaffected**: they read the 0.6 m checkpoints as what they are, and the mechanism they found
   does not run through the radius.
 
