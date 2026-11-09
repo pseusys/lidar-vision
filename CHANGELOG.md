@@ -38,6 +38,48 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## A geometry-balanced DROW does not make our stage 2 transfer: by the rule, geometry is not the trigger (2026-11-09)
+
+*keywords: item 106 phase 1, queue_drow_partitions.py, drow_geometry_balanced_s0 s1, drow_geometry_shifted_s0 s1, results/drow_partitions.json, partition_verdict, ratio 1.76 against 1.4, enclosed comparability 0.82, shifted ratio 2.63 comparability 0.68, official test fails on open scans too 0.61-0.63, item 102 stays open, phase 2 owner's call*
+
+**The verdict, by the rule written into `TODO.md` row 106 before anything trained: "geometry is not the trigger."**
+Two seeds of the unmodified stage 2 on each partition, DROW's default radii, val-best weights (epochs 9.75 / 11.00
+balanced, 8.73 / 7.49 shifted -- none stopped early), each scored on its own partition's train and test:
+
+| partition | seed | train AP | test AP | train / test | enclosed test scans: populated AP / within-scan hits | the other test scans |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `geometry-balanced` | 0 | 73.28% | 40.99% | 1.79 | 0.83 (589 scans) | 0.91 (1,748) |
+| `geometry-balanced` | 1 | 74.28% | 42.79% | 1.74 | 0.82 | 0.94 |
+| `geometry-shifted` (control) | 0 | 71.53% | 26.48% | 2.70 | 0.68 (1,756 scans) | 0.63 (672) |
+| `geometry-shifted` (control) | 1 | 66.43% | 25.87% | 2.57 | 0.68 | 0.61 |
+
+| the rule | needed | measured, mean of two seeds | met |
+| --- | --- | ---: | --- |
+| balanced transfers: train / test | at most 1.4 | **1.76** | **no** |
+| balanced transfers: enclosed comparability | at least 0.80 | 0.82 | yes |
+| shifted reproduces the failure: train / test | at least 1.8 | 2.63 | yes |
+| shifted reproduces the failure: enclosed comparability | at most 0.72 | 0.68 | yes |
+
+The control reproduces the failure and the balanced partition does not clear the transfer bar, so the rule's answer is
+the second of its three: **balancing geometry is not enough to make our stage 2 transfer.** The test APs (41-43% against
+26%) are on different test splits and are not compared.
+
+**What the readings show besides the verdict** -- facts, not a revision of it:
+
+- **Balancing removes part of the gap**: the train / test ratio falls from 2.63 to 1.76, but stays above FROG's 1.16 and
+  the cutout's 1.05 on official DROW. Neither of those was measured on this partition, so how far 1.76 is from what a
+  model that transfers would score here is not known; phase 2, the cutout on `geometry-balanced`, is what measures it.
+- **Cross-scan comparability recovers on every kind of test scan once training holds enclosed scans** -- 0.82 enclosed,
+  0.91-0.94 the rest -- and **under the control it is broken on the open test scans too** (0.61-0.63, below the enclosed
+  ones' 0.68). So inside the official test it is not a scan's own geometry that decides whether our scores fail on it:
+  the official test recordings fail as a set, open scans included, and enclosed geometry is one way they differ from
+  training, not the whole of it.
+- **Inside a scan, nothing changes**: within-scan hits are 0.50-0.59 on every partition and kind of scan.
+
+**What it does to items 102 and 104.** 102 stays open: scan geometry is a measured shift between DROW's official splits,
+and it accounts for the cross-scan breakdown on enclosed scans, but by the rule it is not what makes our stage 2 fail to
+transfer. The mechanism -- a score level that moves between scans of recordings unlike the training ones -- stands.
+
 ## DROW repartitioned by scan geometry, and a control built the same way (2026-11-09)
 
 *keywords: item 106, drow_geometry_partition.py, drow_partitions.py, DROW_PARTITIONS, SUMMARY, ENCLOSED_M 2.08, geometry-balanced, geometry-shifted, partition_files, DROW_Dataset mode, DatasetSpec.partitions, --frog-mode DROW partitions, scipy milp, fewest scans moved, sister segments together, .bag suffix bug, place(), queue_drow_partitions.py, reading 10, transfer_summary, partition_verdict, phase 1 rule*

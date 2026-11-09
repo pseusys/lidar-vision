@@ -573,12 +573,16 @@ model-free, every annotated scan, `results/drow_geometry.json`):
 
 - **DROW's test is enclosed and its train is open.** 72% of test scans fall under train's 10th percentile of median
   return range (2.08 m), 98% under its 25th (3.25 m); FROG's test sits on FROG's train. Val spans both.
-- **This is what our stage 2 fails on** (`CHANGELOG.md`, 2026-11-09): on DROW val its scores stay comparable between
-  scans of typical geometry and break on enclosed ones, while a cutout's do not -- so a DROW test number for a
-  whole-scan model measures generalisation to an unseen geometric regime as much as detection.
+- **It is part of what our stage 2 fails on** (`CHANGELOG.md`, 2026-11-09): on DROW val its scores stay comparable
+  between scans of typical geometry and break on enclosed ones, while a cutout's do not; but balancing the geometry
+  does not make it transfer (next bullet), so geometry is one measured part of the shift, not all of it.
 - **Scene novelty, as nearest-neighbour distance of coarse sector medians, does not show it**: FROG test is as far from
   its nearest training scan (median 0.765 m) as DROW test (0.541 m). A nearest neighbour can be close while the
   distribution is not, which is why the shift is read off the quartiles instead.
+- **Balancing the geometry is not enough for our stage 2 to transfer** (`CHANGELOG.md`, 2026-11-09, `TODO.md` row 106):
+  on a repartition with every split ~24% enclosed its train / test ratio is 1.76, against 2.63 on a control that keeps
+  the official test. Under that control the official test's *open* scans break as badly as its enclosed ones, so the
+  official test differs from training as a set of recordings, and geometry is one measured part of that difference.
 
 ## What the false positives are, and what that rules out
 
