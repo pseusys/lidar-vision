@@ -345,6 +345,19 @@ an ignore region only under `--ignore-other-classes`, which is off. Their differ
 -- see `interpreting-evaluation.md` -- so every DROW comparison above that was read against 27.86% or 27.12% stands, and
 reads about 1.8 pp further from the cutout's 63.20% against the new default.
 
+### Item 104's two DROW arms leave the gap where it was (2026-11-09)
+
+Official DROW test, stage 2 alone, two seeds each at DROW's default radii, beside the headline at the same seeds:
+
+| arm | test AP (s0 / s1, mean) | train / test | pooled AP / within-scan hits |
+| --- | --- | ---: | ---: |
+| headline | 28.62 / 29.43%, **29.03%** | 2.48 / 2.33 | 0.50 / 0.51 |
+| scan-normalised range (`--input-features scan-norm`) | 32.16 / 25.01%, **28.59%** | 2.04 / 2.67 | 0.57 / 0.50 |
+| local level (`--local-level`) | 28.12 / 27.56%, **27.84%** | 2.36 / 2.35 | 0.49 / 0.50 |
+| DROW3's cutout, retrained here | 63.20% | 1.05 | 0.86 |
+
+Both inside DROW's seed spread. The local level fixes each scan's mean logit to the local branch's and still leaves cross-scan comparability unchanged, so the failure is not a per-scan additive offset (`CHANGELOG.md`). No CPU ms/frame measured: neither arm is a candidate.
+
 ### DROW's gap is transfer, not fitting, and not the harness (2026-11-08)
 
 **Temporal input cannot be the gap at stage 2**: at one frame our stage 2 scores 80.89% on FROG against DROW3 `T=1`'s

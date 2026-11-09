@@ -38,6 +38,42 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Neither of item 104's arms moves DROW's gap, and the local level shows the cross-scan failure is not a per-scan offset (2026-11-09)
+
+*keywords: item 104 results, drow_scan_norm_s0 s1, drow_local_level_s0 s1, drow_default_radii_s0 s1 train/test 2.48 2.33, results/drow_locality_arms.json, reading 11, pooled over within-scan unchanged 0.49-0.51, populated over within-scan 0.70-0.77, not an additive per-scan offset, false-positive peaks, local branch trained 1,729 parameters, epochs 5.99, phase 2 next*
+
+**The two arms against the headline at the same seeds**, official DROW, stage 2 alone, val-best weights, both arms on
+the headline's exact recipe at DROW's default radii (no bar, by the owner's call: read as they are):
+
+| run | best epoch | parameters | test AP | train AP | train / test | pooled AP / within-scan hits | populated AP / within-scan hits (enclosed, other) | within-scan hits |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| headline s0 | 8.73 | 960,323 | 28.62% | 71.05% | 2.48 | 0.50 | 0.72 (0.75, 0.66) | 56.98% |
+| headline s1 | 7.74 | 960,323 | 29.43% | 68.55% | 2.33 | 0.51 | 0.71 (0.72, 0.72) | 57.54% |
+| **N, scan-normalised range** s0 | 6.99 | 960,323 | 32.16% | 65.59% | 2.04 | 0.57 | 0.77 (0.80, 0.72) | 56.22% |
+| **N, scan-normalised range** s1 | 7.99 | 960,323 | 25.01% | 66.65% | 2.67 | 0.50 | 0.70 (0.71, 0.69) | 50.05% |
+| **L, local level** s0 | 5.99 | 962,052 | 28.12% | 66.26% | 2.36 | 0.49 | 0.71 (0.74, 0.69) | 57.64% |
+| **L, local level** s1 | 5.99 | 962,052 | 27.56% | 64.69% | 2.35 | 0.50 | 0.72 (0.72, 0.74) | 55.62% |
+| DROW3's cutout, retrained here | -- | -- | 63.20% | 66.50% | 1.05 | 0.86 | 0.98 | 73.53% |
+
+**Neither arm closes the gap.** Two-seed means: N 28.59%, L 27.84%, against the headline's 29.03% at the same seeds --
+both inside DROW's seed spread (N's seeds alone are 7 pp apart), both 35 pp from the cutout; train / test and within-scan
+hits barely move.
+
+**What L rules out.** By construction L's U-Net can no longer shift a scan's mean logit -- only the local branch, which
+trained (its head's weights average 0.21 in size, nowhere near zero), sets that. Yet pooled over within-scan hits is
+unchanged at 0.49-0.50 against the headline's 0.50-0.51. So the cross-scan failure item 102 measured is **not an
+additive offset of a scan's logits**, which is how this project had been describing it ("a score level that moves
+between scans"). What remains consistent with every reading is the height of a scan's *false-positive peaks* relative to
+other scans' people -- a within-scan contrast that centring over a scan's ~450 beams, nearly all background, cannot
+touch. Unmeasured as yet; it is a description that fits, not a finding.
+
+**Read with care**: two seeds per arm on a dataset whose seeds spread 2-3 pp and whose same-seed reruns differ by up to
+2.8 pp when the val-best epoch moves; L's two seeds both stopped at epoch 5.99, earlier than the headline's.
+
+**What it does to the line**: by the plan in `TODO.md` row 104, neither arm closing the gap sends the line to phase 2
+(the cutout on `geometry-balanced`, overnight, as the owner asked) and then to 103 or further experiments if the cause
+still feels unclear.
+
 ## Item 104's two DROW arms, built: the scan-normalised range and the local level (2026-11-09)
 
 *keywords: item 104, --input-features scan-norm, scan_scale, --local-level, local_logit, LOCAL_WIDTH_M 1.0, centred whole-scan logit, network_shape local_level, MetricGather GroupNorm pools the whole scan, queue_drow_locality_arms.py, reading 11, score_runs, arms_reading*
