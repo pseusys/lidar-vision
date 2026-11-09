@@ -10,7 +10,7 @@ from pathlib import Path
 from time import time
 from typing import Union
 
-from torch import no_grad, from_numpy, sum as tsum, device, load
+from torch import no_grad, from_numpy, sum as tsum, device, load, sigmoid
 from torch.nn import Module, Conv1d, BatchNorm1d
 from torch.nn.functional import leaky_relu, max_pool1d, dropout, avg_pool1d, softmax
 from torch.nn.init import kaiming_normal_, constant_
@@ -37,11 +37,19 @@ class DrowDetector(Module, Detector):
     N_SAMP = 48
     GPU = False  # This is the GPU index, use 0 for first GPU.
     DEFAULT_WEIGHTS = _DETECTOR_WEIGHTS_PATH  # bundled original DROW paper weights
+    #: The two published windows this network was trained on, as (width m, depth m, points): Beyer et al.'s, which the
+    #: bundled weights use, and the one DR-SPAAM's `base_drow_drow_cfg.yaml` retrained it on.
+    CUTOUTS = {"drow": (1.66, 1.0, 48), "drspaam": (1.0, 0.5, 56)}
 
-    def __init__(self, dropout: float, time_frame_size: int, verbose: bool, *args, **kwargs):
+    def __init__(self, dropout: float, time_frame_size: int, verbose: bool, *args, person_only: bool = False,
+                 cutout: str = "drow", **kwargs):
+        """`person_only` gives the network DR-SPAAM's single person logit in place of DROW's four classes, and `cutout`
+        names the window it reads."""
         Module.__init__(self, *args, **kwargs)
         Detector.__init__(self, verbose)
         self.time_frame = time_frame_size
+        self.person_only, self.cutout_name = person_only, cutout
+        self.WIN_SZ, self.THRESH_DIST, self.N_SAMP = self.CUTOUTS[cutout]
 
         self.dropout = dropout
         self.conv1a = Conv1d(1, 64, kernel_size=3, padding=1)
@@ -66,7 +74,7 @@ class DrowDetector(Module, Detector):
         self.bn4a = BatchNorm1d(256)
         self.conv4b = Conv1d(256, 128, kernel_size=3, padding=1)
         self.bn4b = BatchNorm1d(128)
-        self.conv4p = Conv1d(128, 4, kernel_size=1)  # probs
+        self.conv4p = Conv1d(128, 1 if person_only else 4, kernel_size=1)  # probs
         self.conv4v = Conv1d(128, 2, kernel_size=1)  # vote
 
         self.reset_parameters()
@@ -85,6 +93,11 @@ class DrowDetector(Module, Detector):
     @property
     def parameters_number(self) -> int:
         return count_parameters(self)
+
+    @property
+    def num_scans(self) -> int:
+        """The scans one input holds, which `evaluate_auc` reads so the network is fed the window it was trained on."""
+        return self.time_frame
 
     def forward(self, x):
         (B, T), R = x.shape[:2], x.shape[2:]
@@ -113,7 +126,7 @@ class DrowDetector(Module, Detector):
 
         x = leaky_relu(self.bn4a(self.conv4a(x)), 0.1)
         x = leaky_relu(self.bn4b(self.conv4b(x)), 0.1)
-        x = avg_pool1d(x, 6)
+        x = avg_pool1d(x, x.shape[-1])  # every remaining position: 6 of DROW's 48 samples, 7 of DR-SPAAM's 56
 
         logits = self.conv4p(x)
         votes = self.conv4v(x)
@@ -149,7 +162,8 @@ class DrowDetector(Module, Detector):
         self.eval()
         with no_grad():
             logits, votes = self(Variable(move(from_numpy(xb), self.GPU)))
-            return softmax(logits, dim=-1).data.cpu().numpy(), votes.data.cpu().numpy()
+            probs = sigmoid(logits) if self.person_only else softmax(logits, dim=-1)
+            return probs.data.cpu().numpy(), votes.data.cpu().numpy()
 
     def forward_all(self, va: DROW_Dataset):
         times = list()
@@ -159,7 +173,8 @@ class DrowDetector(Module, Detector):
                 start_time = time()
                 iscan = va.idet2iscan[iseq][idet]
                 scans, odoms = va.get_scan(iseq, iscan, self.time_frame)
-                cut = cutout(scans, odoms, len(va.scans[iseq][iscan]), nsamp=self.N_SAMP)
+                cut = cutout(scans, odoms, len(va.scans[iseq][iscan]), win_sz=self.WIN_SZ, thresh_dist=self.THRESH_DIST,
+                             nsamp=self.N_SAMP)
                 confs, votes = self.forward_one(cut)
                 all_confs.append(confs)
                 all_votes.append(votes)

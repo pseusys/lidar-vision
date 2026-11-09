@@ -76,7 +76,7 @@ class TestTheScoringPassStillRunsWithoutGradients:
         people = [np.array([[3.0, 0.0]])] * 2
         xy = [np.array([[0.0, 3.0]])] * 2
         return FrameSplit(scans, np.zeros((2, 3), np.float32), np.zeros(2, np.int64), np.arange(2), people, xy,
-                          [np.zeros((0, 2))] * 2, [()] * 2, np.arange(2) / 40.0)
+                          [()] * 2, np.arange(2) / 40.0)
 
     def _net(self):
         angles = np.linspace(-np.pi / 2, np.pi / 2, 48, endpoint=False).astype(np.float32)

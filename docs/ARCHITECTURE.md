@@ -254,7 +254,7 @@ value for FROG, not a property of the method.
 
 | parametrisable | flag | why it is dataset-dependent |
 | --- | --- | --- |
-| input beam count `N` | from the dataset | FROG 720 over 270°, DROW 450, JRDB 1091 over 360° |
+| input beam count `N` | from the dataset | FROG 720 over 180°, DROW 450, JRDB 1091 over 360° |
 | `max_range_m` | `--max-range-m` | sensor and venue |
 | slot capacity `K` | `--slots` | how many people are ever simultaneously in view |
 | slot-state width `dim` | `--dim` | capacity/CPU trade, retuned per deployment target |
@@ -278,13 +278,13 @@ Fitted to FROG `official`. **Other datasets get their own section; do not carry 
 
 | parameter | value | basis |
 | --- | --- | --- |
-| beams `N` / field of view | 720 / 270° | dataset |
+| beams `N` / field of view | 720 / 180° | dataset |
 | `max_range_m` | 10.0 | dataset |
 | stage-2 channels | (32, 64, 128) | tie, item 19b |
 | kernel / expansion / blocks | 7 / 4 / (2,2,2) | tie |
 | whole-scan aggregator | **off** | tie, and 16,384 parameters saved |
 | beam-target `--label-sigma-m` | **0.3 m** | **+0.69 pp at 3 seeds**, item 44a |
-| label radius | 0.6 m | DR-SPAAM convention |
+| label radius | 0.6 m | inherited, never swept: DR-SPAAM's radius for **wheelchairs**; its persons get 0.35 m |
 | decoder / NMS radius | `nms-mean` / 0.5 m | flat optimum |
 | slot capacity `K` | **256** | trained 128 loses 0.74 pp; a replay had said it tied |
 | slot-state `dim` | **64** | tie, **−28% CPU** |
@@ -470,7 +470,7 @@ against 93.9% at 0.3. Both stay far below the 99.8% that real people score.
 
 **The proposal for FROG `balanced` is section 5.1's table, unchanged.** Nothing was re-tuned for this partition and
 nothing in the evidence suggests anything should be. `balanced` re-deals the same six recordings of the same venue
-into different splits: the sensor, the 720-beam grid, the 270° field of view, the 10 m annotation range and the 40 Hz
+into different splits: the sensor, the 720-beam grid, the 180° field of view, the 10 m annotation range and the 40 Hz
 rate are all identical, so every parameter that section 5.1 justifies by the *dataset* carries over by construction,
 and every one it justifies by a tie was tied on data drawn from these same recordings. What `balanced` changes is the
 **composition** of each split — a fifth of its frames contain nobody — and composition bears on what a number means

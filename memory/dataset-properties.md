@@ -529,6 +529,39 @@ seconds is what would hurt, not help: 32 FROG frames are 0.80 s, and 0.80 s of D
 averaged out is a defect of the stamping mechanism, counted in frames, so frames is its unit -- stated per
 dataset rather than shared, which is the part that was wrong.
 
+### DROW train is not test's kind, and val is one recording (2026-11-07)
+
+Measured read-only from DROW's `.wp` / `.wc` / `.wa` and `.odom2` files, by recording name and odometry extent.
+
+| DROW train, by recording type | files | annotated | pedestrians | robot path |
+| --- | ---: | ---: | ---: | ---: |
+| `run_*`, driving | 30 | 10,578 | 15,475 | 2,313 m |
+| `lunch_*`, one room | 1 | 2,623 | 4,998 | 17 m |
+| staged `n-` / `r-` / `s-`, stationary | 36 | 3,181 | 2,571 | 0 m |
+| staged `rot-`, turning in place | 11 | 1,283 | 866 | 86 m |
+
+- **Concentrated.** Two recordings hold 46% of train's pedestrians (`run_2015-11-25-14-58-49-a` 6,000, `lunch` 4,998); five hold 72%.
+- **Val is one recording.** `run_2015-11-26-14-07-15-a` holds 2,207 of val's 3,102 pedestrians (71%), so any stopping rule or checkpoint choice made on DROW val reads essentially that recording.
+- **Val leaks a little, test does not.** 26.1% of val's pedestrians sit in a sister segment (`-a` / `-b`) of a train recording; none of test's do.
+- **Train is not test's kind.** A third of train's annotated frames come from a stationary robot, and every val and test recording is a driving run; four of five test recordings range over 52-69 m of odometry extent, against at most 28 m for any train run.
+- **What the protocol says** (Beyer et al. 2018, arXiv 1804.02463): persons were annotated only in frames already annotated for wheelchairs and walkers; a wheelchair user is not labelled a person; a walker user is labelled twice, person and walker; batches of 100 frames, every 4th batch, every 5th frame. DR-SPAAM and the FROG paper both call DROW's val split harder than its test split.
+
+**The labels on the scans, measured 2026-11-08** (`utils/drow_label_geometry.py`, model-free, `results/drow_label_geometry.json`):
+
+| | train | val | test |
+| --- | ---: | ---: | ---: |
+| people with a return within 0.2 m of their centre | 95.1% | 98.5% | 99.0% |
+| best alignment over +-4 beams, mirrored or not | as loaded | as loaded | as loaded |
+| beams per person, 0.6 m disk / 0.35 m disk | 14.6 / 11.3 | 17.7 / 12.5 | 21.5 / 14.0 |
+| of a person's 0.6 m disk, claimed by another class (0.6 m for all, nearest) | 12.1% | 12.6% | 17.8% |
+| of a person's 0.35 m disk, claimed by another class (0.6 m for all, nearest) | 1.7% | 0.9% | 3.3% |
+| walkers with a person annotation within 0.3 m | 5.4% | 5.0% | 8.4% |
+| wheelchairs with a person annotation within 0.3 m | 0.2% | 0.0% | 0.1% |
+
+- **No loader defect.** Every split scores best exactly as loaded, and nearly every person sits on a return.
+- **The 0.6 m disk reaches into the other classes.** An eighth to a sixth of the beams a 0.6 m person disk trains as person are nearer a wheelchair or walker annotation; at DROW's own 0.35 m it is 1-3%.
+- **"A walker user is labelled twice" is not what the files show at 0.3 m.** If walker users carry a person label too, it sits more than 0.3 m from the walker's centre -- plausible, since the frame is held in front of the body -- and the share at a wider radius is not measured yet. The wheelchair rule holds as written.
+
 ## What the false positives are, and what that rules out
 
 Detector-dependent, but stable across the two published models and therefore more a property of the scenes than of either model.

@@ -8,9 +8,9 @@ make the change safe to carry into the FROG record:
 * a one-class `sigmoid` network holding a binary checkpoint's folded weights decodes **identical** candidates,
   so the extra columns change what is learned next and nothing about what is already trained.
 
-The class precedence is pinned too, because it is the part that is easy to get backwards: a person standing
-beside a wheelchair is a person, and `make_targets` delivers that through DROW's own id order rather than
-through anything written here.
+The class precedence is pinned too, because it is the part that is easy to get backwards: under the last-listed
+assignment a person standing beside a wheelchair is a person, delivered through DROW's own id order; under the
+adopted nearest one the beam goes to the annotation it is deepest inside, whatever its class.
 """
 import sys
 from pathlib import Path
@@ -102,9 +102,10 @@ class TestTheTargetsAreTheDatasetsClassesOnlyWhenTheHeadCanSayThem:
         labels, _ = make_targets(scan, _angles(), class_annotations(DROW, people, others, "binary"))
         assert set(class_columns(labels, DROW.class_ids).tolist()) == {0, 1}
 
-    def test_a_person_beside_a_wheelchair_is_labelled_a_person(self):
-        """The precedence that matters: `make_targets` resolves a shared beam by the higher id, and the person's
-        is the highest. A wheelchair winning here would teach the one shape this detector exists to find."""
+    def test_a_person_beside_a_wheelchair_is_labelled_a_person_under_the_last_listed_assignment(self):
+        """The last-listed assignment resolves a shared beam by the higher id, and the person's is the highest. The
+        adopted nearest assignment does not: it gives the beam to the disk it is deepest inside, as DROW's own
+        targets do (`tests/test_label_radii.py`)."""
         scan = np.full(48, 4.0)
         gt = class_annotations(DROW, [(4.0, 0.0)], [np.array([[4.0, 0.02]]), np.zeros((0, 2))], "multiclass")
         labels, _ = make_targets(scan, _angles(), gt)

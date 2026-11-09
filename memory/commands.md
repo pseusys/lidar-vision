@@ -41,6 +41,15 @@ python queue_li2former_drow.py --list                                           
 python queue_li2former_drow_resume.py --list                                            # the 12-epoch resume leg at lr 1e-4, arm A
 python queue_upstream_grid.py --list                                                    # their decoder and their metric, one pass per radius
 
+# DROW3 at T=1 on DR-SPAAM's own DROW recipe (their cfgs/base_drow_drow_cfg.yaml, flag for flag): the known answer
+# DROW *training* is checked against, 66.6% on DROW test in their Table I. Last weights, scored by evaluate.py.
+python train.py --detector drow --dataset drow --time-frame 1 --drow-cutout drspaam --person-only --vote-radius 0.35 \
+    --no-class-balance --vote-loss euclidean --vote-weight 1 --amsgrad --weight-decay 0 --lr 1e-3 \
+    --lr-schedule exponential --min-lr 1e-6 --epochs 40 --batch-size 8 --dropout 0.5 --patience 0 \
+    --out ../checkpoints_drow/drow_t1_drspaam_recipe.pth
+python evaluate.py --dataset drow --split test --drow ../checkpoints_drow/drow_t1_drspaam_recipe.pth --no-bench --out ../results/drow_t1_drspaam_recipe_test.json
+python queue_drow_validation.py --list      # that run, plus the scoring-path check, the label geometry and the fit-or-generalise scores
+
 # Is their vote head alive? 8 beams, CPU, no dataset -- safe to run beside a training job.
 # Their terminal ReLU dies within two epochs; this is what proves it, and what arm B has to disprove.
 .venv/Scripts/python.exe -I utils/diagnose_vote_head.py                                   # fresh weights
@@ -256,7 +265,7 @@ which is how the wrong `gru_cpu` row (23.87 ms against a true 20.57) was produce
 It is **stored in the checkpoint**, so `evaluate.py` defaults to the partition the weights were trained under and refuses to score two differently-partitioned checkpoints in one pass.
 `transferred` shares `official`'s train and val exactly, so one checkpoint serves both; `balanced` does not, and its val contains a recording the published baselines trained on.
 
-`--detector` choices: `algorithmic` (eval only, not trainable), `spacetime_cnn`, `li2former`, `li2former_official`.
+`--detector` choices: `algorithmic` (eval only, not trainable), `drow` (DROW3's cutout network, trainable since 2026-11-08 so DR-SPAAM's own recipe can be re-run as a known answer), `spacetime_cnn`, `li2former`, `li2former_official`.
 **`li2former` and `li2former_official` are different architectures, and only the second one's numbers may go in a Li2Former
 row**: the first is this project's reading of the paper's prose (4.70 M parameters), the second wraps the authors' released
 network (16.85 M as trained here, 29.47 M as their `__init__` builds it), downloaded into the gitignored `include/` tree by
@@ -297,6 +306,7 @@ python evaluate.py --dataset drow --split test --eval-r 0.5 --upstream-grid --no
 
 `--eval-batch-size N` (verified numerically equivalent to `batch_size=1`, much faster) and `--eval-stride N` (systematic frame subsample — see `interpreting-evaluation.md` before trusting a strided FROG number) both cut a full-test-split run from hours to minutes.
 `evaluate.py` flags mirror the detector registry: `--drow [WEIGHTS]`, `--drspaam [WEIGHTS]`, `--spacetime-cnn WEIGHTS`, `--fullscan-tcn WEIGHTS`, `--temporal-unet WEIGHTS`, `--li2former WEIGHTS`, `--li2former-official WEIGHTS`, `--lfe-peaks [WEIGHTS]`, `--lfe-ppn [WEIGHTS]` (omit `WEIGHTS` to use bundled/published weights where available).
+`--out FILE` also writes each detector's four AUCs as JSON, which is what lets a queue tell a finished evaluation from an interrupted one.
 `--upstream-grid` runs inference **once** and scores that one pass four ways -- our decoder and Li2Former's, crossed with our wp-AUC and their `calPrecisionRecall` AP -- so a difference between the cells lands on a named half of the measurement rather than on "the harness". It needs the upstream tree in `include/`, costs one CPU pass per radius (~2 h on DROW test), and its baseline cell reproduces `--eval-r`'s own number to 1e-9. The 2026-11-03 answer: the whole decode-and-score path is worth **+0.1 pp at `d = 0.5` and +0.5 pp at `d = 0.3`** (`performance-log.md`).
 Run `python evaluate.py --help` for the full, current flag list.
 
@@ -419,6 +429,37 @@ python train_takheliped.py step3a --beam-stride 2 --stage2 <averaged> ...
 # Stop training the non-person classes as background: the beams a wheelchair or a walker covers leave the
 # classification loss, neither positive nor negative. Stage 2's alone, and a no-op on a one-class dataset.
 python train_takheliped.py step2 --dataset drow --max-range-m 29.99 --ignore-other-classes
+
+# FROG's stage 2 with DROW's supervision: only the training frames in DROW's pattern keep their labels (bursts of 20 at
+# every 5th scan, one per 400 scans of each recording, 5% of FROG's frames); val and test are untouched.
+python train_takheliped.py step2 --annotation-pattern drow --checkpoint-every 0.25 --no-aggregator --label-sigma-m 0.3 --seed 0 --out-dir ../checkpoints_three_horizon/frog_drow_pattern_s0
+
+# The cutout's depth tunnel on the ten beam features: every depth delta clipped to DROW3's 1 m.
+python train_takheliped.py step2 --dataset drow --max-range-m 29.99 --input-features tunnel ...
+
+# One label radius per class, in the spec's class order (DROW: pedestrian wheelchair walker); one value still means
+# every class. These are DROW's and DR-SPAAM's own radii, and a beam inside two disks goes to the one it is deepest in.
+python train_takheliped.py step2 --dataset drow --max-range-m 29.99 --head multiclass --label-radius 0.35 0.6 0.4
+
+# Stage 2 alone on any split, through the pass step2 scores its own test split with -- train beside test is
+# fit against generalisation. Without --memory, `score` takes no stage 3.
+python train_takheliped.py score --dataset drow --stage2 ../checkpoints_three_horizon/drow_stage2_s0/step2_calibration.best.pth --split train --test-strides 1 --out ../results/fit_drow_stage2_s0_train.json
+
+# Is the path every TAKHeLiPeD DROW number came through the same as evaluate.py's, on the real files? FrameSplit
+# against DROW_Dataset on every split, then DROW3's own detections re-scored on FrameSplit's labels (CPU, ~30 min).
+.venv/Scripts/python.exe -I utils/check_drow_scoring.py
+# Where DROW's labels sit on its scans, what a 0.6 m and a 0.35 m person disk take in, and how often a walker or a
+# wheelchair has a person on top of it. Model-free, minutes.
+.venv/Scripts/python.exe -I utils/drow_label_geometry.py
+
+# the published schedule on DROW's stage 2 (40 epochs on a fixed decay, last weights), two seeds; then the levers
+# that need no code, two seeds each (DROW's person radius, LFE's input, DROW's three radii on the multi-class head)
+python queue_drow_schedule.py --list
+python queue_drow_levers.py --list
+# drastic capacity: our stage 2 at 15x and 58x fewer parameters and an LFE-shaped proxy, each with its train/test ratio
+python queue_drow_capacity.py --list
+# DROW's person radius, 0.35 m against 0.6 m, seeds 2-4 of both, so each has five
+python queue_drow_radius_seeds.py --list
 
 # Score a finished run a second time against a restricted label set, without retraining or replaying twice.
 # Prints and stores both readings: labels truncated alone, and labels with the far detections dropped too.

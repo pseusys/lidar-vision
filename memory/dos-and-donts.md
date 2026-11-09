@@ -223,7 +223,7 @@ Both looked like properties of the model for months.
 `train.py` computed its final AUC *before* reloading the best checkpoint, so for its whole history the printed number described a network that was then discarded — and the file it wrote was stamped with the stopping epoch rather than the epoch whose weights it held.
 
 **No minimum-sample threshold is set for this project.**
-Treat any DROW-native result as lower-confidence by construction: DROW's train split has ~17.8x fewer total person-annotation instances than FROG's (`interpreting-evaluation.md`), not because of an agreed cutoff below which a result doesn't count.
+Treat any DROW-native result as lower-confidence by construction: DROW's seeds spread 3.19 pp and its val split is essentially one recording (`interpreting-evaluation.md`), not because of an agreed cutoff below which a result doesn't count -- and not because of its ~17.8x fewer person annotations, which at stage 2 cost FROG 0.55 pp when imposed on it.
 
 **DO record measured performance moves** with the control arm beside them, and the provenance that makes the row comparable to the row above it.
 `performance-log.md` is where these accumulate; see its own convention for what "comparable" means here.

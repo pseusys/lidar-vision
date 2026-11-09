@@ -38,6 +38,163 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## DROW training here is sound -- a cutout retrained on DR-SPAAM's recipe scores 63.2% -- and our gap is transfer (2026-11-08)
+
+*keywords: item 92, item 93, item 94, item 95d, item 96, item 99, owner approved group 1b, drow_schedule_s0 18.10, drow_schedule_s1 15.86, published schedule loses on DROW, overfitting not under-training, train.py --detector drow, --person-only, --drow-cutout drspaam, --no-class-balance, --vote-loss euclidean, --amsgrad, --lr-schedule exponential, --min-lr, LidarFrameDataset win_sz thresh_dist, train and eval cutout mismatch, vote_total, _closest_detection, deepest inside, --label-radius per class, class_radii, other_polar removed, score without --memory, score_stage2, evaluate.py --out, --input-features tunnel, TUNNEL_DEPTH_M, check_drow_scoring.py, drow_label_geometry.py, queue_drow_schedule.py, queue_drow_validation.py, queue_drow_levers.py, FROG 180 deg not 270, item 98, --annotation-pattern drow, drow_annotation_pattern, frog_drow_pattern_s0 80.29, supervision count withdrawn, train test gap, fit_drow_stage2_s0 63.57 29.45, fit_a69 93.66 80.89, check_drow_scoring 66.48, walker double label unconfirmed, drow_t1_drspaam_recipe 63.20, DROW training path sound, val loss flat 40 epochs, cutout generalises, drow_t1_drspaam_recipe_train 66.50, cutout train test 1.05, levers null, drow_person_radius 30.24, drow_lfe_input 27.90, drow_tunnel_input 29.21, drow_radii_sigmoid 29.10, drow_radii_softmax 29.77, softmax collapse is the 0.6 m disks, item 101, capacity not the lever, drow_widths8 22.97, drow_widths4 24.15, drow_lfe_shaped 25.38, ratio stays near 2, items 102 103 104 queued*
+
+**The owner approved section 1b on 2026-11-08** -- every row, the parking of DROW stage-3 nights until 92-96 report,
+and starting JRDB's loader beside it -- and asked for one more thing: a label radius per class on the multi-class head.
+
+**DROW training in this repository reproduces a published number (item 92).** DROW3 at `T=1`, trained from scratch
+through `train.py` on DR-SPAAM's own `cfgs/base_drow_drow_cfg.yaml` flag for flag and scored on its last weights by
+`evaluate.py`, reaches **63.20%** on DROW test (person AP at 0.5 m) against DR-SPAAM's published `T=1` retrain of
+**66.6%**: -3.4 pp, inside the row's ~5 pp bar and inside the 1-5 pp this pipeline already costs every published
+weight file (DROW3 -5.2, DR-SPAAM -1.2). Its val AP is 44.7% -- DROW's val is harder than its test, as both DR-SPAAM and
+the FROG paper say -- and over 40 epochs its val loss never rose (0.130 at epoch 1, 0.119-0.122 from epoch 7 to 40)
+while the training loss fell from 0.219 to 0.148: the opposite of our stage 2, whose val AP falls from epoch 8 on.
+**So the shared DROW path is sound, the 35 pp between this cutout's 63.20% and our stage 2's 27.86% is the
+architecture's, and Li2Former's 48.1% here is not the shared path's either** (`performance-log.md` has its own
+suspects). That is the four-cell design's DROW pair, both
+cells trained here on identical frames (item 93); the FROG cutout cell is still the published 73.9%.
+
+**The published schedule is not a lever on DROW; it costs about 11 pp.** 95(d) trained the headline recipe for 40
+epochs on a fixed exponential decay to 1e-6 and tested the last weights, as every published DROW recipe does:
+
+| DROW stage 2, test, stride 1 | seed 0 | seed 1 | mean |
+| --- | ---: | ---: | ---: |
+| headline: plateau rule, best on val (stopped at epochs 8.5 and 6.7) | 29.45% | 26.26% | 27.86% |
+| published schedule, last weights after 40 epochs | **18.10%** | **15.86%** | **16.98%** |
+
+That is **-10.9 pp, 3.4 times the 3.19 pp seed spread**. On seed 0 val AP peaked near 25.5% around epoch 8 and slid
+steadily to 19.4% while the training loss fell from 0.80 to 0.12, false positives per frame fell from 17.6 to 3.1 and
+misses rose from 0.09 to 0.35; seed 1 peaked at 25.9% at epoch 10 and ended at 20.4% the same way. **So the early stops on file were
+the stopping rule doing its job, and section 1b's "strongest cheap lever" reading was wrong**: DROW's stage 2 is not
+under-trained, it overfits within about eight epochs. Training it longer cannot help; what can is less to memorise --
+the inputs (95b, 95c), the labels (95a, 99), the context (97) -- and how far train AP sits above test is item 96.
+
+**The levers that need no new mechanism, two seeds each on the headline's own recipe** (`utils/queue_drow_levers.py`;
+a lever counts if its two-seed mean clears the 3.19 pp seed spread; the radii arms are read against the multi-class
+`sigmoid` footing, 28.79% / 31.01%, mean 29.90%). DROW test, stride 1, stage 2 alone:
+
+| arm | seed 0 | seed 1 | mean | vs its footing |
+| --- | ---: | ---: | ---: | ---: |
+| headline (the footing for (a)-(c)) | 29.45% | 26.26% | 27.86% | -- |
+| (a) person radius 0.35 m, binary head | 28.26% | 32.21% | 30.24% | +2.38 pp |
+| (b) LFE's input, `1 - r / 29.99` | 27.02% | 28.78% | 27.90% | +0.04 pp |
+| (c) the depth tunnel, deltas clipped to 1 m | 30.20% | 28.21% | 29.21% | +1.35 pp |
+| `sigmoid` multi-class at 0.6 m for all (the footing for 99) | 28.79% | 31.01% | 29.90% | -- |
+| 99, DROW's three radii, `sigmoid` multi-class | 29.40% | 28.80% | 29.10% | -0.80 pp |
+| `softmax` multi-class at 0.6 m for all (`heads_softmax`, one seed) | 19.50% | -- | -- | -- |
+| 99, DROW's three radii, `softmax` multi-class | 29.03% | 30.51% | 29.77% | -0.13 pp |
+
+**No lever clears the bar, and the gap survives them.** The largest, DROW's own 0.35 m person radius, is +2.38 pp on
+two seeds that disagree by 7 pp between themselves (-1.19 and +5.95 against their headline seeds); LFE's input is
+flat, the depth tunnel +1.35, DROW's three radii on the multi-class head -0.80 (`sigmoid`) and -0.13 (`softmax`).
+Every arm sits between 27.9% and 30.2%, against the cutout's 63.20% on the same frames. **One effect is not small**:
+with DROW's radii the `softmax` head no longer collapses -- 29.77% at two seeds against the 0.6 m `softmax` arm's
+19.50% at one, its false positives at the 0.3 threshold still 16-18 per frame, so the gain is in ranking. That
+locates the collapse in the 0.6 m disks the three classes shared, not in the softmax. On the owner's rule for a tie,
+the published convention wins: DROW's radii (person 0.35, wheelchair 0.6, walker 0.4 m) for DROW runs, which is a
+recipe change and the owner's call (`TODO.md`).
+
+**It fits DROW and does not generalise; FROG it fits and generalises (item 96).** The same stage-2 weights scored on
+every split by `score` without `--memory`, which reproduces each run's own test AP to the seventh digit:
+
+| stage-2 weights | train | val | test | train / test |
+| --- | ---: | ---: | ---: | ---: |
+| DROW headline seed 0, val-best (epoch 8.5) | 63.57% | 27.67% | 29.45% | 2.16 |
+| DROW headline seed 1, val-best (epoch 6.7) | 55.32% | 25.92% | 26.26% | 2.11 |
+| DROW, published schedule seed 0, last (epoch 40) | **82.59%** | -- | **18.10%** | 4.56 |
+| FROG frozen seed 0, val-best (train every 25th, test every 5th frame) | 93.66% | -- | 80.89% | 1.16 |
+| **DROW3 `T=1` cutout, retrained here (item 92), last (epoch 40)** | **66.50%** | 44.7% | **63.20%** | **1.05** |
+
+**The last row is the mechanism, measured.** Trained on the same frames for as long as our worst arm, the cutout fits
+DROW's training split barely better than its test split (+3.3 pp), where our stage 2 is +34 pp at its best epoch and
++64.5 pp at epoch 40. Our stage 2's *train* AP at its best epoch, 63.6%, is about the cutout's *test* AP: what our
+network learns from DROW's training recordings does not carry to the test ones, and what the cutout learns does.
+(`evaluate.py`'s train split keeps the four corrupt labels `FrameSplit` drops: 4 of 23,910, worth at most 0.02 pp.)
+
+**Capacity is not what memorises (item 101, the owner's question).** Our stage 2 at 15x and 58x fewer parameters, two
+seeds each, every seed 0 also scored on DROW's train split (`utils/queue_drow_capacity.py`):
+
+| stage 2 on DROW | parameters | test, two seeds | mean | train, seed 0 | train / test |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| headline (32, 64, 128) | 960,323 | 29.45% / 26.26% | 27.86% | 63.57% | 2.16 |
+| widths (8, 16, 32) | 62,867 | 22.56% / 23.38% | 22.97% (-4.89) | 55.64% | 2.47 |
+| widths (4, 8, 16) | 16,667 | 24.49% / 23.81% | 24.15% (-3.71) | 47.43% | 1.94 |
+| LFE-shaped: LFE's input and widths | 62,795 | 25.40% / 25.36% | 25.38% (-2.48) | 55.51% | 2.19 |
+| DROW3 cutout, item 92 | 1,518,531 | 63.20% (one run) | -- | 66.50% | 1.05 |
+
+**By the rule written into the queue before it ran**, the ratio staying near 2 at 58x fewer parameters while test AP
+falls means the memorising is not done by parameters -- the cutout that does not memorise has 1.6x ours -- but by what
+a beam's decision can see, so the receptive field is the next experiment (97). The LFE-shaped arm behaves like ours, at
+2.19: it is our topology carrying LFE's input and widths, so it predicts what LFE would do on DROW rather than measuring
+it, which is item 103.
+
+**So "it cannot fit DROW" is ruled out**: the network reaches 82.6% on DROW's training frames when allowed to, and the
+longer it trains the further test falls. On FROG the same architecture keeps test within 13 pp of train. What DROW
+lacks is not capacity or label quality but transfer from its training recordings to its test ones -- which is what
+`memory/dataset-properties.md`'s composition predicts (a third of train from a stationary robot, test all driving runs),
+and what a whole-scan network can exploit and a local, depth-normalised window cannot. Item 92 asks whether that
+window does generalise on the same data path; 95(b)/(c), 78 and 97 are the levers and the test of the mechanism.
+**FROG's step-2-path test figure for seed 0 is 80.89% at stride 5**, not the 82.80% this group's preamble compared
+with: that is the three-seed candidate column of the whole-detector chain, averaged weights and the candidate cache.
+The like-for-like single-frame comparison is this table's test column, and DROW's 27.86% against it stands.
+
+**DROW's supervision count explains nothing at stage 2 (item 98).** FROG's stage 2 trained with only DROW's
+annotation pattern kept -- 5,382 of 120,396 training frames (4.5%), bursts of 20 at every 5th scan once per 400
+scans, about as many labelled people as DROW's train split holds -- scores **80.29%** on FROG test against the
+full-annotation run's **80.84%** (`a69_no_aggregator_s0`'s own test pass), best val 75.57% against 76.46%: **-0.55 pp**,
+one seed, against a 0.16 pp FROG seed spread. So the "17.8x less supervision" argument is withdrawn at stage 2, as the
+row's condition said it would be, and `memory/interpreting-evaluation.md`'s section that called DROW's numbers "a
+data-scarcity artifact" is rewritten around transfer instead.
+
+**The scoring path is sound (item 93).** DROW3's published weights score **66.48%** through `evaluate.py` and
+**66.48%** through `score_detections` on `FrameSplit`'s own test labels, identical to every digit printed. `FrameSplit`
+matches `DROW_Dataset` frame for frame, scan for scan and person for person on all three splits (24,012 annotated
+frames), the one difference being the four corrupt train labels past the rated range that it drops by design. **So no
+TAKHeLiPeD DROW number differs from a baseline's because of the harness**, and the gap is not in the labels either.
+
+**The labels sit where they should (item 94), and the 0.6 m disk reaches into the other classes.** 95.1% / 98.5% /
+99.0% of people (train / val / test) have a return within 0.2 m of their centre, and no shift of up to four beams, and
+no mirroring, does better than the bearings as loaded. A 0.6 m person disk holds 14.6-21.5 beams per person, of which
+12.1-17.8% are nearer a wheelchair or walker annotation; at DROW's own 0.35 m that falls to 0.9-3.3%. One reading of
+the DROW paper did not survive: only 5.4-8.4% of walkers have a person annotation within 0.3 m, so "a walker user is
+labelled twice" is unconfirmed at that radius (the table is in `memory/dataset-properties.md`).
+
+**What the code now does, all behind flags whose defaults leave every number on file unchanged.**
+
+- **Per-class label radii** (the owner's request). `step2 --label-radius` takes one value or one per class in the spec's
+  class order, and `make_targets` gives a beam inside two disks to the annotation it is **deepest inside**, distance
+  minus radius -- DROW's and DR-SPAAM's own `_closest_detection`, read in DR-SPAAM's `drow_dataset.py` with its radii:
+  wheelchair 0.6, walker 0.4, person 0.35 m. At one radius that rule is the adopted nearest assignment exactly.
+  **Found on the way:** two docstrings and a test said a person always wins a beam shared with a wheelchair. That only
+  holds under the last-listed assignment; under the adopted nearest one the beam goes to the nearer annotation, so
+  every multi-class arm on file trained 12.1-17.8% of a person's 0.6 m disk as wheelchair or walker (item 94). `FrameSplit.other_polar` went,
+  since the ignore region now draws each class at its own radius from `other_by_class`.
+- **DROW3 is trainable through `train.py`** (`--detector drow`), on DR-SPAAM's recipe flag for flag: their one-logit
+  `DrowNet` (the same layer stack as `DrowDetector`, read in their `drow_net.py`), `--person-only`, `--drow-cutout
+  drspaam` (1.0 m / 0.5 m / 56 points), `--no-class-balance`, `--vote-loss euclidean`, `--amsgrad`, `--lr-schedule
+  exponential` per iteration, last weights with `--patience 0`. **A latent defect fixed with it**: `LidarFrameDataset`
+  never passed a network's own window to `build_cutout` while `_extract_input` always did, so any cutout model with a
+  window other than DROW3's trained on one cutout and was scored on another. Nothing trained here had such a window,
+  which is why it never fired.
+- **`score` without `--memory`** scores stage 2 alone on any split through `calibration_frames`, the pass step 2
+  scores its own test split with: train beside test is item 96.
+- **`--input-features tunnel`** clips every depth delta of the ten beam features to DROW3's 1 m cutout depth: 95(c).
+- **`step2 --annotation-pattern drow`** keeps the labels of DROW's pattern only -- bursts of 20 at every 5th scan, one
+  per 400 scans of each recording, 5% of FROG's frames -- so a FROG run prices DROW's supervision count at stage 2: 98.
+- **`evaluate.py --out`** writes the AUCs as JSON, so a queue can tell a finished evaluation from an interrupted one.
+- **Documentation**: `docs/ARCHITECTURE.md` called 0.6 m "DR-SPAAM convention" (it is DR-SPAAM's wheelchair radius)
+  and put FROG's 720 beams over 270 deg in three places (they span 180 deg, per the loader and the FROG paper); both are
+  corrected, and so is `docs/RESEARCH.md`'s 0.5 deg for FROG's 0.25 deg. DROW's split composition -- a third of train
+  from a stationary robot, val essentially one recording, test all driving runs -- moved from `TODO.md` to
+  `memory/dataset-properties.md`.
+
+**A bug caught in review before anything ran on it**: `train_epoch` and `evaluate_loss` kept a running sum named
+`vote_loss`, which shadowed the new parameter of the same name and would have failed every `train.py` run on its first
+batch. Renamed `vote_total`.
+
 ## The sigmoid head's whole detector is 37.51%, and val had it 3.84 pp ahead (2026-11-07)
 
 *keywords: item 89 answered, item 84 closed, drow_sigmoid_stage3_s0 37.51, candidates 19.82, memory contribution 17.69, val test inversion third instance, multi-class head costs 8 pp end to end, memory lift falls with the footing, max-epochs 42 did not bind*

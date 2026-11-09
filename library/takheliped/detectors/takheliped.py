@@ -28,7 +28,8 @@ MEDIAN_WINDOW_DEG = 11.0
 NEIGHBOUR_OFFSETS = (-2, -1, 1, 2)
 N_BEAM_FEATURES = 2 + 2 * len(NEIGHBOUR_OFFSETS)
 LFE_NEAR_M = 0.2                     # LFE clips readings below this (`lfe_detector._SCAN_NEAR`)
-INPUT_CHANNELS = {"beam": N_BEAM_FEATURES, "lfe": 1}
+TUNNEL_DEPTH_M = 1.0                 # DROW3's cutout depth: "tunnel" clips the depth deltas to it
+INPUT_CHANNELS = {"beam": N_BEAM_FEATURES, "lfe": 1, "tunnel": N_BEAM_FEATURES}
 LEGACY_VALIDITY_CHANNEL = 2          # index of the validity input that checkpoints before 2026-09-17 carried
 LAST_TEMPORAL_COMMIT = "e76aa94"     # the last commit with stage 2's coarse temporal convolution
 SLOT_STATISTICS = 8
@@ -57,9 +58,13 @@ def sanitize_ranges(ranges: Tensor, max_range_m: float) -> Tensor:
     return where(isfinite(ranges) & (ranges > 0) & (ranges < max_range_m), ranges, full_like(ranges, max_range_m))
 
 
-def beam_features(ranges: Tensor, angles: Tensor, max_range_m: float = MAX_RANGE_M, median_window_deg: float = MEDIAN_WINDOW_DEG) -> Tensor:
+def beam_features(ranges: Tensor, angles: Tensor, max_range_m: float = MAX_RANGE_M, median_window_deg: float = MEDIAN_WINDOW_DEG,
+                  depth_m: Optional[float] = None) -> Tensor:
     """Per-beam input channels `[..., N] -> [..., 10, N]`: range, range minus local median, and each neighbour's endpoint
-    (along, across) in the beam's own frame relative to the beam's endpoint. Ranges pass through `sanitize_ranges` first."""
+    (along, across) in the beam's own frame relative to the beam's endpoint. Ranges pass through `sanitize_ranges` first.
+    `depth_m` clips every depth delta -- range minus median and each along offset -- to +-depth_m, the depth axis of a
+    cutout's window; the range and the across offsets are left as they are."""
+    clip = (lambda delta: delta) if depth_m is None else (lambda delta: delta.clamp(-depth_m, depth_m))
     n = ranges.shape[-1]
     step = float(angles[1] - angles[0])
     r = sanitize_ranges(ranges, max_range_m)
@@ -71,11 +76,11 @@ def beam_features(ranges: Tensor, angles: Tensor, max_range_m: float = MAX_RANGE
     reach = max(abs(o) for o in NEIGHBOUR_OFFSETS)
     r_pad = pad(flat, (reach, reach), mode="replicate").reshape(*r.shape[:-1], n + 2 * reach)
     a_pad = pad(angles.view(1, 1, n), (reach, reach), mode="replicate").view(n + 2 * reach)
-    channels = [r, r - median]
+    channels = [r, clip(r - median)]
     for offset in NEIGHBOUR_OFFSETS:
         neighbour = r_pad[..., reach + offset:reach + offset + n]
         dphi = a_pad[reach + offset:reach + offset + n] - angles
-        channels += [neighbour * cos(dphi) - r, neighbour * sin(dphi)]
+        channels += [clip(neighbour * cos(dphi) - r), neighbour * sin(dphi)]
     return stack(channels, dim=-2)
 
 
@@ -1000,7 +1005,8 @@ class CalibrationNetwork(nn.Module):
     network has prior channels, enters at the bottleneck. `dropout` regularises the head's input only, so the decoder features
     stage 3 pools from stay deterministic; it holds no parameters. Neither the per-beam fine nor the bottleneck coarse temporal
     convolution survived its ablation (`memory/rejected-ideas.md`). `input_features` "lfe" replaces the ten
-    beam features with LFE's one input channel (`lfe_features`), for the attribution arm F1.
+    beam features with LFE's one input channel (`lfe_features`), for the attribution arm F1; "tunnel" keeps the ten and
+    clips their depth deltas to DROW3's 1 m cutout depth.
     `gather_width_m` above zero inserts a `MetricGather` after the stem, so the first spatial layer reads a window of that many
     metres of arc instead of a fixed count of beams; zero, the default, leaves the network exactly as it was.
     `vote_frame` records which frame the head's two outputs are an offset in -- DROW's beam-relative `(across, along)` by
@@ -1097,7 +1103,8 @@ class CalibrationNetwork(nn.Module):
     def forward(self, ranges: Tensor, prior: Optional[Tensor] = None) -> Tuple[Tensor, Tensor, Tensor]:
         """Person logits `[B, N]`, votes `[B, N, 2]` and decoder features `[B, C, N]` for scans `[B, N]`, with the memory prior
         `[B, prior_channels, N/8]` when the network has prior channels."""
-        x = lfe_features(ranges, self.max_range_m) if self.input_features == "lfe" else beam_features(ranges, self.angles, self.max_range_m)
+        x = lfe_features(ranges, self.max_range_m) if self.input_features == "lfe" else beam_features(
+            ranges, self.angles, self.max_range_m, depth_m=TUNNEL_DEPTH_M if self.input_features == "tunnel" else None)
         lifted = self.stem(x)
         if self.gather is not None:
             lifted = self.gather(lifted, sanitize_ranges(ranges, self.max_range_m))

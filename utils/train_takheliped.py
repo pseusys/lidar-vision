@@ -62,6 +62,10 @@ MATCH_RADIUS_M = 0.5
 VOTE_FLOOR = VOTE_DECODING["min_thresh"]   # a beam this unlikely casts no vote, in either decoder
 NMS_DIST_M = 0.5                # `nms_predicted_center`'s `min_dist`, the official DR-SPAAM code's
 LABEL_RADIUS_M = 0.6            # `make_targets`' default, the radius every stage 2 so far trained with
+EVAL_BATCH = 64                 # frames per stage-2 forward when scoring
+DROW_ANNOTATION_STRIDE = 5      # DROW annotates every 5th scan of a burst,
+DROW_BURST_FRAMES = 20          # 20 frames to a burst,
+DROW_BURST_PERIOD = 400         # one burst every 400 scans (`memory/dataset-properties.md`)
 MIRROR_PROBABILITY = 0.5        # share of training clips `step2 --mirror` reverses
 CANDIDATE_FLOOR = 0.01
 TOP_P = 64
@@ -179,10 +183,11 @@ class DatasetSpec:
     #: the ignore region find them; it does not make them targets, which is the swappable head's job.
     other_detections: Tuple[str, ...]
     #: The per-beam label id of each entry of `classes`, in that order. `make_targets` has used DROW's own
-    #: numbering since the baselines were written -- 1 wheelchair, 2 walker, 3 person -- and the order matters
-    #: beyond bookkeeping: where two classes cover one beam the higher id wins, which is what keeps a person
-    #: standing beside a wheelchair labelled a person. The head's columns follow `classes`, not these ids, so
-    #: the person is column 0 on every dataset; `class_columns` maps one to the other.
+    #: numbering since the baselines were written -- 1 wheelchair, 2 walker, 3 person. Where two classes cover one
+    #: beam, the last-listed assignment lets the higher id win, so a person beside a wheelchair stays a person; the
+    #: adopted nearest assignment gives the beam to the annotation it is deepest inside, as DROW's own targets do,
+    #: whatever its class. The head's columns follow `classes`, not these ids, so the person is column 0 on every
+    #: dataset; `class_columns` maps one to the other.
     class_ids: Tuple[int, ...]
     dt_average_frames: int
     grid: Callable[[int], np.ndarray]
@@ -917,7 +922,10 @@ def stage2_training(args: Dict[str, str]) -> Dict[str, object]:
     for a *new* run, so reading that default back would hand a Gaussian to weights trained on a hard label.
     """
     unset = (None, "None", "")
-    return {"vote_collect_radius": LABEL_RADIUS_M if args.get("label_radius") in unset else float(args["label_radius"]),
+    # One value, or a list of one per class with the person's first: step 3b's stage-2 term is person-only, so the
+    # person's radius is all it reads.
+    radius = LABEL_RADIUS_M if args.get("label_radius") in unset else literal_eval(args["label_radius"])
+    return {"vote_collect_radius": float(radius[0] if isinstance(radius, list) else radius),
             "nearest": args.get("label_assign") == "nearest",
             "sigma_m": 0.0 if args.get("label_sigma_m") in unset else float(args["label_sigma_m"]),
             "dropout": 0.0 if args.get("dropout") in unset else float(args["dropout"])}
@@ -1056,14 +1064,23 @@ def class_annotations(spec: DatasetSpec, people, others, head: str) -> Dict[int,
     return gt
 
 
+def class_radii(spec: DatasetSpec, radii: Sequence[float]) -> Dict[int, float]:
+    """`--label-radius` as `make_targets`' `{label id: radius}`: one value for every class the spec annotates, or one
+    per class in `spec.classes` order, which is the order `class_ids` follows."""
+    if len(radii) not in (1, len(spec.classes)):
+        raise ValueError(f"--label-radius takes one value or one per class ({', '.join(spec.classes)}), not {len(radii)}")
+    values = list(radii) * len(spec.classes) if len(radii) == 1 else list(radii)
+    return {class_id: float(r) for class_id, r in zip(spec.class_ids, values, strict=True)}
+
+
 def class_columns(labels: np.ndarray, class_ids: Tuple[int, ...]) -> np.ndarray:
     """`make_targets`' per-beam label ids `[N]` as the head's column indices: background 0, then one column per
     entry of `DatasetSpec.classes`, in that order.
 
-    Two numbering schemes meet here and both are deliberate. The **ids** are DROW's, because `make_targets`
-    resolves a beam two classes both cover by letting the higher id win, and that is what keeps a person beside a
-    wheelchair labelled a person. The **columns** follow `classes`, which lists the person first on every dataset,
-    so the person's column is a property of the head rather than of the dataset.
+    Two numbering schemes meet here and both are deliberate. The **ids** are DROW's, which `make_targets` has
+    always worked in (`DatasetSpec.class_ids` says how it resolves a beam two classes cover). The **columns** follow
+    `classes`, which lists the person first on every dataset, so the person's column is a property of the head
+    rather than of the dataset.
 
     An id the spec does not list becomes background rather than some other class's column: the honest reading
     when a caller passed fewer classes than the dataset annotates, where the alternative mislabels it silently.
@@ -1694,12 +1711,10 @@ class FrameSplit:
     annotated: np.ndarray
     people_polar: List[np.ndarray]
     people_xy: List[np.ndarray]
-    #: Per annotated frame, the annotated objects of every class **but** the person class, as (range, bearing).
-    #: Empty on a one-class dataset, so the training loop indexes it without asking which dataset it is on.
-    other_polar: List[np.ndarray]
-    #: The same objects kept apart by class, one array per `spec.other_detections` entry in that order, for a
-    #: head that scores them rather than ignoring them. `other_polar` is their concatenation, so there is one
-    #: source: the ignore mask wants them merged and a multi-class target wants them separate.
+    #: Per annotated frame, the annotated objects of every class **but** the person class, as (range, bearing), one
+    #: array per `spec.other_detections` entry in that order: kept apart because each class has its own label radius,
+    #: for the ignore mask and for a head that scores them. An empty tuple on a one-class dataset, so the training
+    #: loop indexes it without asking which dataset it is on.
     other_by_class: List[Tuple[np.ndarray, ...]]
     time: np.ndarray
 
@@ -1716,7 +1731,7 @@ def load_frames(name: str, mode: str = DEFAULT_MODE, spec: DatasetSpec = FROG) -
 
 def frames_from_dataset(ds, spec: DatasetSpec = FROG) -> FrameSplit:
     """Pack every recording of `ds` end to end, annotations placed on their own scans through `idet2iscan`."""
-    scans, poses, start, annotated, polar, other, by_class, times = [], [], [], [], [], [], [], []
+    scans, poses, start, annotated, polar, by_class, times = [], [], [], [], [], [], []
     offset = 0
     for s in range(len(ds.scans)):
         n = len(ds.scans[s])
@@ -1727,13 +1742,11 @@ def frames_from_dataset(ds, spec: DatasetSpec = FROG) -> FrameSplit:
         for d in range(len(ds.det_id[s])):
             annotated.append(offset + int(ds.idet2iscan[s][d]))
             polar.append(spec.real_people(ds.det_wp[s][d]))
-            classes = tuple(spec.real_people(getattr(ds, name)[s][d]) for name in spec.other_detections)
-            by_class.append(classes)
-            other.append(np.concatenate(classes) if classes else np.zeros((0, 2)))
+            by_class.append(tuple(spec.real_people(getattr(ds, name)[s][d]) for name in spec.other_detections))
         offset += n
     xy = [np.array([project_cartesian_from_polar(r, phi) for r, phi in p], dtype=np.float64).reshape(-1, 2) for p in polar]
     return FrameSplit(np.concatenate(scans), np.concatenate(poses), np.concatenate(start), np.array(annotated), polar, xy,
-                      other, by_class, time=np.concatenate(times))
+                      by_class, time=np.concatenate(times))
 
 
 @dataclass
@@ -1860,12 +1873,17 @@ def train_calibration(args) -> None:
     spec = dataset_spec(args)
     print(parameter_table(spec, args.max_range_m), flush=True)
     splits = {name: load_frames(name, args.frog_mode, spec) for name in SPLITS}
+    if args.annotation_pattern == "drow":
+        splits["train"] = drow_annotation_pattern(splits["train"])
+        print("train annotations thinned to DROW's pattern: bursts of 20 at every 5th scan, one per 400 scans", flush=True)
     for name, split in splits.items():
         print(f"{name}: {len(split.scans)} frames, {len(split.annotated)} annotated", flush=True)
         note = unlearnable_labels(split.people_polar, args.max_range_m)
         if note:
             print(note, flush=True)
     angles = spec.angles()
+    radii = class_radii(spec, args.label_radius)
+    print("label radius " + ", ".join(f"{name} {radii[class_id]} m" for name, class_id in zip(spec.classes, spec.class_ids, strict=True)), flush=True)
     stored_args = {k: str(v) for k, v in vars(args).items()}
     # The head's width is the dataset's rather than a flag of its own, and it is stored so the checkpoint rebuilds
     # the head it was trained as -- a multi-class checkpoint reopened as binary would score the wrong column.
@@ -1911,7 +1929,6 @@ def train_calibration(args) -> None:
             frames = train_split.annotated[chunk]
             ranges = frame_batch(train_split, frames, device)
             scans, people = [train_split.scans[f] for f in frames], [train_split.people_polar[c] for c in chunk]
-            others = [train_split.other_polar[c] for c in chunk]
             by_class = [train_split.other_by_class[c] for c in chunk]
             if args.mirror:
                 flip = rng.random(len(frames)) < MIRROR_PROBABILITY
@@ -1920,13 +1937,12 @@ def train_calibration(args) -> None:
                 people = [mirror_people(g, angles) if m else g for g, m in zip(people, flip, strict=True)]
                 # The objects mirror with the scan for the same reason the people do: the mask is built from
                 # bearings, so an unmirrored object silences the beams on the wrong side of the robot.
-                others = [mirror_people(o, angles) if m else o for o, m in zip(others, flip, strict=True)]
                 by_class = [tuple(mirror_people(q, angles) if m else q for q in t)
                             for t, m in zip(by_class, flip, strict=True)]
             logit, votes, _ = net(ranges)
             targets = [make_targets(anchor_ranges(s, net.max_range_m), angles,
                                     class_annotations(spec, g, o, net.head_kind),
-                                    vote_collect_radius=args.label_radius, nearest=args.label_assign == "nearest",
+                                    vote_collect_radius=radii, nearest=args.label_assign == "nearest",
                                     frame=net.vote_frame) for s, g, o in zip(scans, people, by_class, strict=True)]
             # The label ids `make_targets` works in become the head's columns. A binary head only ever reads
             # `labels > 0`, which the mapping preserves, so its loss is the one every number on file carries.
@@ -1936,14 +1952,16 @@ def train_calibration(args) -> None:
             # identical and only their *values* change -- hard 1 to a metric Gaussian. The vote target is untouched.
             soft = None if not args.label_sigma_m else torch.from_numpy(np.stack([
                 beam_heatmap(anchor_ranges(s, net.max_range_m), angles, {3: [tuple(p) for p in g]},
-                             sigma_m=args.label_sigma_m, vote_collect_radius=args.label_radius)
+                             sigma_m=args.label_sigma_m, vote_collect_radius=radii)
                 for s, g in zip(scans, people, strict=True)])).to(device)
             # The ignore region: the beams a wheelchair or a walker covers leave the classification term, since
             # a person in a wheelchair is a person and teaching that return as background is a contradictory
-            # target on the one shape the network exists to recognise.
+            # target on the one shape the network exists to recognise. Each class's disk is its own radius.
             ignore = None if not args.ignore_other_classes else torch.from_numpy(np.stack([
-                ignore_beams(s, angles, o, args.label_radius, net.max_range_m, positives=t[0] > 0)
-                for s, o, t in zip(scans, others, targets, strict=True)])).to(device)
+                np.logical_or.reduce([ignore_beams(s, angles, objects, radii[class_id], net.max_range_m, positives=t[0] > 0)
+                                      for class_id, objects in zip(spec.class_ids[1:], q, strict=True)]
+                                     + [np.zeros(len(s), bool)])
+                for s, q, t in zip(scans, by_class, targets, strict=True)])).to(device)
             loss, _, _ = compute_loss(logit.reshape(-1, net.class_columns), votes.reshape(-1, 2), labels.reshape(-1),
                                       vote_targets.reshape(-1, 2),
                                       soft_labels=None if soft is None else soft.reshape(-1),
@@ -2235,6 +2253,17 @@ def train_joint(args) -> None:
     print(f"wrote {args.out_dir / 'step3b_results.json'}", flush=True)
 
 
+def drow_annotation_pattern(split: FrameSplit) -> FrameSplit:
+    """`split`'s annotations thinned to DROW's pattern (`memory/dataset-properties.md`): within each recording, bursts of
+    `DROW_BURST_FRAMES` annotated frames at every `DROW_ANNOTATION_STRIDE`-th scan, one burst per `DROW_BURST_PERIOD` scans.
+    Every scan stays, so only the supervision changes; on FROG, where every scan is annotated, that leaves 5% of them."""
+    position = split.annotated - split.start[split.annotated]
+    keep = (position % DROW_BURST_PERIOD < DROW_BURST_FRAMES * DROW_ANNOTATION_STRIDE) & (position % DROW_ANNOTATION_STRIDE == 0)
+    return FrameSplit(split.scans, split.poses, split.start, split.annotated[keep],
+                      [q for q, k in zip(split.people_polar, keep) if k], [q for q, k in zip(split.people_xy, keep) if k],
+                      [q for q, k in zip(split.other_by_class, keep) if k], time=split.time)
+
+
 def first_recordings(split: FrameSplit, n: int) -> FrameSplit:
     """The first `n` recordings of a split with their annotations, for smoke runs; the whole split when `n` is 0 or covers it."""
     offsets, _ = recording_bounds(split.start)
@@ -2244,7 +2273,6 @@ def first_recordings(split: FrameSplit, n: int) -> FrameSplit:
     keep = split.annotated < end
     return FrameSplit(split.scans[:end], split.poses[:end], split.start[:end], split.annotated[keep],
                       [q for q, k in zip(split.people_polar, keep) if k], [q for q, k in zip(split.people_xy, keep) if k],
-                      [q for q, k in zip(split.other_polar, keep) if k],
                       [q for q, k in zip(split.other_by_class, keep) if k], time=split.time[:end])
 
 
@@ -2297,9 +2325,15 @@ def score_checkpoint(args) -> None:
     It runs the **same `evaluate`** the training path runs, deliberately: a second implementation of the metric
     would give a number incomparable with the frozen 86.29%, which is the only reason to compute this one. The
     stride defaults to 5 for the same reason -- that is what the frozen figure was measured at.
+
+    Without `--memory` it scores stage 2 alone (`score_stage2`), which is how a train-split AP is set beside a
+    test AP of the same weights.
     """
     device, _ = detect_device()
     stage2_checkpoint = torch.load(args.stage2, map_location="cpu")
+    if args.memory is None:
+        score_stage2(args, stage2_checkpoint, device)
+        return
     memory_checkpoint = torch.load(args.memory, map_location=device, weights_only=False)
     note = partition_note(stage2_checkpoint, memory_checkpoint, args.frog_mode)
     spec = dataset_spec(args)
@@ -2334,6 +2368,27 @@ def score_checkpoint(args) -> None:
         if played is not None:
             results["test"][f"stride_{stride}"].update(restricted_columns(played, args.eval_max_range_m))
 
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(results, indent=1), encoding="utf-8")
+    print(f"wrote {args.out}", flush=True)
+
+
+def score_stage2(args, checkpoint: dict, device) -> None:
+    """Stage 2 alone on `args.split`, through `calibration_frames` and `score_detections` -- the pass `train_calibration`
+    scores its own test split with, so a train or val AP here is comparable with the test AP that run reported."""
+    spec = dataset_spec(args)
+    print(parameter_table(spec), flush=True)
+    net = calibration_network(checkpoint, spec.angles()).to(device)
+    split = first_recordings(load_frames(args.split, args.frog_mode, spec), args.limit_recordings)
+    print(f"stage 2 alone, {args.stage2}: {spec.name} {args.split}, {len(split.annotated)} annotated frames", flush=True)
+    results = dict(stage2=str(args.stage2), dataset=spec.name, split=args.split, strides={})
+    for stride in args.test_strides:
+        played = calibration_frames(net, split, np.arange(0, len(split.annotated), stride), device, args.eval_batch)
+        r = results["strides"][f"stride_{stride}"] = score_detections(played)
+        print(f"{args.split}, every {stride} annotated frame: AP {r['ap']:.2%}  P {r['precision']:.1%}  R {r['recall']:.1%}  "
+              f"FP {r['fp_per_frame']:.3f}  FN {r['fn_per_frame']:.3f}", flush=True)
+        if args.eval_max_range_m:
+            r.update(restricted_columns({"stage2": played}, args.eval_max_range_m))
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(results, indent=1), encoding="utf-8")
     print(f"wrote {args.out}", flush=True)
@@ -2563,7 +2618,9 @@ def build_parser() -> argparse.ArgumentParser:
     # No training here, so none of the training flags apply. What it needs is a detector, a partition and a
     # split -- and the partition is the point: it is normally *not* the one the checkpoints were trained on.
     score.add_argument("--stage2", type=Path, required=True, help="the trained stages 1-2 whose candidates are scored")
-    score.add_argument("--memory", type=Path, required=True, help="step3a's stage 3, which rescores them")
+    score.add_argument("--memory", type=Path, default=None, help="step3a's stage 3, which rescores them; without it stage 2 "
+                       "is scored alone, by the pass step2 scores its own test split with, on any split")
+    score.add_argument("--eval-batch", type=int, default=EVAL_BATCH, help="frames per forward when stage 2 is scored alone")
     score.add_argument("--frog-mode", choices=("official", "transferred", "balanced"), default="official",
                        help="the partition to score ON, which may differ from the one trained on; a mismatch is "
                             "reported in the output rather than refused, because that comparison is this mode's purpose")
@@ -2629,8 +2686,12 @@ def build_parser() -> argparse.ArgumentParser:
                                 "it long-range")
     step2.add_argument("--gather-samples", type=int, default=9,
                        help="how many points the metric window is resampled to, when --gather-width-m is set")
-    step2.add_argument("--input-features", choices=("beam", "lfe"), default="beam", help="beam: the ten per-beam features; lfe: LFE's "
-                       "1 - r/10 alone, the attribution arm F1")
+    step2.add_argument("--annotation-pattern", choices=("all", "drow"), default="all", help="which training frames keep their "
+                       "labels: all, or DROW's pattern -- bursts of 20 at every 5th scan, one per 400 scans of each recording -- "
+                       "so a FROG run prices DROW's supervision density at stage 2 (val and test are untouched)")
+    step2.add_argument("--input-features", choices=("beam", "lfe", "tunnel"), default="beam", help="beam: the ten per-beam features; lfe: LFE's "
+                       "1 - r/max_range alone, the attribution arm F1; tunnel: the ten with every depth delta clipped to DROW3's 1 m "
+                       "cutout depth")
     step2.add_argument("--channels", type=int, nargs=3, default=None, metavar="C", help="U-Net widths at N, N/2 and N/4 beams; unset is "
                        "the constructor's (32 64 128); LFE's 8 16 32 are the attribution arm W, and 64 128 256 are "
                        "the widening arm")
@@ -2674,8 +2735,10 @@ def build_parser() -> argparse.ArgumentParser:
     step2.add_argument("--label-assign", choices=("last", "nearest"), default="nearest", help="which person a beam inside two people's radius "
                        "trains for: its nearest, as the official DR-SPAAM code does (the default since 2026-10-06), or the last listed, as every "
                        "run before it did")
-    step2.add_argument("--label-radius", type=float, default=LABEL_RADIUS_M, help="distance from a person's centre within which a beam is "
-                       "a positive and votes for them; DR-SPAAM uses 0.35 m, FROG's circles are 0.4 m")
+    step2.add_argument("--label-radius", type=float, nargs="+", default=[LABEL_RADIUS_M], help="distance from an annotation's centre within "
+                       "which a beam is a positive and votes for it: one value for every class, or one per class in the dataset's class "
+                       "order (DROW: pedestrian wheelchair walker), where DROW's own targets use 0.35 0.6 0.4; FROG's circles are 0.4 m. "
+                       "A beam inside two disks goes to the one it is deepest inside under the nearest assignment")
     step2.add_argument("--label-sigma-m", type=float, default=0.3,
                        help="replace the hard per-beam label with a Gaussian of this width in METRES, keeping the vote "
                             "head and nms-mean; 0.3 is the default since it was adopted at three seeds, and 0 restores "
@@ -2690,7 +2753,7 @@ def build_parser() -> argparse.ArgumentParser:
     step2.add_argument("--mirror", action=argparse.BooleanOptionalAction, default=True, help="reverse half the training clips beam for beam, "
                        "with their people and poses mirrored to match: exact on any uniform beam grid; on by default since 2026-10-06")
     step2.add_argument("--batch", type=int, default=32)
-    step2.add_argument("--eval-batch", type=int, default=64)
+    step2.add_argument("--eval-batch", type=int, default=EVAL_BATCH)
     step2.add_argument("--max-epochs", type=float, default=20)
     step2.add_argument("--eval-every", type=float, default=0.25, help="epochs between evaluations")
     step2.add_argument("--patience", type=int, default=12, help="evaluations without a new best val AP")

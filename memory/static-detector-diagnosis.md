@@ -314,6 +314,10 @@ from "bigger helps".
 On FROG train 6.9% of positive beams sit inside two people's radius and 3.3% vote for someone other than their nearest; the official DR-SPAAM code assigns each beam to the nearest person within 0.35 m (0.6 m is its wheelchair radius), where the share is 0.4%.
 `step2 --label-assign nearest` is still tested (ladder arms L1/L2), but the close-pair loss itself is the vote grid's.
 
+**The radius is per class since 2026-11-08, and the nearest assignment is DR-SPAAM's exactly.** `--label-radius` takes one value or one per class in `DatasetSpec.classes` order, and under `nearest` a beam inside two disks goes to the annotation it is deepest inside -- distance minus that annotation's radius, DR-SPAAM's `_closest_detection` -- which at one radius is the nearest annotation within it, so every number above is unchanged.
+On DROW, two seeds each against their own footings: the person radius at 0.35 m on the binary head **+2.38 pp** (under the 3.19 pp seed spread); DROW's three radii (person 0.35, wheelchair 0.6, walker 0.4 m) on the multi-class head **-0.80 pp** with `sigmoid` and **-0.13 pp** with `softmax` -- but the `softmax` head, which collapsed to 19.50% with all three classes at 0.6 m, scores **29.77%** with DROW's radii, so that collapse was the shared 0.6 m disks rather than the normalisation (`CHANGELOG.md`, 2026-11-08).
+The last-listed assignment resolves a beam two classes share by the higher id, which keeps a person a person; the nearest one does not, and at 0.6 m for every class it gave 12-18% of a DROW person's disk to a wheelchair or a walker (`dataset-properties.md`).
+
 ### What the input features can and cannot explain
 
 Eight of the ten `beam_features` -- each neighbour's endpoint along and across the beam -- are fixed linear combinations of the five ranges `r[i-2..i+2]`, because the angular steps are constant.

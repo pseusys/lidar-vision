@@ -262,11 +262,14 @@ retrainable static control, which is what the LFE PyTorch port in `TODO.md` is f
 empty scenes, and how much from architecture?* is unanswered for this task, and only the four cells answer
 it.
 
-## DROW's numbers are structurally handicapped by annotation coverage, not by being a harder dataset
+## DROW's numbers are not explained by annotation coverage (corrected 2026-11-08)
 
 DROW's train split has roughly **17.8x fewer total person-annotation instances** than FROG's: 6.1x fewer annotated frames (17,665 vs. 108,356) and 2.9x fewer people per annotated frame (1.35 vs. 3.93).
-A DROW-native `spacetime_cnn` run shows textbook overfitting (val loss rising from epoch 2 onward while train loss keeps falling) on the same regularization that works fine on FROG — this is a data-scarcity artifact relative to model capacity, not evidence that the architecture transfers badly to DROW's sensor geometry.
-The architectures were sized for FROG's data volume; nobody has yet tried shrinking one for DROW's scale specifically (`TODO.md`).
+That count used to be read as the reason DROW's numbers are low, and **at stage 2 it is not**: FROG's stage 2 trained on DROW's annotation pattern -- 5,382 frames, 4.5% of its train split, in DROW's bursts, about as many labelled people as DROW's train holds -- scores **80.29%** on FROG test against **80.84%** fully annotated (-0.55 pp, one seed).
+Capacity is ruled out on DROW as well (shrinking and widening stage 2 both measured, `performance-log.md`).
+What does differ is **transfer**: the same stage 2 fits DROW's train split at 63.6% and reaches its test split at 29.5%, while on FROG train and test stay within 13 pp (`performance-log.md`, 2026-11-08), and DROW's train recordings are not its test recordings' kind (`dataset-properties.md`).
+So a DROW number is lower-confidence because DROW seeds spread 3.19 pp and val is one recording, and it is low for a reason still being measured -- not as a data-volume artifact.
+A DROW-native `spacetime_cnn` run shows the same signature: val loss rising from epoch 2 onward while train loss keeps falling, on the regularisation that works on FROG.
 
 ## LFE numbers on DROW/JRDB are an approximate cross-dataset transfer, not a faithful replication
 

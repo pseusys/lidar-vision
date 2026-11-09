@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Training and evaluation script for the two custom full-scan person detectors.
+Training and evaluation script for the trainable person detectors.
 
-DROW and DR-SPAAM use published pre-trained weights and are not trained here;
-use evaluate.py --drow / --drspaam to evaluate them.
+DR-SPAAM uses its published pre-trained weights and is not trained here; use
+evaluate.py --drspaam to evaluate it. DROW3 is trainable, so that DR-SPAAM's own
+DROW recipe can be re-run here as a known answer (memory/commands.md).
 
 Trainable detectors
 -------------------
   spacetime_cnn -- SpaceTimeCNNDetector (2-D conv over N_beams x T grid)
+  drow          -- DrowDetector, DROW3's cutout network
 
 It is non-recursive (CNN only, no RNN/attention) and consumes raw, unaligned,
 single-channel range scans -- see RESEARCH.md for why.
@@ -68,10 +70,12 @@ Usage
 """
 
 import argparse
+import math
 import os
 import random
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Dict, Union
 
 import numpy as np
 import torch
@@ -199,11 +203,30 @@ class _DmlAdam(Optimizer):
 
 
 def _make_optimizer(params, lr: float, weight_decay: float,
-                    using_dml: bool) -> Optimizer:
-    """Return the right Adam variant for the active device."""
+                    using_dml: bool, amsgrad: bool = False) -> Optimizer:
+    """Return the right Adam variant for the active device; `amsgrad` is DR-SPAAM's (their `optim.py`)."""
     if using_dml:
+        if amsgrad:
+            raise ValueError("AMSGrad is not implemented in the DirectML-safe Adam")
         return _DmlAdam(params, lr=lr, weight_decay=weight_decay)
-    return Adam(params, lr=lr, weight_decay=weight_decay, foreach=True)
+    return Adam(params, lr=lr, weight_decay=weight_decay, foreach=True, amsgrad=amsgrad)
+
+
+def lr_scheduler(optimizer: Optimizer, name: str, epochs: int, iterations: int, lr: float, min_lr: float):
+    """The schedule `--lr-schedule` names, and whether it steps every iteration rather than every epoch.
+
+    `exponential` is DR-SPAAM's `_ExpDecayScheduler`: geometric from `lr` to `min_lr` across the whole run, set before
+    every iteration on the fractional epoch. The others step once an epoch, as they always have; `plateau` steps on
+    val loss and so needs a val split, which the caller checks.
+    """
+    if name == "exponential":
+        total = max(epochs * iterations, 1)
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lambda step: (min_lr / lr) ** (step / total)), True
+    if name == "cosine":
+        return torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=lr * 1e-2), False
+    if name == "plateau":
+        return torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=max(3, epochs // 10), factor=0.5), False
+    return None, False
 
 from takheliped.detectors import (
     DrowDetector, DrSpaamDetector,
@@ -302,7 +325,8 @@ def _build_model(args):
     tf  = getattr(args, "time_frame",        5)
 
     if det == "drow":
-        return DrowDetector(dropout=dr, time_frame_size=tf, verbose=False)
+        return DrowDetector(dropout=dr, time_frame_size=tf, verbose=False, person_only=getattr(args, "person_only", False),
+                            cutout=getattr(args, "cutout_name", "drow"))
     if det == "drspaam":
         return DrSpaamDetector(dropout=dr, num_scans=tf)
     if det == "li2former":
@@ -350,8 +374,14 @@ def _in_vote_frame(vote_targets: np.ndarray, angles: np.ndarray, frame: str) -> 
     return vote_targets if frame == "beam" else swap_vote_frame(vote_targets, angles).astype(np.float32)
 
 
+def _class_radius(vote_collect_radius: Union[float, Dict[int, float]], class_id: int) -> float:
+    """One class's collect radius, from one radius for every class or a `{class_id: radius}` mapping."""
+    return vote_collect_radius[class_id] if isinstance(vote_collect_radius, dict) else vote_collect_radius
+
+
 def make_targets(scan: np.ndarray, angles: np.ndarray,
-                 gt_per_class: dict, vote_collect_radius: float = 0.6, nearest: bool = False, frame: str = "beam"):
+                 gt_per_class: dict, vote_collect_radius: Union[float, Dict[int, float]] = 0.6, nearest: bool = False,
+                 frame: str = "beam"):
     """
     Compute per-beam class labels and vote-offset targets.
 
@@ -360,9 +390,13 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
     scan          : (N,)  range measurements
     angles        : (N,)  beam angles in radians
     gt_per_class  : {class_id: [(r, phi), ...]}  1=wc, 2=wa, 3=wp
-    vote_collect_radius : radius (m) around GT that marks a beam as positive
-    nearest       : give each beam the nearest annotation within the radius, as the official DR-SPAAM code does; the default
-                    lets the last-listed one within it win, which in a crowd sends a beam's vote to a neighbour
+    vote_collect_radius : radius (m) around GT that marks a beam as positive -- one for every class, or a
+                    `{class_id: radius}` mapping, the way DROW's own targets give wheelchairs, walkers and persons
+                    0.6, 0.4 and 0.35 m
+    nearest       : give each beam the annotation it is deepest inside -- smallest distance minus that annotation's
+                    radius, the official DR-SPAAM code's `_closest_detection` -- which at one radius is the nearest
+                    annotation within it; the default lets the last-listed one within it win, which in a crowd sends a
+                    beam's vote to a neighbour
     frame         : "beam", DROW's own convention, gives each beam its offset in its own rotated frame; "sensor" gives every
                     beam the same Cartesian frame, so one person is one target rather than one per bearing.
                     The two name the same point, and swap_vote_frame converts either way
@@ -384,13 +418,14 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
     beam_y = scan *  np.cos(angles)
 
     if nearest:
-        anns = [(class_id, r_gt, phi_gt) for class_id, class_anns in sorted(gt_per_class.items()) for r_gt, phi_gt in class_anns]
+        anns = [(class_id, r_gt, phi_gt, _class_radius(vote_collect_radius, class_id))
+                for class_id, class_anns in sorted(gt_per_class.items()) for r_gt, phi_gt in class_anns]
         if not anns:
             return labels, vote_targets
-        cls, r_gt, phi_gt = (np.array(column) for column in zip(*anns, strict=True))
-        dist = np.hypot(r_gt * -np.sin(phi_gt) - beam_x[:, None], r_gt * np.cos(phi_gt) - beam_y[:, None])
-        owner = dist.argmin(axis=1)
-        mask = dist[np.arange(N), owner] < vote_collect_radius
+        cls, r_gt, phi_gt, radius = (np.array(column) for column in zip(*anns, strict=True))
+        depth = np.hypot(r_gt * -np.sin(phi_gt) - beam_x[:, None], r_gt * np.cos(phi_gt) - beam_y[:, None]) - radius
+        owner = depth.argmin(axis=1)
+        mask = depth[np.arange(N), owner] < 0
         owner = owner[mask]
         labels[mask] = cls[owner]
         dphi = phi_gt[owner] - angles[mask]
@@ -403,7 +438,7 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
             x_gt = r_gt * -np.sin(phi_gt)
             y_gt = r_gt *  np.cos(phi_gt)
             dist = np.sqrt((x_gt - beam_x) ** 2 + (y_gt - beam_y) ** 2)
-            mask = dist < vote_collect_radius
+            mask = dist < _class_radius(vote_collect_radius, class_id)
             if not np.any(mask):
                 continue
             labels[mask] = class_id
@@ -415,7 +450,7 @@ def make_targets(scan: np.ndarray, angles: np.ndarray,
 
 
 def beam_heatmap(scan: np.ndarray, angles: np.ndarray, gt_per_class: dict,
-                 sigma_m: float = 0.3, vote_collect_radius: float = 0.6) -> np.ndarray:
+                 sigma_m: float = 0.3, vote_collect_radius: Union[float, Dict[int, float]] = 0.6) -> np.ndarray:
     """A soft Gaussian per-beam target, `exp(-d^2 / 2 sigma^2)` in **metres**.
 
     The classification half of an LFE-style heatmap objective, for use with the vote head and `nms-mean` **kept**. The question
@@ -441,10 +476,10 @@ def beam_heatmap(scan: np.ndarray, angles: np.ndarray, gt_per_class: dict,
     beam_x = scan * -np.sin(angles)
     beam_y = scan * np.cos(angles)
 
-    for anns in gt_per_class.values():
+    for class_id, anns in gt_per_class.items():
         for r_gt, phi_gt in anns:
             dist = np.hypot(r_gt * -np.sin(phi_gt) - beam_x, r_gt * np.cos(phi_gt) - beam_y)
-            inside = dist < vote_collect_radius
+            inside = dist < _class_radius(vote_collect_radius, class_id)
             heat[inside] += np.exp(-0.5 * (dist[inside] / sigma_m) ** 2).astype(np.float32)
 
     return np.clip(heat, 0.0, 1.0)
@@ -560,12 +595,17 @@ def soft_class_target(labels: torch.Tensor, soft_labels: torch.Tensor, columns: 
 def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
                  labels: torch.Tensor, vote_targets: torch.Tensor,
                  vote_weight: float = 0.02, soft_labels: torch.Tensor = None,
-                 ignore: torch.Tensor = None, class_norm: str = "softmax", person: int = 1):
+                 ignore: torch.Tensor = None, class_norm: str = "softmax", person: int = 1,
+                 class_balance: bool = True, vote_loss: str = "mse"):
     """
     logits       : (N, C)  raw class logits; C=4 for multi-class, C=1 for binary
     votes        : (N, 2)  predicted vote offsets
     labels       : (N,)    int64 target class indices  (0=bg, 1=wc, 2=wa, 3=wp)
     vote_targets : (N, 2)  target vote offsets
+    class_balance : weight the positives by negatives over positives, as every run here has; off is DR-SPAAM's
+                   plain BCE, which weights every beam alike
+    vote_loss    : "mse" over the positive beams' offsets, or DR-SPAAM's "euclidean", the mean distance between
+                   predicted and target offset
     ignore       : (N,)    bool, beams that leave the classification term entirely -- neither positive nor
                            negative. The standard handling for a class present in the scene and absent from
                            the labels, and on DROW that is most of what is annotated: 56.4% of its test
@@ -606,14 +646,14 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
     if class_norm == "sigmoid" and logits.shape[-1] > 1 and int(labels.max()) > logits.shape[-1]:
         raise ValueError(f"a sigmoid head needs one column per class: {logits.shape[-1]} columns were given for "
                          f"labels up to column {int(labels.max())}")
+    if vote_loss not in ("mse", "euclidean"):
+        raise ValueError(f"vote_loss must be 'mse' or 'euclidean', not {vote_loss!r}")
+    balanced = class_balance and n_pos > 0 and n_neg > 0
 
     if logits.shape[-1] == 1:
         # Binary classification: background (0) vs. any person (1), or a soft target over the same beams
         binary_labels = (labels > 0).float() if soft_labels is None else soft_labels.float()
-        pos_weight = (
-            torch.tensor([float(n_neg) / float(n_pos)], device=logits.device)
-            if n_pos > 0 and n_neg > 0 else None
-        )
+        pos_weight = torch.tensor([float(n_neg) / float(n_pos)], device=logits.device) if balanced else None
         scores, scored = logits.squeeze(-1), binary_labels
         if keep is not None:
             scores, scored = scores[keep], scored[keep]
@@ -635,10 +675,10 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
         counted = hard if keep is None else hard[keep]
         positives = counted.sum(0)
         pos_weight = torch.where(positives > 0, (counted.shape[0] - positives) / positives.clamp(min=1.0),
-                                 torch.ones_like(positives))
+                                 torch.ones_like(positives)) if class_balance else None
         l_class = F.binary_cross_entropy_with_logits(scores, scored, pos_weight=pos_weight)
     else:
-        if n_pos > 0 and n_neg > 0:
+        if balanced:
             pos_weight = float(n_neg) / float(n_pos)
             weight = torch.ones(logits.shape[-1], device=logits.device)
             weight[1:] = pos_weight
@@ -651,10 +691,12 @@ def compute_loss(logits: torch.Tensor, votes: torch.Tensor,
                                   scored if keep is None else scored[keep], weight=weight)
 
     pos_mask = labels > 0
-    if pos_mask.any():
-        l_vote = F.mse_loss(votes[pos_mask], vote_targets[pos_mask])
-    else:
+    if not pos_mask.any():
         l_vote = logits.new_tensor(0.0)
+    elif vote_loss == "euclidean":
+        l_vote = torch.linalg.vector_norm(votes[pos_mask] - vote_targets[pos_mask], dim=-1).mean()
+    else:
+        l_vote = F.mse_loss(votes[pos_mask], vote_targets[pos_mask])
 
     loss = l_class + vote_weight * l_vote
     return loss, l_class.item(), l_vote.item()
@@ -902,6 +944,8 @@ class LidarFrameDataset(Dataset):
     input_mode  : "cutout" or "raw_scan"
     vote_radius : positive-beam radius around GT (same as vote_collect_radius)
     nsamp       : number of cutout samples per beam (ignored for raw_scan)
+    win_sz, thresh_dist : the cutout's width and depth in metres -- the network's own, as `_extract_input` reads them
+    person_only : only persons are targets, DR-SPAAM's `person_only`; wheelchairs and walkers become background
     cache       : keep preprocessed frames in RAM across epochs (default: True)
     beam_shift_aug : max random beam-index roll applied per access, 0 = off
     """
@@ -913,12 +957,16 @@ class LidarFrameDataset(Dataset):
                  dtime: int = 1, beam_shift_aug: int = 0,
                  diff_channels: bool = False, global_normalize: bool = False,
                  local_normalize_window: int = 0,
-                 range_jitter_scale: float = 0.0, range_jitter_offset: float = 0.0):
+                 range_jitter_scale: float = 0.0, range_jitter_offset: float = 0.0,
+                 win_sz: float = 1.66, thresh_dist: float = 1.0, person_only: bool = False):
         self._dataset       = dataset
         self._cfg           = cfg
         self._input_mode    = input_mode
         self._vote_radius   = vote_radius
         self._nsamp         = nsamp
+        self._win_sz        = win_sz
+        self._thresh_dist   = thresh_dist
+        self._person_only   = person_only
         self._cache_enabled = cache
         self._head          = head
         self._heatmap_sigma = heatmap_sigma
@@ -965,7 +1013,7 @@ class LidarFrameDataset(Dataset):
         scans_hist, odoms_hist = _apply_history_mode(
             scans_hist, odoms_hist, self._history_mode, seed=det_idx)
 
-        gt_per_class = {
+        gt_per_class = {3: ds.det_wp[seq][det_idx]} if self._person_only else {
             1: ds.det_wc[seq][det_idx],
             2: ds.det_wa[seq][det_idx],
             3: ds.det_wp[seq][det_idx],
@@ -988,8 +1036,8 @@ class LidarFrameDataset(Dataset):
                 np.asarray(arr, dtype=np.float32).transpose(1, 0, 2))  # (N,T,1)
         else:
             arr = build_cutout(self._input_mode, scans_hist, odoms_hist, len(scan),
-                               self._angles, nsamp=self._nsamp,
-                               laser_inc=self._cfg.laser_inc)
+                               self._angles, nsamp=self._nsamp, win_sz=self._win_sz,
+                               thresh_dist=self._thresh_dist, laser_inc=self._cfg.laser_inc)
             x = torch.from_numpy(np.asarray(arr, dtype=np.float32))    # (N,T,S)
         result = (x, torch.from_numpy(labels), torch.from_numpy(vote_targets))
         if self._head == "heatmap":
@@ -1023,8 +1071,9 @@ class LidarFrameDataset(Dataset):
 
 def train_epoch(net, frame_ds: LidarFrameDataset, optimizer,
                 vote_weight: float, subsample: float = 1.0,
-                device: str = "cpu", batch_size: int = 4):
-    """One training epoch using the cached LidarFrameDataset."""
+                device: str = "cpu", batch_size: int = 4,
+                class_balance: bool = True, vote_loss: str = "mse", iteration_schedule=None):
+    """One training epoch using the cached LidarFrameDataset; `iteration_schedule` is stepped after every optimizer step."""
     if subsample < 1.0:
         n = max(1, int(len(frame_ds) * subsample))
         idx = random.sample(range(len(frame_ds)), n)
@@ -1035,7 +1084,7 @@ def train_epoch(net, frame_ds: LidarFrameDataset, optimizer,
     loader = DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=0)
 
     net.train()
-    total_loss = class_loss = vote_loss = 0.0
+    total_loss = class_loss = vote_total = 0.0
     n_steps = 0
     pbar = tqdm(loader, desc="  train", unit="fr", leave=False, dynamic_ncols=True)
 
@@ -1064,18 +1113,21 @@ def train_epoch(net, frame_ds: LidarFrameDataset, optimizer,
             else:
                 l_flat       = labels.reshape(B * N).to(device)
                 v_flat       = votes.reshape(B * N, 2).to(device)
-                loss, lc, lv = compute_loss(logits, vpred, l_flat, v_flat, vote_weight)
+                loss, lc, lv = compute_loss(logits, vpred, l_flat, v_flat, vote_weight,
+                                            class_balance=class_balance, vote_loss=vote_loss)
         optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
+        if iteration_schedule is not None:
+            iteration_schedule.step()
         total_loss += loss.item()
         class_loss += lc
-        vote_loss  += lv
+        vote_total += lv
         n_steps    += 1
         pbar.set_postfix(loss=f"{total_loss / n_steps:.4f}", refresh=False)
 
     n = max(n_steps, 1)
-    return total_loss / n, class_loss / n, vote_loss / n
+    return total_loss / n, class_loss / n, vote_total / n
 
 
 # ---------------------------------------------------------------------------
@@ -1122,7 +1174,7 @@ def _bounded(frame_ds, max_frames: int):
 
 def evaluate_loss(net, frame_ds: LidarFrameDataset, vote_weight: float,
                   subsample: float = 1.0, device: str = "cpu",
-                  batch_size: int = 4):
+                  batch_size: int = 4, class_balance: bool = True, vote_loss: str = "mse"):
     """Compute average loss on a cached LidarFrameDataset (no gradient)."""
     if subsample < 1.0:
         n = max(1, int(len(frame_ds) * min(subsample * 2, 1.0)))
@@ -1134,7 +1186,7 @@ def evaluate_loss(net, frame_ds: LidarFrameDataset, vote_weight: float,
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
 
     net.eval()
-    total_loss = class_loss = vote_loss = 0.0
+    total_loss = class_loss = vote_total = 0.0
     n_steps = 0
     pbar = tqdm(loader, desc="    val", unit="fr", leave=False, dynamic_ncols=True)
 
@@ -1161,15 +1213,16 @@ def evaluate_loss(net, frame_ds: LidarFrameDataset, vote_weight: float,
                 else:
                     l_flat       = labels.reshape(B * N).to(device)
                     v_flat       = votes.reshape(B * N, 2).to(device)
-                    loss, lc, lv = compute_loss(logits, vpred, l_flat, v_flat, vote_weight)
+                    loss, lc, lv = compute_loss(logits, vpred, l_flat, v_flat, vote_weight,
+                                                class_balance=class_balance, vote_loss=vote_loss)
             total_loss += loss.item()
             class_loss += lc
-            vote_loss  += lv
+            vote_total += lv
             n_steps    += 1
             pbar.set_postfix(loss=f"{total_loss / n_steps:.4f}", refresh=False)
 
     n = max(n_steps, 1)
-    return total_loss / n, class_loss / n, vote_loss / n
+    return total_loss / n, class_loss / n, vote_total / n
 
 
 # The end-of-training val pass is bounded too. Val is three whole held-out
@@ -1514,7 +1567,7 @@ def _arch_metadata(net) -> dict:
     shape-mismatching against _default_args()'s hardcoded sizes.
     """
     meta = {}
-    for attr in ("n_time", "channels", "n_spatial_stages"):
+    for attr in ("n_time", "num_scans", "channels", "n_spatial_stages", "person_only", "cutout_name"):
         if hasattr(net, attr):
             meta[attr] = getattr(net, attr)
     return meta
@@ -1627,6 +1680,12 @@ def _default_args(**overrides) -> SimpleNamespace:
         range_jitter_offset=0.0,
         vote_radius=0.6,
         vote_weight=0.02,
+        person_only=False,
+        cutout_name="drow",
+        class_balance=True,
+        vote_loss="mse",
+        amsgrad=False,
+        min_lr=1e-6,
         subsample=1.0,
         batch_size=4,
         frame_cache=True,
@@ -1723,7 +1782,8 @@ def train_model(args) -> dict:
         _freeze_backbone(net)
     optimizer = _make_optimizer(
         (p for p in net.parameters() if p.requires_grad),
-        lr=args.lr, weight_decay=args.weight_decay, using_dml=using_dml)
+        lr=args.lr, weight_decay=args.weight_decay, using_dml=using_dml,
+        amsgrad=getattr(args, "amsgrad", False))
 
     start_epoch = 0
     resumed_val_auc = None
@@ -1755,6 +1815,10 @@ def train_model(args) -> dict:
     _local_normalize_window = getattr(args, "local_normalize_window", 0)
     _range_jitter_scale  = getattr(args, "range_jitter_scale", 0.0)
     _range_jitter_offset = getattr(args, "range_jitter_offset", 0.0)
+    # The network's own window, the one `_extract_input` scores it on, and DR-SPAAM's person-only targets.
+    _window = dict(win_sz=getattr(net, "WIN_SZ", 1.66), thresh_dist=getattr(net, "THRESH_DIST", 1.0),
+                   person_only=getattr(args, "person_only", False))
+    _loss = dict(class_balance=getattr(args, "class_balance", True), vote_loss=getattr(args, "vote_loss", "mse"))
     train_frame_ds = LidarFrameDataset(
         train_ds, cfg, _input_mode, args.vote_radius, _nsamp,
         cache=_frame_cache, head=_head, heatmap_sigma=_heatmap_sigma,
@@ -1763,7 +1827,7 @@ def train_model(args) -> dict:
         global_normalize=_global_normalize,
         local_normalize_window=_local_normalize_window,
         range_jitter_scale=_range_jitter_scale,
-        range_jitter_offset=_range_jitter_offset)
+        range_jitter_offset=_range_jitter_offset, **_window)
     # Never cached: val is three whole held-out recordings (195,058 frames,
     # nearly 2x the training set), and only a bounded stride of it is ever read.
     # Caching all of it cost ~4.9 GB on top of train's ~2.7 GB and OOM'd a 17 GB
@@ -1775,7 +1839,7 @@ def train_model(args) -> dict:
         beam_shift_aug=0,  # never augment validation
         diff_channels=_diff_channels, global_normalize=_global_normalize,
         local_normalize_window=_local_normalize_window,
-        range_jitter_scale=0.0, range_jitter_offset=0.0)  # never augment validation
+        range_jitter_scale=0.0, range_jitter_offset=0.0, **_window)  # never augment validation
         # the three representation flags above must match train
         if val_ds is not None else None)
 
@@ -1784,20 +1848,15 @@ def train_model(args) -> dict:
 
     # LR scheduler
     schedule = getattr(args, "lr_schedule", "none")
-    if schedule == "cosine":
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=args.epochs, eta_min=args.lr * 1e-2)
-    elif schedule == "plateau":
-        if val_ds is None:
-            print("  [WARN] lr_schedule=plateau requires a val split; "
-                  "scheduler disabled.\n")
-            scheduler = None
-        else:
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer, patience=max(3, args.epochs // 10),
-                factor=0.5)
-    else:
-        scheduler = None
+    if schedule == "plateau" and val_ds is None:
+        print("  [WARN] lr_schedule=plateau requires a val split; "
+              "scheduler disabled.\n")
+        schedule = "none"
+    _subsample = getattr(args, "subsample", 1.0)
+    _iterations = math.ceil((len(train_frame_ds) if _subsample >= 1.0 else max(1, int(len(train_frame_ds) * _subsample)))
+                            / args.batch_size)
+    scheduler, per_iteration = lr_scheduler(optimizer, schedule, args.epochs, _iterations, args.lr,
+                                            getattr(args, "min_lr", 1e-6))
 
     # Early stopping and model selection, both on val wp-AUC.
     #
@@ -1848,6 +1907,7 @@ def train_model(args) -> dict:
             net, train_frame_ds, optimizer,
             vote_weight=args.vote_weight,
             subsample=args.subsample, device=device, batch_size=args.batch_size,
+            iteration_schedule=scheduler if per_iteration else None, **_loss,
         )
         history["epochs"].append(epoch)
         history["train_loss"].append(tl)
@@ -1868,7 +1928,7 @@ def train_model(args) -> dict:
                 net, _bounded(val_frame_ds, getattr(args, "auc_max_frames", 2000)),
                 vote_weight=args.vote_weight,
                 subsample=1.0, device=device,
-                batch_size=args.batch_size,
+                batch_size=args.batch_size, **_loss,
             )
             history["val_loss"].append(vl)
             history["val_class_loss"].append(vc)
@@ -1943,7 +2003,7 @@ def train_model(args) -> dict:
                             final_epoch = epoch
                             stop = True
 
-        if scheduler is not None and not isinstance(
+        if scheduler is not None and not per_iteration and not isinstance(
                 scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
             scheduler.step()
 
@@ -2110,9 +2170,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    # Trainable detectors — DROW/DR-SPAAM use published weights, LFE detectors are ONNX-only
+    # Trainable detectors -- DR-SPAAM uses published weights, LFE detectors are ONNX-only
     _TRAINABLE = [
         "algorithmic",
+        "drow",
         "li2former",
         "li2former_official",
         "spacetime_cnn",
@@ -2191,6 +2252,19 @@ def main():
                              "See _jitter_range(). Applied to x only, never at eval.")
     parser.add_argument("--vote-radius", type=float, default=0.6)
     parser.add_argument("--vote-weight", type=float, default=0.02)
+    # DR-SPAAM's own DROW recipe (`cfgs/base_drow_drow_cfg.yaml`), each part a flag; every default is unchanged.
+    parser.add_argument("--person-only", action="store_true", default=False,
+                        help="persons alone are targets, wheelchairs and walkers background, and --detector drow "
+                             "emits one person logit: DR-SPAAM's person_only")
+    parser.add_argument("--drow-cutout", dest="cutout_name", choices=sorted(DrowDetector.CUTOUTS), default="drow",
+                        help="--detector drow's window: Beyer et al.'s 1.66 m / 1.0 m / 48 points (the bundled "
+                             "weights'), or DR-SPAAM's 1.0 m / 0.5 m / 56")
+    parser.add_argument("--no-class-balance", dest="class_balance", action="store_false", default=True,
+                        help="weight every beam alike, as DR-SPAAM's BCE does, instead of positives by n_neg/n_pos")
+    parser.add_argument("--vote-loss", choices=["mse", "euclidean"], default="mse",
+                        help="the vote term: MSE over offsets, or DR-SPAAM's mean Euclidean distance")
+    parser.add_argument("--amsgrad", action="store_true", default=False, help="Adam with AMSGrad, as DR-SPAAM trains")
+    parser.add_argument("--min-lr", type=float, default=1e-6, help="where --lr-schedule exponential ends")
     parser.add_argument("--subsample",   type=float, default=1.0,
                         help="Fraction of frames per epoch (use 0.05 for quick dev)")
     parser.add_argument("--batch-size",  type=int,   default=4,
@@ -2246,9 +2320,10 @@ def main():
                         help="Early-stopping patience in epochs, counted on "
                              "val wp-AUC (0=disabled; default: 15). Saves the "
                              "best-wp-AUC checkpoint to <out>.best.pth.")
-    parser.add_argument("--lr-schedule", choices=["none", "cosine", "plateau"],
+    parser.add_argument("--lr-schedule", choices=["none", "cosine", "plateau", "exponential"],
                         default="none",
-                        help="LR schedule: none | cosine | plateau (default: none)")
+                        help="LR schedule: none | cosine | plateau | exponential, DR-SPAAM's per-iteration "
+                             "decay from --lr to --min-lr (default: none)")
     # Checkpointing
     parser.add_argument("--out",    type=Path, default=Path("weights_trained.pth"))
     parser.add_argument("--resume", type=Path, default=None,

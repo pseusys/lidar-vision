@@ -112,6 +112,43 @@ class TestBeamFeatures:
         assert torch.allclose(f[1, 2], beam_features(ranges[1, 2], angles))
 
 
+class TestTheDepthTunnel:
+    """The cutout's depth axis on the whole-scan input: every depth delta clipped to +-1 m, as DROW's window clips
+    returns more than its depth away from the centre beam, and everything else exactly as the adopted input reads it."""
+
+    DEPTHS = [1, 2, 4, 6, 8]          # range minus median, then each neighbour's along offset
+    ELSE = [0, 3, 5, 7, 9]            # the range itself and each neighbour's across offset
+
+    def _step(self):
+        """A wall at 4 m with a doorway to a wall at 12 m: depth deltas of 8 m at the edge."""
+        ranges = torch.full((64,), 4.0)
+        ranges[32:] = 12.0
+        return ranges, _angles(64, 60.0)
+
+    def test_inside_the_tunnel_nothing_changes(self):
+        angles = _angles(64, 60.0)
+        ranges = 4.0 + 0.05 * torch.sin(torch.arange(64.0))
+        assert torch.equal(beam_features(ranges, angles, 30.0, depth_m=1.0), beam_features(ranges, angles, 30.0))
+
+    def test_a_depth_edge_is_clipped_to_the_tunnel(self):
+        ranges, angles = self._step()
+        assert beam_features(ranges, angles, 30.0)[self.DEPTHS].abs().max() > 1.0
+        assert beam_features(ranges, angles, 30.0, depth_m=1.0)[self.DEPTHS].abs().max() == pytest.approx(1.0)
+
+    def test_the_range_and_the_across_offsets_are_untouched(self):
+        ranges, angles = self._step()
+        assert torch.equal(beam_features(ranges, angles, 30.0, depth_m=1.0)[self.ELSE], beam_features(ranges, angles, 30.0)[self.ELSE])
+
+    def test_the_network_reads_it_when_asked(self):
+        ranges, angles = self._step()
+        net = CalibrationNetwork(angles, channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, max_range_m=30.0,
+                                 input_features="tunnel").eval()
+        seen = {}
+        net.stem.register_forward_hook(lambda module, inputs, output: seen.update(features=inputs[0]))
+        net(ranges[None])
+        assert torch.equal(seen["features"], beam_features(ranges[None], angles, 30.0, depth_m=1.0))
+
+
 def _pose(x, y, th):
     return torch.tensor([[x, y, th]], dtype=torch.float32)
 

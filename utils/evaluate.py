@@ -34,6 +34,7 @@ import argparse
 import sys
 import time
 from collections import deque
+from json import dumps
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Tuple
@@ -338,10 +339,11 @@ def eval_nn_model(det_name: str, weights_path: Path,
         # sizes, or a checkpoint saved with reduced capacity (e.g. the
         # overfitting-reduction experiments) would shape-mismatch on load.
         raw_ckpt = torch.load(weights_path, map_location="cpu")
-        arch_keys = ("channels", "n_spatial_stages")
+        arch_keys = ("channels", "n_spatial_stages", "person_only", "cutout_name")
         overrides = {k: raw_ckpt[k] for k in arch_keys if k in raw_ckpt}
-        if "n_time" in raw_ckpt:
-            overrides["time_frame"] = raw_ckpt["n_time"]  # checkpoint key -> _default_args field name
+        for window in ("n_time", "num_scans"):
+            if window in raw_ckpt:
+                overrides["time_frame"] = raw_ckpt[window]  # checkpoint key -> _default_args field name
         args = _default_args(detector=det_name, dataset=cfg.name, **overrides)
         net  = _build_model(args)
         net.load_state_dict(raw_ckpt["model"])
@@ -1067,6 +1069,9 @@ def main():
     parser.add_argument("--split",   choices=["test", "train", "val"],
                         default="test",
                         help="Dataset split (default: test)")
+    parser.add_argument("--out", type=Path, default=None,
+                        help="also write each detector's AUCs here as JSON, so a queue can tell a finished "
+                             "evaluation from an interrupted one")
     parser.add_argument("--frog-mode",
                         choices=["official", "transferred", "balanced"],
                         default=None,
@@ -1383,6 +1388,12 @@ def main():
             print_false_positive_summary(fp_results)
         else:
             print_summary(algo_stats, nn_results)
+        if args.out is not None:
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(dumps({"dataset": args.dataset, "split": args.split,
+                                       "detectors": {name: {k: float(v) for k, v in r.items() if k in ("agnostic", "wc", "wa", "wp")}
+                                                     for name, r in nn_results.items()}}, indent=1), encoding="utf-8")
+            print(f"wrote {args.out}")
 
     # ── Benchmark ─────────────────────────────────────────────────────────────
     if run_bench:

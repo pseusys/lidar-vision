@@ -11,7 +11,7 @@
 
 ## 1. Problem Statement
 
-A mobile robot carries a 2D lidar scanner mounted at leg height (~40 cm off the ground). The scanner rotates in a horizontal plane and produces a single array of **N range measurements** per timestep — one distance value `r_i` for each beam angle `φ_i`, uniformly distributed across the sensor's field of view (DROW: N ≈ 450 beams at 0.5° spacing; FROG: N = 720 beams at 0.5° spacing; JRDB: N = 541 beams at 0.5° spacing over a 270° FoV).
+A mobile robot carries a 2D lidar scanner mounted at leg height (~40 cm off the ground). The scanner rotates in a horizontal plane and produces a single array of **N range measurements** per timestep — one distance value `r_i` for each beam angle `φ_i`, uniformly distributed across the sensor's field of view (DROW: N ≈ 450 beams at 0.5° spacing; FROG: N = 720 beams at 0.25° spacing over 180°; JRDB: N = 541 beams at 0.5° spacing over a 270° FoV).
 
 The task is **beam-level classification with spatial vote regression**: for every beam `i` in every scan, predict:
 1. A probability over four classes: background, wheelchair (wc), walker (wa), person/pedestrian (wp)

@@ -256,7 +256,9 @@ gap -- and the cheap explanation for it is already dead in the same chain, becau
 *lost* 4.80 pp here against the 1.42 pp it cost on FROG. So the answer is not an input crop. This architecture
 has no distance normalisation of any kind, while every published DROW baseline resamples a fixed metric window
 per beam, and what the two results together say is that the missing piece is in the **loss or the vote target**
-rather than at the input.
+rather than at the input. *(Premature, 2026-11-08: the metric window tested the input's angular axis only, its depth
+axis is 95(c), and the section below finds the gap is transfer from train to test rather than anything stage 2
+fails to fit.)*
 
 **Read any single-seed DROW delta in this table against its own arc arms.** `kernel5` at 24.20% and `kernel3` at
 28.57% are not monotone in `k`, and no mechanism makes a 5-beam arc worse than a 3-beam one -- so either the
@@ -325,6 +327,29 @@ suspects: the kernel arc, the metric window, capacity in both directions and the
 measured on DROW and all closed. What is left is **distance** -- real, +5.2 pp, mechanism open -- and
 **temporal input**, which is untouched: DROW3's 71.7% is a five-scan odometry-aligned model, and this project's
 memory cannot learn across DROW's 24 s annotation gaps (footnote 14).
+
+### DROW's gap is transfer, not fitting, and not the harness (2026-11-08)
+
+**Temporal input cannot be the gap at stage 2**: at one frame our stage 2 scores 80.89% on FROG against DROW3 `T=1`'s
+73.9%, and 27.86% (two seeds) on DROW against DROW3 `T=1`'s 59.4% (Beyer et al.) and 66.6% (DR-SPAAM's retrain). Neither
+side of that comparison reads a second scan. Three measurements since, all on DROW test at stride 1:
+
+| measurement | result |
+| --- | --- |
+| DROW3's published weights, `evaluate.py` against `score_detections` on `FrameSplit`'s labels | **66.48% and 66.48%**: the harness and the labels are sound |
+| our stage 2 on the published schedule, 40 epochs, last weights, two seeds | **16.98%** against the headline's 27.86%: **-10.9 pp** |
+| our stage 2, train / test AP of the same weights | DROW **63.6% / 29.5%** (82.6% / 18.1% after 40 epochs); FROG **93.7% / 80.9%** |
+| DROW3 at `T=1` **retrained here** on DR-SPAAM's recipe, 40 epochs, last weights | **63.20%** against their published 66.6% (-3.4 pp); val loss flat from epoch 7 to 40 |
+| that cutout, train / test AP of the same weights | **66.5% / 63.2%**: train/test 1.05, against our stage 2's 2.16 at its best epoch |
+| our stage 2 at 15x and 58x fewer parameters (62,867 / 16,667), and LFE-shaped (LFE's input and widths), two seeds | test **22.97% / 24.15% / 25.38%**, train/test **2.47 / 1.94 / 2.19**: capacity is not what memorises |
+
+**So the network fits DROW's training recordings and does not carry what it learns to the test ones**, and the longer it
+trains the worse that gets, while on FROG train and test stay within 13 pp. **And a cutout network does carry it**, on
+the same frames through a training path now validated against a published number: 63.20% against our 27.86%. The stopping rule is not hiding a
+better model; it is the only thing standing between DROW's stage 2 and its training set. Read every DROW lever as a
+generalisation lever: what it takes away from what can be memorised, not what it adds. The composition that makes
+memorising pay is in [`dataset-properties.md`](dataset-properties.md): a third of train from a stationary robot, val
+essentially one recording, test all driving runs. Details and the per-seed table: `CHANGELOG.md`, 2026-11-08.
 
 ### Li2Former on DROW: the one reproduction that did not land, and what it is not caused by
 

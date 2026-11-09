@@ -43,7 +43,7 @@ class TestTheSubcommandExists:
         flags = _flags("score")
 
         assert flags["stage2"].required, "a stage-2 checkpoint decides the candidates"
-        assert flags["memory"].required, "a stage-3 checkpoint decides the rescoring"
+        assert flags["memory"].default is None, "a stage-3 checkpoint decides the rescoring, and without one stage 2 is scored alone"
 
     def test_it_takes_the_partition_and_the_split_to_score_on(self):
         flags = _flags("score")
@@ -113,3 +113,21 @@ class TestItDoesNotReimplementTheMetric:
     def test_it_reuses_the_partition_aware_split_loader(self):
         """`load_split` keys its candidate cache by partition; a bespoke loader here could read the wrong cache."""
         assert "load_split" in tak.score_checkpoint.__code__.co_names
+
+
+class TestStageTwoAlone:
+    """Without `--memory`, stage 2 is scored on any split by the pass step 2 scores its own test split with, which is
+    what sets a train-split AP beside the test AP of the same weights (fit against generalisation)."""
+
+    def test_omitting_the_memory_scores_stage_two_alone(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(tak, "score_stage2", lambda args, checkpoint, device: calls.append((args.split, checkpoint)))
+        monkeypatch.setattr(tak.torch, "load", lambda *args, **kwargs: {"model": "stage 2"})
+        tak.score_checkpoint(tak.build_parser().parse_args(["score", "--stage2", "x.pth", "--split", "train"]))
+
+        assert calls == [("train", {"model": "stage 2"})]
+
+    def test_it_reuses_step2_s_own_scoring_pass(self):
+        """A second metric would make a train AP incomparable with the test AP the run reported."""
+        assert "calibration_frames" in tak.score_stage2.__code__.co_names
+        assert "score_detections" in tak.score_stage2.__code__.co_names

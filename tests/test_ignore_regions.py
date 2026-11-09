@@ -156,11 +156,12 @@ class TestTheNonPersonAnnotationsReachTheLoader:
             det_wa=[[[], [(4.0, -0.1)]]],
         )
         split = tak.frames_from_dataset(ds, tak.DATASETS["drow"])
-        assert len(split.other_polar) == len(split.people_polar) == 2
-        assert len(split.other_polar[0]) == 0
-        assert split.other_polar[1][:, 0].tolist() == pytest.approx([3.0, 4.0])
+        assert len(split.other_by_class) == len(split.people_polar) == 2
+        assert [len(q) for q in split.other_by_class[0]] == [0, 0]
+        wheelchairs, walkers = split.other_by_class[1]
+        assert wheelchairs[:, 0].tolist() == pytest.approx([3.0]) and walkers[:, 0].tolist() == pytest.approx([4.0])
 
-    def test_a_one_class_dataset_gives_an_empty_array_per_frame_and_not_a_missing_one(self):
+    def test_a_one_class_dataset_gives_an_empty_tuple_per_frame_and_not_a_missing_one(self):
         """So the training loop indexes it unconditionally instead of asking which dataset it is on."""
         ds = SimpleNamespace(
             scans=[np.stack([np.full(8, float(i)) for i in range(2)]).astype(np.float32)],
@@ -170,7 +171,7 @@ class TestTheNonPersonAnnotationsReachTheLoader:
             det_wp=[[[(2.0, 0.0)]]],
         )
         split = tak.frames_from_dataset(ds, tak.DATASETS["frog"])
-        assert len(split.other_polar) == 1 and split.other_polar[0].shape == (0, 2)
+        assert split.other_by_class == [()]
 
     def test_a_label_no_sensor_of_this_kind_could_have_produced_is_dropped_here_too(self):
         """DROW's four annotations at 316-716 m are in `det_wp`; nothing says the other two files are cleaner."""
@@ -181,7 +182,7 @@ class TestTheNonPersonAnnotationsReachTheLoader:
             det_wp=[[[]]], det_wc=[[[(400.0, 0.0), (3.0, 0.0)]]], det_wa=[[[]]],
         )
         split = tak.frames_from_dataset(ds, tak.DATASETS["drow"])
-        assert split.other_polar[0][:, 0].tolist() == pytest.approx([3.0])
+        assert split.other_by_class[0][0][:, 0].tolist() == pytest.approx([3.0])
 
 
 class TestTheFlagAndItsMirror:

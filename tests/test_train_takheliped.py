@@ -20,7 +20,7 @@ from takheliped.utils.drow_utils import _win2global, swap_vote_frame
 from train import make_targets
 from train_takheliped import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, clip_state_grad, coast_targets, decode_votes, evaluate, evaluation_segments,
-    FrameSplit, SequenceCandidates, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
+    FrameSplit, SequenceCandidates, drow_annotation_pattern, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
     FROG, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, matched_person_xy, coasting_hits, exponential_schedule, network_shape, select_test_weights, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
     union_decode,
 )
@@ -150,7 +150,7 @@ class TestNetworkCandidates:
             people = [np.array([[3.0, phi]])] * 3
             xy = [np.array([[-3.0 * np.sin(phi), 3.0 * np.cos(phi)]])] * 3
             return FrameSplit(scans, np.zeros((3, 3), np.float32), np.zeros(3, np.int64), np.arange(3), people, xy,
-                              [np.zeros((0, 2))] * 3, [()] * 3, np.arange(3) / 40.0)
+                              [()] * 3, np.arange(3) / 40.0)
 
         want = evaluate_calibration(net, split(at_limit), np.arange(3), "cpu", 3)
         got = evaluate_calibration(net, split(missing), np.arange(3), "cpu", 3)
@@ -183,7 +183,7 @@ class TestNetworkCandidates:
         people = [np.array([[3.0, phi]]), np.array([[net.max_range_m, phi]])]
         xy = [np.array([[-r * np.sin(phi), r * np.cos(phi)]]) for r in (3.0, net.max_range_m)]
         split = FrameSplit(scans, np.zeros((2, 3), np.float32), np.zeros(2, np.int64), np.arange(2), people, xy,
-                           [np.zeros((0, 2))] * 2, [()] * 2, np.arange(2) / 40.0)
+                           [()] * 2, np.arange(2) / 40.0)
         assert evaluate_calibration(net, split, np.arange(2), "cpu", 2)["recall"] == pytest.approx(0.5)     # only the wall's person is found
 
 
@@ -1299,10 +1299,44 @@ class TestFirstRecordings:
         split = FrameSplit(scans=np.arange(10, dtype=np.float32).reshape(5, 2), poses=np.zeros((5, 3), np.float32), start=np.array([0, 0, 2, 2, 2]),
                            annotated=np.array([1, 3, 4]), people_polar=[np.ones((1, 2)), np.zeros((0, 2)), np.ones((2, 2))],
                            people_xy=[np.ones((1, 2)), np.zeros((0, 2)), np.ones((2, 2))],
-                           other_polar=[np.zeros((0, 2))] * 3, other_by_class=[()] * 3, time=np.arange(5) * 0.04)
+                           other_by_class=[()] * 3, time=np.arange(5) * 0.04)
         first = first_recordings(split, 1)
         assert first.scans.shape == (2, 2) and first.start.tolist() == [0, 0] and first.time.tolist() == pytest.approx([0.0, 0.04])
         assert first.annotated.tolist() == [1] and len(first.people_polar) == 1 and len(first.people_xy) == 1
+
+
+class TestDrowAnnotationPattern:
+    """Item 98: FROG's stage 2 trained on DROW's annotation pattern -- bursts of 20 frames at every 5th scan, one burst
+    per 400 scans of each recording -- which prices "17.8x less supervision" at stage 2, where it was never priced."""
+
+    def _split(self, lengths=(1000, 450)):
+        """Every frame annotated, as on FROG, across recordings of `lengths` frames; each frame's one person is its index."""
+        n = sum(lengths)
+        start = np.concatenate([np.full(length, offset) for offset, length in zip(np.cumsum((0,) + lengths[:-1]), lengths)])
+        people = [np.array([[float(f), 0.0]]) for f in range(n)]
+        return FrameSplit(scans=np.zeros((n, 2), np.float32), poses=np.zeros((n, 3), np.float32), start=start,
+                          annotated=np.arange(n), people_polar=people, people_xy=people, other_by_class=[()] * n,
+                          time=np.arange(n) * 0.025)
+
+    def test_it_keeps_bursts_of_twenty_at_every_fifth_scan_once_per_four_hundred(self):
+        thinned = drow_annotation_pattern(self._split((1000,)))
+        assert thinned.annotated.tolist() == [p for p in range(1000) if p % 400 < 100 and p % 5 == 0]
+        assert len(thinned.annotated) == 60
+
+    def test_the_pattern_restarts_with_every_recording(self):
+        thinned = drow_annotation_pattern(self._split((1000, 450)))
+        second = thinned.annotated[thinned.annotated >= 1000] - 1000
+        assert second.tolist() == [p for p in range(450) if p % 400 < 100 and p % 5 == 0]
+
+    def test_each_kept_frame_keeps_its_own_people_and_every_scan_stays(self):
+        split = self._split()
+        thinned = drow_annotation_pattern(split)
+        assert [p[0, 0] for p in thinned.people_polar] == thinned.annotated.astype(float).tolist()
+        assert thinned.scans is split.scans and thinned.start is split.start
+
+    def test_the_flag_is_off_by_default(self):
+        assert build_parser().parse_args(["step2"]).annotation_pattern == "all"
+        assert build_parser().parse_args(["step2", "--annotation-pattern", "drow"]).annotation_pattern == "drow"
 
 
 class TestEvaluate:
