@@ -20,7 +20,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).parent.parent / "library"))
 
 from takheliped.detectors.takheliped import (
-    BLOCKS, N_BEAM_FEATURES, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, ConvNeXtBlock, MetricGather, ObjectMemory,
+    BLOCKS, N_BEAM_FEATURES, RECURRENCES, VOTE_FRAMES, CalibrationNetwork, ChannelNorm, ConvNeXtBlock, MetricGather, ObjectMemory,
     ResidualBlock, SlotRules, beam_features, scan_scale,
     fold_legacy_calibration, gather_beams, metric_offsets,
     Slots, free_range_profile, initial_slots, lfe_features, load_calibration_weights, manage_slots, render_prior, sanitize_ranges,
@@ -186,6 +186,41 @@ class TestTheScanNormalisedRange:
         net.stem.register_forward_hook(lambda module, inputs, output: seen.update(features=inputs[0]))
         net(ranges[None])
         assert torch.equal(seen["features"], beam_features(ranges[None], angles, 30.0, scan_normalised=True))
+
+
+class TestTheNormalisation:
+    """Item 107 (f): every block normalised `GroupNorm(1, C)` -- over the channels *and every beam of the scan*, so each
+    layer rescales each beam by the whole scene's statistics -- against ConvNeXt's own LayerNorm, per position over the
+    channels (`norm="position"`). The scan-wide one stays the default, so every checkpoint on file reads the same."""
+
+    @staticmethod
+    def _reach(norm):
+        """How many input beams beam 32's logit reads, by gradient, in a network whose kernels alone span a few beams."""
+        torch.manual_seed(0)
+        net = CalibrationNetwork(_angles(64, 60.0), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=0, kernel_size=3,
+                                 max_range_m=30.0, aggregator=False, norm=norm).eval()
+        x = torch.full((1, 64), 5.0, requires_grad=True)
+        net(x)[0][0, 32].backward()
+        return int((x.grad[0].abs() > 0).sum())
+
+    def test_the_scan_wide_norm_reads_the_whole_scan(self):
+        assert self._reach("scan") == 64
+
+    def test_the_per_position_norm_reads_only_its_receptive_field(self):
+        assert self._reach("position") < 64
+
+    def test_the_per_position_norm_standardises_each_beam_over_its_channels(self):
+        norm = ChannelNorm(4)
+        x = torch.randn(2, 4, 7)
+        y = norm(x)
+        assert torch.allclose(y.mean(dim=1), torch.zeros(2, 7), atol=1e-5)
+        assert torch.allclose(y.var(dim=1, unbiased=False), torch.ones(2, 7), atol=1e-3)
+
+    def test_the_default_is_the_scan_wide_norm_every_checkpoint_was_trained_with(self):
+        net = CalibrationNetwork(_angles(64, 60.0), channels=(8, 16, 32), blocks=(1, 1, 1), bottleneck_blocks=1, max_range_m=30.0)
+        assert isinstance(net.encoder[0][0].norm, torch.nn.GroupNorm)
+        assert set(net.state_dict()) == set(CalibrationNetwork(_angles(64, 60.0), channels=(8, 16, 32), blocks=(1, 1, 1),
+                                                               bottleneck_blocks=1, max_range_m=30.0, norm="position").state_dict())
 
 
 class TestTheLocalLevel:

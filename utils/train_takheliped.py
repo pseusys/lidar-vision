@@ -924,7 +924,9 @@ def network_shape(args: Dict[str, str]) -> Dict[str, object]:
             "class_norm": parameters["class_norm"].default if args.get("class_norm") in unset else args["class_norm"],
             "classes": parameters["classes"].default if args.get("classes") in unset else int(args["classes"]),
             # Item 104's arm L adds weights, so it is a shape key; a checkpoint written before it existed has none.
-            "local_level": parameters["local_level"].default if args.get("local_level") in unset else literal_eval(args["local_level"])}
+            "local_level": parameters["local_level"].default if args.get("local_level") in unset else literal_eval(args["local_level"]),
+            # Item 107 (f): the same weights under different arithmetic, so a shape key like `head`.
+            "norm": parameters["norm"].default if args.get("norm") in unset else args["norm"]}
 
 
 def stage2_training(args: Dict[str, str]) -> Dict[str, object]:
@@ -2760,6 +2762,9 @@ def build_parser() -> argparse.ArgumentParser:
                        "features; lfe: LFE's 1 - r/max_range alone, the attribution arm F1; tunnel: the ten with every depth delta clipped "
                        "to DROW3's 1 m cutout depth; scan-norm: the ten with the range channel read as a ratio to the scan's median "
                        "return range (item 104's arm N)")
+    step2.add_argument("--norm", choices=("scan", "position"), default="scan", help="item 107 (f): how every block normalises "
+                       "-- scan, GroupNorm(1, C) over the channels and every beam of the scan, which every checkpoint on file "
+                       "used; position, ConvNeXt's own LayerNorm, each beam over its channels alone")
     step2.add_argument("--context-dropout", type=float, default=0.0, help="item 107: the probability that a training scan "
                        "keeps only a random window of 30-70%% of its beams, the rest read as no return and the people outside "
                        "it dropped from the targets, so no fixed layout of a training recording can be relied on; 0 is off")

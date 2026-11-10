@@ -820,13 +820,35 @@ class ObjectMemory(nn.Module):
         return MemoryOutput(candidate_logit, self._refined(encoded, recalled, cand_xy), slot_logit, slot_xy, coasting, slots, events)
 
 
+class ChannelNorm(nn.Module):
+    """ConvNeXt's own LayerNorm on a `[B, C, N]` tensor: each beam standardised over its channels alone, then a learnt
+    scale and shift per channel. Its parameters are named as `GroupNorm`'s, so a checkpoint's keys fit either."""
+
+    def __init__(self, channels: int, eps: float = 1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(ones(channels))
+        self.bias = nn.Parameter(zeros(channels))
+        self.eps = eps
+
+    def forward(self, x: Tensor) -> Tensor:
+        mean = x.mean(dim=1, keepdim=True)
+        var = (x - mean).pow(2).mean(dim=1, keepdim=True)
+        return (x - mean) / (var + self.eps).sqrt() * self.weight[:, None] + self.bias[:, None]
+
+
+#: How a block normalises (item 107 (f)). `scan`, every checkpoint's: `GroupNorm(1, C)`, over the channels **and every
+#: beam of the scan**, so each layer rescales each beam by the whole scene's statistics. `position`: ConvNeXt's own
+#: LayerNorm, per beam over its channels, which keeps a beam's features its own and the receptive field finite.
+NORMS = {"scan": lambda channels: nn.GroupNorm(1, channels), "position": ChannelNorm}
+
+
 class ConvNeXtBlock(nn.Module):
     """Depthwise large-kernel convolution, normalisation, pointwise widen-GELU-narrow, residual (ConvNeXt, Liu et al., CVPR 2022)."""
 
-    def __init__(self, channels: int, kernel_size: int = 7, expansion: int = 4):
+    def __init__(self, channels: int, kernel_size: int = 7, expansion: int = 4, norm: str = "scan"):
         super().__init__()
         self.depthwise = nn.Conv1d(channels, channels, kernel_size, padding=kernel_size // 2, groups=channels)
-        self.norm = nn.GroupNorm(1, channels)
+        self.norm = NORMS[norm](channels)
         self.widen = nn.Conv1d(channels, expansion * channels, 1)
         self.activation = nn.GELU()
         self.narrow = nn.Conv1d(expansion * channels, channels, 1)
@@ -844,13 +866,13 @@ class ResidualBlock(nn.Module):
     not where the score is; whether the *block* is remains untested, and this is the arm that tests it.
     """
 
-    def __init__(self, channels: int, kernel_size: int = 7, expansion: int = 4):
+    def __init__(self, channels: int, kernel_size: int = 7, expansion: int = 4, norm: str = "scan"):
         super().__init__()
         self.first = nn.Conv1d(channels, channels, kernel_size, padding=kernel_size // 2)
-        self.norm = nn.GroupNorm(1, channels)
+        self.norm = NORMS[norm](channels)
         self.activation = nn.GELU()
         self.second = nn.Conv1d(channels, channels, kernel_size, padding=kernel_size // 2)
-        self.out_norm = nn.GroupNorm(1, channels)
+        self.out_norm = NORMS[norm](channels)
 
     def forward(self, x: Tensor) -> Tensor:
         return x + self.out_norm(self.second(self.activation(self.norm(self.first(x)))))
@@ -927,19 +949,19 @@ class MetricGather(nn.Module):
     nothing -- but this changes *which beams the layer reads*, not what each one says.
     """
 
-    def __init__(self, channels: int, width_m: float, samples: int, step_rad: float):
+    def __init__(self, channels: int, width_m: float, samples: int, step_rad: float, norm: str = "scan"):
         super().__init__()
         self.width_m, self.samples, self.step_rad = width_m, samples, step_rad
         self.mix = nn.Conv2d(channels, channels, (1, samples), groups=channels)
-        self.norm = nn.GroupNorm(1, channels)
+        self.norm = NORMS[norm](channels)
 
     def forward(self, x: Tensor, ranges: Tensor) -> Tensor:
         offsets = metric_offsets(ranges, self.step_rad, self.width_m, self.samples)
         return x + self.norm(self.mix(gather_beams(x, offsets))[..., 0])
 
 
-def _stage(channels: int, blocks: int, kernel_size: int, expansion: int, block: str = "convnext") -> nn.Sequential:
-    return nn.Sequential(*(BLOCKS[block](channels, kernel_size, expansion) for _ in range(blocks)))
+def _stage(channels: int, blocks: int, kernel_size: int, expansion: int, block: str = "convnext", norm: str = "scan") -> nn.Sequential:
+    return nn.Sequential(*(BLOCKS[block](channels, kernel_size, expansion, norm) for _ in range(blocks)))
 
 
 #: The U-Net halves the beam axis three times, so a scan whose beam count this does not divide cannot come back
@@ -1031,7 +1053,8 @@ class CalibrationNetwork(nn.Module):
                  bottleneck_blocks: int = 2, kernel_size: int = 7, expansion: int = 4,
                  prior_channels: int = 0, dropout: float = 0.0, max_range_m: float = MAX_RANGE_M, input_features: str = "beam",
                  gather_width_m: float = 0.0, gather_samples: int = 9, vote_frame: str = "beam", block: str = "convnext",
-                 aggregator: bool = True, head: str = "binary", class_norm: str = "softmax", classes: int = 1, local_level: bool = False):
+                 aggregator: bool = True, head: str = "binary", class_norm: str = "softmax", classes: int = 1, local_level: bool = False,
+                 norm: str = "scan"):
         super().__init__()
         if input_features not in INPUT_CHANNELS:
             raise ValueError(f"input_features must be one of {sorted(INPUT_CHANNELS)}, not {input_features!r}")
@@ -1043,6 +1066,9 @@ class CalibrationNetwork(nn.Module):
             raise ValueError(f"head must be one of {list(HEADS)}, not {head!r}")
         if class_norm not in CLASS_NORMS:
             raise ValueError(f"class_norm must be one of {list(CLASS_NORMS)}, not {class_norm!r}")
+        if norm not in NORMS:
+            raise ValueError(f"norm must be one of {list(NORMS)}, not {norm!r}")
+        self.norm_kind = norm
         c0, c1, c2 = channels
         self.prior_channels = prior_channels
         self.max_range_m = max_range_m
@@ -1056,9 +1082,9 @@ class CalibrationNetwork(nn.Module):
         # Off unless asked for, and bit-identical when off, so every trained checkpoint keeps reading the same
         #. The step comes from the laser's own angles rather than a constant: a different
         # sensor has a different increment, and the window is specified in metres.
-        self.gather = MetricGather(c0, gather_width_m, gather_samples, float(angles[1] - angles[0])) \
+        self.gather = MetricGather(c0, gather_width_m, gather_samples, float(angles[1] - angles[0]), norm) \
             if gather_width_m > 0 else None
-        self.encoder = nn.ModuleList([_stage(c, n, kernel_size, expansion, block) for c, n in zip(channels, blocks)])
+        self.encoder = nn.ModuleList([_stage(c, n, kernel_size, expansion, block, norm) for c, n in zip(channels, blocks)])
         self.down = nn.ModuleList([nn.Conv1d(c0, c1, 2, stride=2), nn.Conv1d(c1, c2, 2, stride=2), nn.Conv1d(c2, c2, 2, stride=2)])
         # The whole-scan max, and the ablation of it. It is the one path by which a return at one end of
         # the field of view can reach the other end's logits: the U-Net's receptive field is wide but finite. Named as a
@@ -1071,9 +1097,9 @@ class CalibrationNetwork(nn.Module):
         with no_grad():
             self.aggregate.weight[:, pooled * c2:].zero_()   # the memory prior starts silent
         self.context = nn.Conv1d(c2, c2, 3, padding=1)
-        self.bottleneck = _stage(c2, bottleneck_blocks, kernel_size, expansion, block)
+        self.bottleneck = _stage(c2, bottleneck_blocks, kernel_size, expansion, block, norm)
         self.merge = nn.ModuleList([nn.Conv1d(2 * c2, c2, 1), nn.Conv1d(c2 + c1, c1, 1), nn.Conv1d(c1 + c0, c0, 1)])
-        self.decoder = nn.ModuleList([_stage(c, 1, kernel_size, expansion, block) for c in (c2, c1, c0)])
+        self.decoder = nn.ModuleList([_stage(c, 1, kernel_size, expansion, block, norm) for c in (c2, c1, c0)])
         self.dropout = nn.Dropout(dropout)
         # The head, and the one place the dataset's own classes reach the architecture. `binary` is the head every
         # number on file was measured with -- three channels, the logit in channel 0 -- and the attribute keeps its
