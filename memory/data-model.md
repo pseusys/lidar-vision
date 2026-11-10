@@ -284,8 +284,39 @@ By `dtime=20`, ~35 cm — close to half a walking stride.
 
 ## JRDB (`JRDB_Dataset`)
 
-DROW-compatible format, 541 beams, 270 deg FoV.
+DROW-compatible format, 541 beams, 270 deg FoV -- **assumed by the loader, never checked against real files**.
 Requires free manual registration at jrdb.erc.monash.edu and manual extraction into `library/takheliped/include/JRDB-data/` — never auto-downloaded, so its absence is normal (`gotchas.md`).
+
+### What to download
+
+Worked out 2026-11-10 from JRDB's two PDFs (*File Structure and Label Format*, *Sensor Setup*) and DR-SPAAM's released
+`bin/setup_jrdb_dataset.py` and `datahandle/jrdb_handle.py`. **Not yet checked against the files themselves.**
+
+- **The 2D laser is in none of the folders the file-structure PDF describes** (images, pointclouds, labels,
+  detections, timestamps). It exists only in the **rosbags**, as the merged front+rear topic `segway/scan_multi`,
+  which is the one topic DR-SPAAM's extractor reads. The rosbags are also the only source of wheel odometry (what
+  `.odom2` needs) and of the 1-channel lasers' mounting transform (`/tf`), which neither PDF gives.
+- **The download page (checked 2026-11-10) offers rosbags for the 2019 train split only** -- "Train Rosbags
+  (40 GB)". The "Full Train/Test Dataset" archives are `jrdb19_*_norosbag.zip`, and no test rosbags are listed
+  anywhere, so **JRDB's test split has no 2D laser to download** and its released test labels cannot be used here.
+- **That matches the published protocol.** DR-SPAAM's `dataset/jrdb_dataset.py` hard-codes 17 train-split
+  sequences for training and 10 for evaluation, and its `val` and `test` are the same 10. So the DR-SPAAM and DROW3
+  JRDB numbers are on a held-out part of the train split. The 17/10 lists are in that file.
+- **Download, all from the JRDB 2019 section:** Train Rosbags (40 GB); Train Timestamps (2.1 MB; the extractor matches
+  laser scans to `frames_pc.json` and `frames_img.json`); Train Labels (162 MB; `labels_3d`: box centre,
+  `label_id` track identity, `no_eval`, `num_points`, `distance`); Train Detections (82 MB, because DR-SPAAM's handle
+  loads `labels_2d_stitched` and `detections_2d_stitched` unconditionally, so the released code needs them to run
+  as-is); Train Calibrations (4 KB). Take the 2019 labels: the published numbers predate the 2022 release.
+- DR-SPAAM flips y on both scan and labels (`[:, ::-1]`, `y = -y`), because DROW's laser frame is y-right and
+  JRDB's is y-left, and moves labels into the laser frame with `jrdb_transforms.transform_pts_base_to_laser`.
+- **Not needed:** `images/` and `pointclouds/`. DR-SPAAM's handle loads them only for visualisation, and its
+  extractor rewrites their paths without opening them.
+- DR-SPAAM's extractor saves only `ranges` and assumes `linspace(-pi, pi, N)` for the angles. The message's own
+  `angle_min`/`angle_max`/`angle_increment` are discarded, so the geometry has to be measured from the bag.
+- `labels_3d` boxes are in the upper Velodyne's orientation (yaw 0.085 rad from `base_chassis`), centred on the
+  camera, not in the laser frame.
+- **Test-split labels were released 2025-09-14** (JRDB homepage), but without test rosbags they do not help a
+  2D-laser detector. `jrdb_dataset.py`'s docstring still says they are withheld.
 
 ## `LiveDataset` (ROS deployment only)
 
