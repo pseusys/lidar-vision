@@ -38,6 +38,29 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Stage 2's GroupNorm pools over the whole scan, which ConvNeXt's LayerNorm does not (2026-11-10)
+
+*keywords: item 107 (f), GroupNorm(1, C), whole-scan normalisation, receptive field 450 beams, ChannelNorm, --norm position, NORMS, ConvNeXt LayerNorm per position, docs/RESEARCH.md corrected, queue_drow_norm.py, reading 15*
+
+**Found while setting up item 107's receptive-field test.** Measured by gradient, every stage-2 shape reads all 450 of
+DROW's beams from every output beam -- the headline, kernel 3 with no bottleneck blocks, and that with one block per
+stage alike. Convolutions cannot do that; normalisation can. **Every ConvNeXt block (and the residual block, and
+`MetricGather`) normalises with `GroupNorm(1, C)`, which on a `[B, C, N]` tensor standardises over the channels *and
+every beam of the scan***: each layer rescales each beam by statistics of the whole scene. ConvNeXt's own LayerNorm
+standardises each position over its channels only. `docs/RESEARCH.md` had called the two "the same normalisation computed
+over the same axes"; that is corrected, and so is `docs/ARCHITECTURE.md`'s description of the block.
+
+**Why it matters to item 107.** It couples every beam's decision to the scene's global statistics at every layer,
+which is the kind of dependence items 102-107 have been circling: it makes the receptive field global whatever the
+kernels; it is a rescaling *inside* the network, which centring the output logit (104's local level) cannot undo; and a
+scene's statistics -- enclosed corridors against open halls -- differ between DROW's training and test recordings far
+more than between FROG's.
+
+**What was built**: `--norm position` (`ChannelNorm`, ConvNeXt's per-position LayerNorm, its parameters named as
+`GroupNorm`'s), off by default so every checkpoint on file is unchanged, and stored as a shape key; under it the
+headline shape reads 256 beams instead of 450. **The test**, prediction in `TODO.md` row 107 before it ran:
+`queue_drow_norm.py`, two DROW seeds and two FROG seeds beside two FROG controls trained the same way.
+
 ## Our stage 2 fits far DROW training people well past what a local model can, and that is what does not carry (2026-11-10)
 
 *keywords: item 107, reading 13, reading 14, results/drow_residual.json, results/drow_context.json, train against test by range, ours train AP 60% past 10 m cutout 35%, ratio 1.6 to 15.5, context dropout no gain, drow_context_dropout 26.0, learning curve flat 50 to 100 percent, drow_places_50 31.3, drow_places_25 20.6, context probe seed-dependent, blanking out of distribution*
