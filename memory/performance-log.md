@@ -345,6 +345,17 @@ an ignore region only under `--ignore-other-classes`, which is off. Their differ
 -- see `interpreting-evaluation.md` -- so every DROW comparison above that was read against 27.86% or 27.12% stands, and
 reads about 1.8 pp further from the cutout's 63.20% against the new default.
 
+### ConvNeXt's per-beam norm: DROW 37.95%, FROG -1.4 pp (2026-11-10)
+
+Stage 2 alone, two seeds each, val-best weights; FROG against a control trained the same day the same way:
+
+| | scan-wide `GroupNorm(1, C)` (every checkpoint on file) | per-beam LayerNorm (`--norm position`) |
+| --- | ---: | ---: |
+| DROW official test AP | 29.03% (28.62 / 29.43) | **37.95%** (37.83 / 38.06) |
+| FROG official test AP | 81.30% (81.26 / 81.33) | 79.90% (79.63 / 80.16) |
+
+The DROW gain is all under 3 m; past 5 m nothing moved. No CPU ms/frame yet -- the two norms are timed back to back next (`CHANGELOG.md`).
+
 ### On a geometry-balanced DROW the gap to the cutout is 11.9 pp, not 34.2 (2026-11-09)
 
 Each model trained and scored on one partition, person AP at 0.5 m (`CHANGELOG.md`; the partitions in `data-model.md`):

@@ -38,6 +38,43 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## ConvNeXt's per-beam norm lifts DROW's stage 2 from 29.0% to 38.0% and costs FROG 1.4 pp (2026-11-10)
+
+*keywords: item 107 (f), drow_position_norm_s0 37.83 s1 38.06, frog_scan_norm 81.30, frog_position_norm 79.90, --norm position, reading 15, results/drow_norm.json, gain at close range 0-2 m 48.5 to 64.9, far range unchanged, far train AP 64-65, pooled over within 0.50 to 0.64, A1 or A2 for the owner*
+
+**The test of the whole-scan GroupNorm**, prediction in `TODO.md` row 107 before it ran: two seeds of the DROW headline
+recipe at the default radii with `--norm position` (ConvNeXt's own LayerNorm, per beam over its channels), and on FROG
+two seeds of each norm at today's step-2 recipe, control and arm trained the same day (stage 2 alone, val-best weights):
+
+| | scan-wide norm (every checkpoint on file) | **per-beam norm** | cutout |
+| --- | ---: | ---: | ---: |
+| DROW test AP, s0 / s1, mean | 28.62 / 29.43%, 29.03% | **37.83 / 38.06%, 37.95%** | 63.20% |
+| DROW train AP, s0 / s1 | 71.05 / 68.55% | 76.81 / 76.09% | 66.50% |
+| DROW train / test | 2.48 / 2.33 | 2.03 / 2.00 | 1.05 |
+| DROW pooled AP over within-scan hits | 0.50 / 0.51 | 0.65 / 0.64 | 0.86 |
+| DROW populated AP over within-scan hits | 0.71 / 0.71 | 0.79 / 0.78 | 0.98 |
+| DROW best epochs | 8.73 / 7.74 | 10.98 / 9.98 | -- |
+| **FROG test AP**, s0 / s1, mean (own test pass) | 81.26 / 81.33%, **81.30%** | 79.63 / 80.16%, **79.90%** | -- |
+
+| DROW test, by the person's range | under 2 m | 2-3 m | 3-5 m | 5-10 m | past 10 m |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| scan-wide norm, mean of two | 48.5% | 28.1% | 18.9% | 11.6% | 4.1% |
+| **per-beam norm**, mean of two | **64.9%** | 33.5% | 23.0% | 10.3% | 5.2% |
+| cutout | 67.4% | 64.1% | 56.6% | 36.1% | 19.6% |
+| per-beam norm, DROW **train** | 82.3% | 69.8% | 74.5% | 67.5% | 64.5% |
+
+**Against the prediction:** DROW test AP rises well above 29% -- **met**, +8.9 pp, both seeds, the largest effect any
+DROW arm on file has had; comparability rises toward the cutout's -- **partly**, 0.50 -> 0.64 of 0.86; train / test
+flattens by range -- **not met**: the whole gain is at close range, where the per-beam network now stands at 0.96 of
+the cutout, and past 5 m nothing moved, with far-range *train* AP still 64-65% against the cutout's 35-52%; FROG's
+change small -- **1.4 pp lower**, both seeds below both controls.
+
+**What it means.** The scan-wide normalisation was one real coupling of each beam to its scene, and on DROW the larger
+part of what it cost was at close range. It was not the far-range memorisation: with it gone, the network still reaches
+far training people from context (its receptive field is still 256 beams, 128 deg) and still cannot on new recordings.
+Now that the field is finite it can be shrunk, which is the next test. **Whether the per-beam norm becomes the default
+(FROG recomputed at -1.4 pp, a published-faithful block) or a drop-in is the owner's A1 / A2 call.**
+
 ## Stage 2's GroupNorm pools over the whole scan, which ConvNeXt's LayerNorm does not (2026-11-10)
 
 *keywords: item 107 (f), GroupNorm(1, C), whole-scan normalisation, receptive field 450 beams, ChannelNorm, --norm position, NORMS, ConvNeXt LayerNorm per position, docs/RESEARCH.md corrected, queue_drow_norm.py, reading 15*
