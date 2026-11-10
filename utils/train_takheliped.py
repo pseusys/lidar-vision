@@ -67,6 +67,8 @@ DROW_ANNOTATION_STRIDE = 5      # DROW annotates every 5th scan of a burst,
 DROW_BURST_FRAMES = 20          # 20 frames to a burst,
 DROW_BURST_PERIOD = 400         # one burst every 400 scans (`memory/dataset-properties.md`)
 MIRROR_PROBABILITY = 0.5        # share of training clips `step2 --mirror` reverses
+#: `step2 --context-dropout`'s kept window, as a share of the scan's beams, drawn uniformly per scan (item 107).
+CONTEXT_KEEP = (0.3, 0.7)
 CANDIDATE_FLOOR = 0.01
 TOP_P = 64
 OPERATING_THRESHOLD = 0.3
@@ -278,7 +280,7 @@ DROW = DatasetSpec(name="drow", source_beams=450, fov_deg=224.5, source_spacing_
                    max_range_m=29.99, rated_range_m=30.0, annotated_share=0.05, people_per_annotated_frame=0.81,
                    classes=("pedestrian", "wheelchair", "walker"), other_detections=("det_wc", "det_wa"),
                    class_ids=(3, 1, 2), label_radii_m=(0.35, 0.6, 0.4), dt_average_frames=32, grid=drow_laser_angles,
-                   loader=_drow_loader, partitions=("official", "geometry-balanced", "geometry-shifted"))
+                   loader=_drow_loader, partitions=("official", "geometry-balanced", "geometry-shifted", "official-places-50", "official-places-25"))
 DATASETS = {spec.name: spec for spec in (FROG, DROW)}
 #: Every partition `--frog-mode` accepts; each dataset refuses the others' (`DatasetSpec.load`).
 PARTITIONS = tuple(dict.fromkeys(p for spec in DATASETS.values() for p in spec.partitions))
@@ -1026,6 +1028,40 @@ def mirror_scans(ranges: torch.Tensor, flip: np.ndarray) -> torch.Tensor:
     """Scans `[B, N]` mirrored left to right, beam for beam, where `flip` `[B]` is set."""
     mask = torch.from_numpy(np.asarray(flip)).to(ranges.device)
     return torch.where(mask[:, None], ranges.flip(-1), ranges)
+
+
+def context_windows(beams: int, batch: int, probability: float, rng: np.random.Generator) -> List[Optional[Tuple[int, int]]]:
+    """For each of `batch` scans, with `probability`, a contiguous window of beams `(lo, hi)` spanning a uniformly drawn
+    `CONTEXT_KEEP` share of the scan; None for the rest. Off, it draws nothing, so the run's other draws stay put."""
+    if not probability:
+        return [None] * batch
+    out = []
+    for keep in rng.random(batch) < probability:
+        if not keep:
+            out.append(None)
+            continue
+        width = max(1, round(rng.uniform(*CONTEXT_KEEP) * beams))
+        lo = int(rng.integers(0, beams - width + 1))
+        out.append((lo, lo + width))
+    return out
+
+
+def keep_window(scan: np.ndarray, people_polar: np.ndarray, others: Tuple[np.ndarray, ...], angles: np.ndarray,
+                window: Tuple[int, int], max_range_m: float) -> Tuple[np.ndarray, np.ndarray, Tuple[np.ndarray, ...]]:
+    """`scan` (a copy) with every beam outside `window` read as no return, and the people and objects whose bearing falls
+    outside it removed: they are not in the scan any more, so they cannot be targets (`step2 --context-dropout`)."""
+    lo, hi = window
+    kept = np.array(scan, copy=True)
+    kept[:lo] = max_range_m
+    kept[hi:] = max_range_m
+
+    def inside(polar):
+        polar = np.asarray(polar, np.float64).reshape(-1, 2)
+        if not len(polar):
+            return polar
+        beam = np.abs(angles[None, :] - polar[:, 1:2]).argmin(axis=1)
+        return polar[(beam >= lo) & (beam < hi)]
+    return kept, inside(people_polar), tuple(inside(o) for o in others)
 
 
 def frame_batch(split: "FrameSplit", frames: np.ndarray, device) -> torch.Tensor:
@@ -1963,6 +1999,12 @@ def train_calibration(args) -> None:
                 # bearings, so an unmirrored object silences the beams on the wrong side of the robot.
                 by_class = [tuple(mirror_people(q, angles) if m else q for q in t)
                             for t, m in zip(by_class, flip, strict=True)]
+            if args.context_dropout:
+                windows = context_windows(len(angles), len(frames), args.context_dropout, rng)
+                cut = [keep_window(s, g, o, angles, w, net.max_range_m) if w else (s, g, o)
+                       for s, g, o, w in zip(scans, people, by_class, windows, strict=True)]
+                scans, people, by_class = [c[0] for c in cut], [c[1] for c in cut], [c[2] for c in cut]
+                ranges = torch.from_numpy(np.stack(scans).astype(np.float32)).to(device)
             logit, votes, _ = net(ranges)
             targets = [make_targets(anchor_ranges(s, net.max_range_m), angles,
                                     class_annotations(spec, g, o, net.head_kind),
@@ -2718,6 +2760,9 @@ def build_parser() -> argparse.ArgumentParser:
                        "features; lfe: LFE's 1 - r/max_range alone, the attribution arm F1; tunnel: the ten with every depth delta clipped "
                        "to DROW3's 1 m cutout depth; scan-norm: the ten with the range channel read as a ratio to the scan's median "
                        "return range (item 104's arm N)")
+    step2.add_argument("--context-dropout", type=float, default=0.0, help="item 107: the probability that a training scan "
+                       "keeps only a random window of 30-70%% of its beams, the rest read as no return and the people outside "
+                       "it dropped from the targets, so no fixed layout of a training recording can be relied on; 0 is off")
     step2.add_argument("--local-level", action="store_true", help="item 104's arm L: a cutout-like branch over a 1 m metric window "
                        "sets each beam's logit, and the U-Net's logit is added with its mean over the scan removed, so whole-scan "
                        "context re-ranks beams inside a scan and cannot move the scan's level")

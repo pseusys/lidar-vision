@@ -21,6 +21,10 @@ official train's 10th percentile -- within 2 points of DROW's overall share. `ge
 official test exactly, and train and val made leak-free by the same rule, so it differs from `geometry-balanced` in the
 geometry and from the official split in the leak alone.
 
+**And the learning curve's two** (item 107): `official-places-50` and `official-places-25`, official DROW with its
+training recordings cut to that share of their places, kind by kind, a place kept whole or not at all, the smaller
+inside the larger; val and test are official.
+
     python drow_geometry_partition.py
 """
 
@@ -41,6 +45,9 @@ from train_takheliped import DROW, frames_from_dataset
 SPLITS = ("train", "val", "test")
 SIZE_TOLERANCE = 0.05
 SHARE_TOLERANCE = 0.02
+#: The learning curve's shares of official train's places, and the seed of the order they are taken in (item 107).
+PLACE_FRACTIONS = (0.5, 0.25)
+PLACES_SEED = 0
 #: An enclosed scan's median return range is under this percentile of official train's.
 ENCLOSED_PERCENTILE = 10
 OUT = Path(__file__).resolve().parents[1] / "library" / "takheliped" / "datasets" / "drow_partitions.py"
@@ -87,6 +94,24 @@ def solve_partition(groups: Sequence[Group], allowed: Mapping[str, Sequence[str]
     return {g.name: s for (g, s), x in zip(cells, result.x, strict=True) if x > 0.5}
 
 
+def places_for(groups: Sequence[Group], fraction: float, order: Mapping[str, Sequence[str]]) -> set:
+    """The training places kept at `fraction` of official train's annotated scans, kind by kind: each kind's places in
+    `order`, taken as a prefix for as long as the next one brings the kind closer to its share. A prefix of one order,
+    so a smaller fraction's places are always inside a larger one's."""
+    by_name = {g.name: g for g in groups}
+    kept = set()
+    for kind, names in order.items():
+        target = fraction * sum(by_name[n].official.get("train", 0) for n in names)
+        total = 0
+        for n in names:
+            scans = by_name[n].official.get("train", 0)
+            if abs(total + scans - target) >= abs(total - target):
+                break
+            kept.add(n)
+            total += scans
+    return kept
+
+
 def place(stem: str) -> str:
     """The recording a segment belongs to. DROW's files are `<name>.bag.csv`, so a stem ends in `.bag`, which has to
     go before the segment letter can be seen -- missed once, it made every segment a place of its own."""
@@ -124,6 +149,8 @@ def measure() -> tuple:
 def summary(rows, split_of_stem: Mapping[str, str]) -> Dict[str, Dict[str, int]]:
     out = {s: dict(recordings=0, annotated=0, enclosed=0, people=0) for s in SPLITS}
     for row in rows:
+        if split_of_stem.get(row["stem"]) is None:      # a recording the partition leaves out
+            continue
         cell = out[split_of_stem[row["stem"]]]
         cell["recordings"] += 1
         cell["annotated"] += len(row["medians"])
@@ -156,6 +183,18 @@ def main() -> int:
         summaries[mode] = summary(rows, split_of_stem)
         moved = sum(len(r["medians"]) for r in rows if split_of_stem[r["stem"]] != r["split"])
         summaries[mode]["moved_annotated"] = moved
+    # The learning curve's partitions (item 107): official DROW with train cut to a share of its places, kind by kind,
+    # nested because both take a prefix of one seeded order; val and test untouched.
+    rng = np.random.default_rng(PLACES_SEED)
+    train_groups = [g for g in groups if g.official.get("train")]
+    order = {kind: [train_groups[i].name for i in rng.permutation([j for j, g in enumerate(train_groups) if g.kind == kind])]
+             for kind in sorted({g.kind for g in train_groups})}
+    for fraction in PLACE_FRACTIONS:
+        mode = f"official-places-{round(100 * fraction)}"
+        kept = places_for(train_groups, fraction, order)
+        split_of_stem = {r["stem"]: (r["split"] if r["split"] != "train" or place(r["stem"]) in kept else None) for r in rows}
+        tables[mode] = {s: sorted(stem for stem, t in split_of_stem.items() if t == s) for s in SPLITS}
+        summaries[mode] = summary(rows, split_of_stem)
     print(f"enclosed: median return range under {threshold:.3f} m (official train's p{ENCLOSED_PERCENTILE}); "
           f"DROW-wide share {share:.1%}", flush=True)
     for mode, rows_ in summaries.items():

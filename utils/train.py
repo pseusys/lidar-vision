@@ -248,7 +248,8 @@ from takheliped.utils.tracking import SimpleTracker, odom_xya_delta_to_tracker_f
 
 #: Every partition `--frog-mode` names, on train.py and evaluate.py alike: FROG's three, then DROW's (`official` shared).
 #: Each loader refuses the other dataset's names.
-PARTITIONS = ("official", "transferred", "balanced", "geometry-balanced", "geometry-shifted")
+PARTITIONS = ("official", "transferred", "balanced", "geometry-balanced", "geometry-shifted", "official-places-50",
+              "official-places-25")
 
 
 def _setup_datasets(args):

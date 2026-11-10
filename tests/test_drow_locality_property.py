@@ -15,9 +15,10 @@ UTILS = Path(__file__).resolve().parents[1] / "utils"
 if str(UTILS) not in sys.path:
     sys.path.insert(0, str(UTILS))
 
-from drow_locality_property import (ap_by_bin, confuser_bins, exact_twins, nearest_distance, partition_verdict,  # noqa: E402
-                                    ranking_summary, recording_type, reference_bins, scan_descriptor, scan_levels, scan_statistics,
-                                    sister_recordings, top_k_hits, transfer_summary)
+from drow_locality_property import (ap_by_bin, ap_by_range, confuser_bins, exact_twins, nearest_distance,  # noqa: E402
+                                    partition_verdict, person_ranges, range_band_frames, ranking_summary, recording_type,
+                                    reference_bins, scan_descriptor, scan_levels, scan_statistics, sister_recordings, top_k_hits,
+                                    transfer_summary)
 from train_takheliped import score_detections  # noqa: E402
 
 SPACING_DEG = 0.5
@@ -244,6 +245,30 @@ class TestPartitionVerdict:
     ])
     def test_each_outcome(self, balanced, shifted, verdict):
         assert partition_verdict(self.rows(*balanced), self.rows(*shifted))["verdict"] == verdict
+
+
+class TestRangeBands:
+    """Item 107's first test: AP and within-scan hits with people and detections both kept inside one range band."""
+
+    @staticmethod
+    def frames():
+        f = TestWithinFrameRanking._frame
+        return [f([0.9, 0.8, 0.2], [[0, 1.5], [0, 6.0], [0, 3.0]], [[0, 1.5], [0, 6.0]]),
+                f([0.7, 0.6], [[3.9, 0], [0, 6.2]], [[0, 1.6], [0, 6.2]])]
+
+    def test_a_band_keeps_only_its_own_people_and_detections(self):
+        near = range_band_frames(self.frames(), 1.0, 2.5)
+        assert [len(s) for s, _, _ in near] == [1, 0]
+        assert [len(g) for _, _, g in near] == [1, 1]
+
+    def test_each_band_is_scored_alone(self):
+        bands = ap_by_range(self.frames(), (1.0, 2.5, 5.0, 10.0))
+        assert bands["1.0-2.5 m"]["people"] == 2 and bands["5.0-10.0 m"]["people"] == 2
+        assert bands["5.0-10.0 m"]["top_k_hits"] == pytest.approx(1.0)
+        assert bands["1.0-2.5 m"]["top_k_hits"] == pytest.approx(0.5)
+
+    def test_person_ranges_are_every_annotated_person_s_distance(self):
+        assert person_ranges([np.array([[3.0, 4.0]]), np.zeros((0, 2)), np.array([[0.0, 2.0], [6.0, 8.0]])]).tolist() == [5.0, 2.0, 10.0]
 
 
 class TestExactTwins:

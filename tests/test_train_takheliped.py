@@ -22,7 +22,7 @@ from train_takheliped import (
     BestCheckpoint, EarlyStopping, PeriodicCheckpoint, StreamSampler, build_candidates, calibration_network, candidate_cache_path, decode_candidates, evaluate_calibration, candidate_pooling_weights, candidate_targets, clip_state_grad, coast_targets, decode_votes, evaluate, evaluation_segments,
     FrameSplit, SequenceCandidates, drow_annotation_pattern, exchange_rate, first_recordings, frames_from_dataset, joint_frame_loss, joint_step, network_candidates, oracle_prior, evaluate_joint, PRIOR_MODES, sample_drift, chunk_elapsed,
     FROG, MIN_DT_S, TOP_P, GRAD_SKIP_LIMIT, build_parser, matched_person_xy, coasting_hits, exponential_schedule, network_shape, select_test_weights, mirror_people, mirror_scans, gradient_verdict, load_resume, periodic_reset, perturb_poses, memory_schedule, non_finite_summary, rng_restore, rng_snapshot, save_resume, training_fault, object_memory, frame_periods, gather, mean_frame_period, memory_ms_per_frame, pack, plateau_schedule, recording_bounds, replay_sort, score_detections,
-    union_decode,
+    union_decode, CONTEXT_KEEP, context_windows, keep_window,
 )
 
 
@@ -528,6 +528,47 @@ class TestStage2Recipe:
         assert candidates[0, 0] == pytest.approx(0.9)            # the vote grid would score the voters' mean, ~0.5
         assert np.allclose(candidates[0, 1:], target, atol=1e-6)
         assert len(candidates) == 1
+
+
+class TestContextDropout:
+    """Item 107's causal test: a training scan kept only inside a random window of its field of view, the rest read as no
+    return, so the network cannot lean on the layout of a training recording. People outside the window are not in the
+    scan any more, so they leave the targets with the beams they stood on."""
+
+    ANGLES = np.linspace(-np.pi / 2, np.pi / 2, 100, endpoint=False)
+
+    def test_beams_outside_the_window_read_as_no_return_and_inside_are_untouched(self):
+        scan = np.linspace(1.0, 5.0, 100).astype(np.float32)
+        kept, _, _ = keep_window(scan, np.zeros((0, 2)), (), self.ANGLES, (30, 70), 29.99)
+        assert np.all(kept[:30] == 29.99) and np.all(kept[70:] == 29.99)
+        assert np.array_equal(kept[30:70], scan[30:70])
+
+    def test_the_dataset_s_own_scan_is_never_written(self):
+        scan = np.ones(100, np.float32)
+        keep_window(scan, np.zeros((0, 2)), (), self.ANGLES, (30, 70), 29.99)
+        assert np.all(scan == 1.0)
+
+    def test_people_and_objects_outside_the_window_leave_the_targets(self):
+        inside, outside = [2.0, self.ANGLES[50]], [3.0, self.ANGLES[10]]
+        _, people, others = keep_window(np.ones(100, np.float32), np.array([inside, outside]),
+                                        (np.array([outside]), np.array([inside])), self.ANGLES, (30, 70), 29.99)
+        assert people.tolist() == [inside]
+        assert [len(o) for o in others] == [0, 1]
+
+    def test_off_it_draws_nothing_from_the_generator(self):
+        """Off, the arm must leave every other random draw of a run exactly where it was."""
+        rng = np.random.default_rng(5)
+        assert context_windows(100, 8, 0.0, rng) == [None] * 8
+        assert rng.random() == np.random.default_rng(5).random()
+
+    def test_on_it_keeps_a_window_of_the_set_share_of_the_beams(self):
+        windows = context_windows(100, 400, 1.0, np.random.default_rng(0))
+        widths = [hi - lo for lo, hi in windows]
+        assert all(0 <= lo < hi <= 100 for lo, hi in windows)
+        assert min(widths) >= CONTEXT_KEEP[0] * 100 - 1 and max(widths) <= CONTEXT_KEEP[1] * 100 + 1
+
+    def test_the_flag_exists_and_is_off_by_default(self):
+        assert build_parser().parse_args(["step2"]).context_dropout == 0.0
 
 
 class TestMirror:

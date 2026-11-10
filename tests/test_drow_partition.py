@@ -18,7 +18,7 @@ UTILS = Path(__file__).resolve().parents[1] / "utils"
 if str(UTILS) not in sys.path:
     sys.path.insert(0, str(UTILS))
 
-from drow_geometry_partition import Group, place, solve_partition  # noqa: E402
+from drow_geometry_partition import Group, place, places_for, solve_partition  # noqa: E402
 from drow_locality_property import recording_type  # noqa: E402
 from takheliped.datasets.drow_dataset import partition_files  # noqa: E402
 from takheliped.datasets.drow_partitions import DROW_PARTITIONS, SUMMARY  # noqa: E402
@@ -167,6 +167,42 @@ class TestTheCommittedTables:
     def test_the_control_stays_shifted(self):
         rows = SUMMARY["geometry-shifted"]
         assert rows["test"]["enclosed"] / rows["test"]["annotated"] > 0.6 > 0.2 > rows["train"]["enclosed"] / rows["train"]["annotated"]
+
+
+class TestFewerPlaces:
+    """Item 107's learning curve: official DROW with its training recordings cut to a share of their places, val and test
+    untouched, so the curve says what the number of training places is worth and nothing else changes."""
+
+    MODES = {"official-places-50": 0.50, "official-places-25": 0.25}
+
+    @pytest.mark.parametrize("mode", list(MODES))
+    def test_only_the_training_split_shrinks(self, mode):
+        table, official = DROW_PARTITIONS[mode], DROW_PARTITIONS["official"]
+        assert set(table["train"]) < set(official["train"])
+        assert table["val"] == official["val"] and table["test"] == official["test"]
+
+    @pytest.mark.parametrize("mode", list(MODES))
+    def test_a_place_is_kept_whole_or_not_at_all(self, mode):
+        kept = {place(s) for s in DROW_PARTITIONS[mode]["train"]}
+        assert all(s in DROW_PARTITIONS[mode]["train"] for s in DROW_PARTITIONS["official"]["train"] if place(s) in kept)
+
+    @pytest.mark.parametrize("mode,share", list(MODES.items()))
+    def test_the_training_split_holds_about_its_share_of_the_annotated_scans(self, mode, share):
+        """Somewhat under the share, by design: the lunch room is one place holding 15% of official train's scans, so
+        kind by kind it is kept whole or dropped, and at half or a quarter of one place it is dropped."""
+        kept = SUMMARY[mode]["train"]["annotated"] / SUMMARY["official"]["train"]["annotated"]
+        assert 0.8 * share <= kept <= 1.1 * share
+
+    def test_the_smaller_split_is_inside_the_larger(self):
+        """Nested, so the curve compares a training set with a subset of itself rather than two different draws."""
+        assert set(DROW_PARTITIONS["official-places-25"]["train"]) <= set(DROW_PARTITIONS["official-places-50"]["train"])
+
+    def test_the_solver_s_prefix_rule(self):
+        groups = [Group("a", "driving", 40, 0, {"train": 40}), Group("b", "driving", 30, 0, {"train": 30}),
+                  Group("c", "driving", 30, 0, {"train": 30}), Group("big", "lunch", 100, 0, {"train": 100})]
+        half = places_for(groups, 0.5, order={"driving": ["a", "b", "c"], "lunch": ["big"]})
+        assert half == {"a"}, "a alone is 40 of 100 driving scans; adding b would overshoot 50 by more"
+        assert places_for(groups, 0.75, order={"driving": ["a", "b", "c"], "lunch": ["big"]}) == {"a", "b", "big"}
 
 
 class TestTheCutoutPathReadsThePartition:

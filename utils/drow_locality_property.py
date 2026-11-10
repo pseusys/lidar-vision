@@ -47,12 +47,18 @@ what caught (`memory/gotchas.md`):
     partition's train and test, and the verdict by the rule written before any of them trained.
 11. **Item 104's arms** (`arms`): the scan-normalised range and the local level beside the headline at the same seeds,
     read the same way on official DROW.
+12. **The person's range** (`ranges`, item 107): where each split's people stand, and AP per band of range for our stage 2
+    and the cutout on official DROW and `geometry-balanced`, and ours on FROG.
+13. **Context dropout and the learning curve over places** (`residual`, item 107), each run on its own partition, with
+    range bands, and train against test by range for the headline and the cutout.
 
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
     python drow_locality_property.py --readings val-geometry --out ../results/drow_val_geometry.json
     python drow_locality_property.py --readings partitions --out ../results/drow_partitions.json
     python drow_locality_property.py --readings arms --out ../results/drow_locality_arms.json
+    python drow_locality_property.py --readings ranges --out ../results/drow_ranges.json
+    python drow_locality_property.py --readings residual --out ../results/drow_residual.json
 """
 
 import re
@@ -80,10 +86,20 @@ CHECKPOINTS = _HERE.parent / "checkpoints_three_horizon"
 OURS = {"ours_s0": CHECKPOINTS / "drow_stage2_s0" / "step2_calibration.best.pth",
         "ours_s1": CHECKPOINTS / "drow_headline_s1" / "step2_calibration.best.pth"}
 CUTOUT = _HERE.parent / "checkpoints_drow" / "drow_t1_drspaam_recipe.pth"
+#: The same recipe on `geometry-balanced` (item 106's phase 2).
+CUTOUT_BALANCED = _HERE.parent / "checkpoints_drow" / "drow_t1_drspaam_recipe_geometry_balanced.pth"
+#: Reading 12's bands of the person's range: DROW test's median person stands at 2.76 m, its train's at 4.51 m.
+RANGE_EDGES_M = (0.0, 2.0, 3.0, 5.0, 10.0, 30.0)
+#: Reading 13's runs (`queue_drow_residual.py` trains them): each with the partition it trained on, two seeds.
+RESIDUAL_SEEDS = (0, 1)
+RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in RESIDUAL_SEEDS])
+                 for name, mode in (("drow_default_radii", "official"), ("drow_context_dropout", "official"),
+                                    ("drow_places_50", "official-places-50"), ("drow_places_25", "official-places-25"))}
 #: Our FROG stage 2 whose train and test AP (93.66% / 80.89%) item 96 measured, and the stride that 80.89% is at.
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
-READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions", "arms")
+READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions", "arms",
+            "ranges", "residual")
 #: Reading 10's stage-2 runs, one directory per geometry partition and seed (`queue_drow_partitions.py` trains them), and
 #: the rule written into `TODO.md` row 106 before any of them ran.
 PARTITION_SEEDS = (0, 1)
@@ -315,6 +331,103 @@ def partition_reading(device) -> Dict[str, object]:
     return out
 
 
+def person_ranges(people_xy: Sequence[np.ndarray]) -> np.ndarray:
+    """Every annotated person's distance from the sensor, over all frames."""
+    rows = [np.asarray(p, np.float64).reshape(-1, 2) for p in people_xy]
+    return np.hypot(*np.concatenate(rows).T) if rows else np.zeros(0)
+
+
+def range_band_frames(frames: list, lo: float, hi: float) -> list:
+    """`frames` with only the detections and the people whose range is in `[lo, hi)`, both, as range-limited AP is read."""
+    out = []
+    for scores, xy, gt in frames:
+        xy, gt = np.asarray(xy, np.float64).reshape(-1, 2), np.asarray(gt, np.float64).reshape(-1, 2)
+        d, g = np.hypot(*xy.T), np.hypot(*gt.T)
+        keep = (d >= lo) & (d < hi)
+        out.append((np.asarray(scores)[keep], xy[keep], gt[(g >= lo) & (g < hi)]))
+    return out
+
+
+def ap_by_range(frames: list, edges: Sequence[float]) -> Dict[str, Dict[str, float]]:
+    """`score_detections` and `top_k_hits` inside each band between consecutive `edges`, keyed like "2.0-3.0 m"."""
+    out = {}
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        band = range_band_frames(frames, lo, hi)
+        # A band nobody stands in has no AP -- FROG's labels stop at 10 m -- so it reads undefined, not as an error.
+        empty = not sum(len(g) for _, _, g in band)
+        out[f"{lo:.1f}-{hi:.1f} m"] = (dict(ap=float("nan"), people=0, frames=len(band), top_k_hits=float("nan")) if empty
+                                       else dict(score_detections(band), top_k_hits=top_k_hits(band)))
+    return out
+
+
+def stage2_frames(paths: Sequence[Path], split: FrameSplit, spec, device, stride: int = 1) -> list:
+    """Each stage-2 checkpoint's detections on every `stride`-th annotated frame of `split`."""
+    positions = np.arange(0, len(split.annotated), stride)
+    return [calibration_frames(calibration_network(torch.load(path, map_location="cpu"), spec.angles()).to(device), split, positions,
+                               device, EVAL_BATCH) for path in paths]
+
+
+def range_reading(device) -> Dict[str, object]:
+    """Reading 12 (item 107): where each split's people stand, and AP per band of the person's range for our stage 2 and
+    the cutout on official DROW and on `geometry-balanced`, and for our FROG stage 2 on FROG."""
+    out = dict(people={}, bands={})
+    for spec, mode, split_name, stride in ((DROW, "official", "train", 1), (DROW, "official", "val", 1), (DROW, "official", "test", 1),
+                                           (DROW, "geometry-balanced", "train", 1), (DROW, "geometry-balanced", "test", 1),
+                                           (FROG, "official", "train", 25), (FROG, "official", "test", FROG_TEST_STRIDE)):
+        s = load_frames(split_name, mode, spec)
+        r = person_ranges([s.people_xy[a] for a in range(0, len(s.annotated), stride)])
+        key = f"{spec.name} {mode} {split_name}"
+        out["people"][key] = dict(quartiles=np.percentile(r, [25, 50, 75]).tolist(), people=len(r),
+                                  shares={f"{lo:.1f}-{hi:.1f} m": float(np.mean((r >= lo) & (r < hi))) for lo, hi in zip(RANGE_EDGES_M[:-1], RANGE_EDGES_M[1:])})
+        q = out["people"][key]["quartiles"]
+        print(f"{key:<32} people {len(r):>6}  range p25 / p50 / p75 {q[0]:.2f} / {q[1]:.2f} / {q[2]:.2f} m  "
+              + "  ".join(f"{b} {v:.0%}" for b, v in out["people"][key]["shares"].items()), flush=True)
+        del s
+    for mode, ours, cutout in (("official", ARM_RUNS["drow_default_radii"], CUTOUT), ("geometry-balanced", PARTITION_RUNS["geometry-balanced"], CUTOUT_BALANCED)):
+        test = load_frames("test", mode, DROW)
+        ds, cfg = _load_dataset(SimpleNamespace(dataset="drow", split="test", frog_mode=mode))
+        played = {f"ours_s{i}": f for i, f in enumerate(stage2_frames(ours, test, DROW, device))}
+        played["cutout"] = cutout_frames(ds, cfg, test, cutout)
+        out["bands"][mode] = {m: ap_by_range(f, RANGE_EDGES_M) for m, f in played.items()}
+        print_range_table(f"DROW {mode} test, AP by the person's range (people and detections both inside the band)", out["bands"][mode])
+        del test, ds
+    frog = load_frames("test", "official", FROG)
+    out["bands"]["frog"] = {"ours_frog": ap_by_range(stage2_frames([OURS_FROG], frog, FROG, device, FROG_TEST_STRIDE)[0], RANGE_EDGES_M)}
+    print_range_table("FROG official test (every 5th annotated frame), our FROG stage 2, AP by the person's range", out["bands"]["frog"])
+    return out
+
+
+def residual_reading(device) -> Dict[str, object]:
+    """Reading 13 (item 107): context dropout and the learning curve over training places, each run scored on its own
+    partition's train and official test, with AP by the person's range; and train against test by range for the
+    headline and the cutout, which says where on the range axis each one fits and does not carry."""
+    out = dict(runs={}, bands={}, train_bands={})
+    test = load_frames("test", "official", DROW)
+    for name, (mode, paths) in RESIDUAL_RUNS.items():
+        out["runs"][name] = score_runs(mode, {name: paths}, device)[name]
+        out["bands"][name] = [ap_by_range(f, RANGE_EDGES_M) for f in stage2_frames(paths, test, DROW, device)]
+    train = load_frames("train", "official", DROW)
+    out["train_bands"]["ours_s0"] = ap_by_range(stage2_frames(RESIDUAL_RUNS["drow_default_radii"][1][:1], train, DROW, device)[0],
+                                                RANGE_EDGES_M)
+    ds, cfg = _load_dataset(SimpleNamespace(dataset="drow", split="train"))
+    out["train_bands"]["cutout"] = ap_by_range(cutout_frames(ds, cfg, train), RANGE_EDGES_M)
+    print_range_table("DROW official TRAIN, AP by the person's range", out["train_bands"])
+    for name, rows in out["bands"].items():
+        print_range_table(f"DROW official test, {name}, AP by the person's range", {f"s{i}": r for i, r in enumerate(rows)})
+    return out
+
+
+def print_range_table(title: str, table: Dict[str, Dict[str, Dict[str, float]]]) -> None:
+    print(f"\n{title}", flush=True)
+    models = list(table)
+    bands = list(next(iter(table.values())))
+    print(f"  {'band':<12}" + "".join(f"{m + ' AP':>14}" for m in models) + "".join(f"{m + ' hits':>14}" for m in models) + f"{'people':>8}", flush=True)
+    for b in bands:
+        row = [table[m][b] for m in models]
+        print(f"  {b:<12}" + "".join(f"{r['ap']:>14.2%}" for r in row) + "".join(f"{r['top_k_hits']:>14.2%}" for r in row)
+              + f"{row[0]['people']:>8}", flush=True)
+
+
 def print_ranking(title: str, table: Dict[str, Dict[str, float]]) -> None:
     print(f"\n{title}: pooled AP, the same over populated frames only, and each frame's own k best detections (k = its people)", flush=True)
     for m, r in table.items():
@@ -356,9 +469,10 @@ def ours_frames(split: FrameSplit, device) -> Dict[str, list]:
     return out
 
 
-def cutout_frames(ds, cfg, split: FrameSplit) -> list:
-    """DROW3's detections through `evaluate.py`'s own pass, paired with `FrameSplit`'s labels (identical, item 93)."""
-    aucs = eval_nn_model("drow", CUTOUT, ds, cfg, eval_r=MATCH_RADIUS_M, batch_size=16, return_detections=True)
+def cutout_frames(ds, cfg, split: FrameSplit, weights: Path = None) -> list:
+    """DROW3's detections through `evaluate.py`'s own pass, paired with `FrameSplit`'s labels (identical, item 93);
+    `weights` defaults to the cutout retrained on official DROW."""
+    aucs = eval_nn_model("drow", weights or CUTOUT, ds, cfg, eval_r=MATCH_RADIUS_M, batch_size=16, return_detections=True)
     return [(s, xy, people) for (s, xy), people in zip(detections_by_frame(aucs["detections"]), split.people_xy, strict=True)]
 
 
@@ -552,6 +666,12 @@ def main() -> int:
 
     if "arms" in args.readings:
         results["arms"] = arms_reading(device)
+
+    if "ranges" in args.readings:
+        results["ranges"] = range_reading(device)
+
+    if "residual" in args.readings:
+        results["residual"] = residual_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.
