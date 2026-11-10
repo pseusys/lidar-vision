@@ -38,6 +38,41 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## On DROW our stage 2 loses most where a person is far, and on FROG it hardly loses with range at all (2026-11-10)
+
+*keywords: item 107, reading 12, range bands, person_ranges, range_band_frames, ap_by_range, results/drow_ranges.json, close-range prediction refuted, ours over cutout 0.72 under 2 m 0.21 past 10 m, FROG flat 84 79 80 76, DROW test people median 2.64 m train 4.32 m, context-prior hypothesis*
+
+**The first test of item 107, prediction written before it ran** (`TODO.md` row 107): DROW test's people stand closer than
+its training people, our convolutions run over a fixed count of beams where the cutout resamples a fixed metric window,
+so if range is the cause our AP over the cutout's should *rise* with the person's range. AP with people and detections
+both inside each band (`drow_locality_property.py --readings ranges`):
+
+| person's range | DROW official test: ours (2 seeds) / cutout / ratio | within-scan hits, ours / cutout | `geometry-balanced` test: ratio | FROG official test, ours |
+| --- | --- | --- | ---: | ---: |
+| under 2 m | 48.5% / 67.4% / **0.72** | 83.6 / 84.3% | 0.90 | 83.7% |
+| 2-3 m | 28.1% / 64.1% / 0.44 | 76.1 / 78.0% | 0.76 | 78.5% |
+| 3-5 m | 18.9% / 56.6% / 0.33 | 62.8 / 80.4% | 0.54 | 80.2% |
+| 5-10 m | 11.6% / 36.1% / 0.32 | 53.5 / 68.9% | 0.60 | 76.0% |
+| 10-30 m | 4.1% / 19.6% / **0.21** | 65.1 / 73.0% | 1.22 | -- (no labels) |
+
+| people's range, p25 / median / p75 | DROW train | DROW val | DROW test | FROG train | FROG test |
+| --- | --- | --- | --- | --- | --- |
+| | 2.33 / 4.32 / 7.19 m | 2.09 / 3.80 / 6.08 m | 1.72 / 2.64 / 5.30 m | 2.39 / 3.97 / 5.99 m | 2.80 / 4.76 / 6.77 m |
+
+- **The prediction is refuted, the other way round.** Our stage 2 is nearest the cutout for the closest people (0.72, and
+  within-scan hits level with the cutout's up to 3 m) and furthest from it for the farthest (0.21). DROW test's people
+  are indeed closer than training's, which helps us rather than hurts.
+- **The deficit sits where a person is a few beams wide.** At 3-10 m even the within-scan hits fall to 0.78 of the
+  cutout's; on `geometry-balanced` the near band nearly closes (0.90) and 3-10 m stays at 0.54-0.60.
+- **FROG does not do this.** There our stage 2 holds 76-84% from under 2 m to 10 m. FROG at DROW's 0.5 deg cost stage 2
+  only 0.61-0.88 pp overall (2026-11-06), with half of FROG's test people at 5-10 m, so the angular resolution alone does
+  not make far people this hard.
+
+**The hypothesis it leaves**, to be tested by training (row 107 (a)-(c)): where local evidence is weak the whole-scan
+network leans on context learnt from the training recordings, and on DROW's new recordings that context misleads it;
+where a person spans many beams the local evidence wins and it transfers. The cutout has no context to lean on and
+degrades with range only as its evidence thins.
+
 ## Phase 2: the cutout on the geometry-balanced DROW transfers at 1.27, our stage 2 at 1.76 (2026-11-09)
 
 *keywords: item 106 phase 2, drow_t1_drspaam_recipe_geometry_balanced.pth, cutout balanced test 53.75 train 68.07 ratio 1.27, ours balanced 41.89 ratio 1.76, ours over cutout 0.78 balanced against 0.46 official, gap 12 pp against 34 pp, item 106 closed*
