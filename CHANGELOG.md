@@ -38,6 +38,57 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Our stage 2 fits far DROW training people well past what a local model can, and that is what does not carry (2026-11-10)
+
+*keywords: item 107, reading 13, reading 14, results/drow_residual.json, results/drow_context.json, train against test by range, ours train AP 60% past 10 m cutout 35%, ratio 1.6 to 15.5, context dropout no gain, drow_context_dropout 26.0, learning curve flat 50 to 100 percent, drow_places_50 31.3, drow_places_25 20.6, context probe seed-dependent, blanking out of distribution*
+
+**Three tests of the hypothesis from reading 12** (where a person is few beams wide, the whole-scan network leans on
+context learnt from the training recordings), each prediction in `TODO.md` row 107 before it ran.
+
+**(a) Train against test by range -- the prediction holds, strongly.** Official DROW, seed 0 of the headline and the
+cutout, AP with people and detections inside each band:
+
+| person's range | ours: train / test / ratio | cutout: train / test / ratio |
+| --- | --- | --- |
+| under 2 m | 75.0% / 47.5% / 1.58 | 79.1% / 67.4% / 1.17 |
+| 2-3 m | 65.9% / 27.5% / 2.40 | 68.3% / 64.1% / 1.07 |
+| 3-5 m | 72.0% / 18.9% / 3.80 | 68.2% / 56.6% / 1.21 |
+| 5-10 m | 60.5% / 11.8% / 5.14 | 51.7% / 36.1% / 1.43 |
+| 10-30 m | **60.5%** / **3.9%** / **15.5** | **35.0%** / **19.6%** / 1.79 |
+
+On the *training* scans our stage 2 finds far people far better than a one-metre window can -- 60% past 10 m where the
+cutout reaches 35% on the same scans -- so it is using evidence beyond the person's own beams. On the test recordings
+that evidence is gone: 3.9% against the cutout's 19.6%. The cutout's ratio barely moves with range (1.1-1.8); ours climbs
+from 1.6 to 15.5.
+
+**(b) Context dropout -- the prediction fails.** `--context-dropout 0.5` (half the training scans kept only inside a
+random 30-70% window): test AP 26.87 / 25.14%, mean 26.0% against the headline's 29.0%; train / test 2.14 / 2.55. The far
+bands gain about 3 pp (5-10 m: 14.9 / 14.2% against 11.8 / 11.3%), the near band loses more (41.9 / 47.8% against 47.5 /
+49.6%). Cropping the field of view is not the cure in this form.
+
+**(c) The learning curve over places -- flat from half to all.** Train cut to a nested half and quarter of official
+train's places (44.5% and 21.4% of its scans; val and test official):
+
+| training places | test AP (s0 / s1, mean) | train / test | best epochs |
+| --- | --- | --- | --- |
+| all (the headline) | 28.62 / 29.43%, 29.03% | 2.48 / 2.33 | 8.73 / 7.74 |
+| half | 26.41 / 36.20%, **31.31%** | 1.95 / 1.83 | 7.81 / 10.84 |
+| a quarter | 22.29 / 18.86%, **20.58%** | 1.88 / 2.22 | 6.30 / 6.30 |
+
+Doubling the places from half to all buys nothing measurable (seed 1 of the half arm is the best single DROW run on
+file, 36.20%); only a quarter costs. More recordings like DROW's training ones would not close a 34 pp gap.
+
+**(d) Context removal at inference -- the probe fails as an instrument.** Each person's scan re-run with everything
+outside 0.75 m of them blanked: the two DROW seeds disagree outright (seed 0's 3-10 m people rise in 57-72% of cases,
+seed 1's fall in over 90% at every range), and on FROG blanking *raises* scores for 80-94% of people past 2 m, the
+opposite of the prediction. A scan that is mostly "no return" is far outside what either model trained on, so this
+measures how each reacts to that, not how much it leans on context; no conclusion is drawn from it.
+
+**What stands.** (a) is the measurement the investigation turns on: the whole-scan network reaches far training people
+with evidence a local window does not have, and on DROW's test recordings that evidence misleads it, where on FROG's
+test -- the same venue on another day -- it carries (76% at 5-10 m). Next: the receptive field, the one lever that
+changes how far a beam's decision can see without touching anything else measured here.
+
 ## On DROW our stage 2 loses most where a person is far, and on FROG it hardly loses with range at all (2026-11-10)
 
 *keywords: item 107, reading 12, range bands, person_ranges, range_band_frames, ap_by_range, results/drow_ranges.json, close-range prediction refuted, ours over cutout 0.72 under 2 m 0.21 past 10 m, FROG flat 84 79 80 76, DROW test people median 2.64 m train 4.32 m, context-prior hypothesis*

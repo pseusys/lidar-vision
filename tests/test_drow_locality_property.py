@@ -15,8 +15,8 @@ UTILS = Path(__file__).resolve().parents[1] / "utils"
 if str(UTILS) not in sys.path:
     sys.path.insert(0, str(UTILS))
 
-from drow_locality_property import (ap_by_bin, ap_by_range, confuser_bins, exact_twins, nearest_distance,  # noqa: E402
-                                    partition_verdict, person_ranges, range_band_frames, ranking_summary, recording_type,
+from drow_locality_property import (ap_by_bin, ap_by_range, beam_span, confuser_bins, exact_twins, nearest_distance,  # noqa: E402
+                                    partition_verdict, person_ranges, person_score, range_band_frames, ranking_summary, recording_type,
                                     reference_bins, scan_descriptor, scan_levels, scan_statistics, sister_recordings, top_k_hits,
                                     transfer_summary)
 from train_takheliped import score_detections  # noqa: E402
@@ -269,6 +269,28 @@ class TestRangeBands:
 
     def test_person_ranges_are_every_annotated_person_s_distance(self):
         assert person_ranges([np.array([[3.0, 4.0]]), np.zeros((0, 2)), np.array([[0.0, 2.0], [6.0, 8.0]])]).tolist() == [5.0, 2.0, 10.0]
+
+
+class TestContextProbe:
+    """Item 107's probe (d): a person's scan with everything outside an arc around them blanked, and the person's own
+    score read before and after."""
+
+    ANGLES = np.linspace(-np.pi / 2, np.pi / 2, 360, endpoint=False)
+
+    def test_the_arc_is_wider_in_beams_for_a_near_person(self):
+        near, far = beam_span(self.ANGLES, 0.0, 2.0, 0.75), beam_span(self.ANGLES, 0.0, 8.0, 0.75)
+        assert near[1] - near[0] > far[1] - far[0] > 0
+        assert near[0] < 180 < near[1]
+
+    def test_the_span_stays_inside_the_scan(self):
+        lo, hi = beam_span(self.ANGLES, self.ANGLES[1], 0.5, 0.75)
+        assert lo == 0 and hi <= 360
+
+    def test_a_person_s_score_is_the_best_beam_on_them(self):
+        logits = np.zeros(360)
+        logits[178:183] = [1.0, 3.0, 2.0, 0.5, -1.0]
+        logits[100] = 9.0                                 # a better beam elsewhere is not this person's
+        assert person_score(logits, self.ANGLES, 0.0, 4.0, 0.35) == pytest.approx(3.0)
 
 
 class TestExactTwins:

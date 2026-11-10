@@ -51,6 +51,8 @@ what caught (`memory/gotchas.md`):
     and the cutout on official DROW and `geometry-balanced`, and ours on FROG.
 13. **Context dropout and the learning curve over places** (`residual`, item 107), each run on its own partition, with
     range bands, and train against test by range for the headline and the cutout.
+14. **Context removal at inference** (`context`, item 107): each person's score with everything outside 0.75 m of them
+    blanked, against the intact scan's, by range band, our DROW and FROG stage 2s.
 
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
@@ -59,6 +61,7 @@ what caught (`memory/gotchas.md`):
     python drow_locality_property.py --readings arms --out ../results/drow_locality_arms.json
     python drow_locality_property.py --readings ranges --out ../results/drow_ranges.json
     python drow_locality_property.py --readings residual --out ../results/drow_residual.json
+    python drow_locality_property.py --readings context --out ../results/drow_context.json
 """
 
 import re
@@ -78,7 +81,7 @@ from takheliped.datasets.drow_partitions import ENCLOSED_M
 from takheliped.utils.drow_utils import project_cartesian_from_polar
 from train import detect_device
 from train_takheliped import (DROW, FROG, MATCH_RADIUS_M, EVAL_BATCH, FrameSplit, calibration_frames, calibration_network,
-                              frames_from_dataset, load_frames, recording_bounds, score_detections)
+                              frames_from_dataset, keep_window, load_frames, recording_bounds, score_detections)
 
 _HERE = Path(__file__).parent
 CHECKPOINTS = _HERE.parent / "checkpoints_three_horizon"
@@ -92,6 +95,8 @@ CUTOUT_BALANCED = _HERE.parent / "checkpoints_drow" / "drow_t1_drspaam_recipe_ge
 RANGE_EDGES_M = (0.0, 2.0, 3.0, 5.0, 10.0, 30.0)
 #: Reading 13's runs (`queue_drow_residual.py` trains them): each with the partition it trained on, two seeds.
 RESIDUAL_SEEDS = (0, 1)
+#: Reading 14's context probe: the half-width of the arc a person keeps around them, the rest blanked.
+PROBE_ARC_M = 0.75
 RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in RESIDUAL_SEEDS])
                  for name, mode in (("drow_default_radii", "official"), ("drow_context_dropout", "official"),
                                     ("drow_places_50", "official-places-50"), ("drow_places_25", "official-places-25"))}
@@ -99,7 +104,7 @@ RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibrat
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
 READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions", "arms",
-            "ranges", "residual")
+            "ranges", "residual", "context")
 #: Reading 10's stage-2 runs, one directory per geometry partition and seed (`queue_drow_partitions.py` trains them), and
 #: the rule written into `TODO.md` row 106 before any of them ran.
 PARTITION_SEEDS = (0, 1)
@@ -417,6 +422,66 @@ def residual_reading(device) -> Dict[str, object]:
     return out
 
 
+def beam_span(angles: np.ndarray, bearing: float, range_m: float, half_width_m: float) -> Tuple[int, int]:
+    """The beams `(lo, hi)` whose arc at `range_m` lies within `half_width_m` of the beam nearest `bearing`, clipped to the scan."""
+    step = float(angles[1] - angles[0])
+    centre = int(np.abs(angles - bearing).argmin())
+    half = int(np.ceil(np.arctan(half_width_m / max(range_m, 1e-3)) / step))
+    return max(0, centre - half), min(len(angles), centre + half + 1)
+
+
+def person_score(logits: np.ndarray, angles: np.ndarray, bearing: float, range_m: float, core_m: float = 0.35) -> float:
+    """A person's score: the best logit among the beams within `core_m` of their centre."""
+    lo, hi = beam_span(angles, bearing, range_m, core_m)
+    return float(np.max(logits[lo:hi]))
+
+
+def context_probe(net, split: FrameSplit, angles: np.ndarray, device, stride: int = 1, batch: int = 64) -> np.ndarray:
+    """Per annotated person: (range, score in the intact scan, score with everything outside `PROBE_ARC_M` of them read as
+    no return). The blanking is `keep_window`'s, the one context dropout trains with."""
+    rows, jobs = [], []
+    for a in range(0, len(split.annotated), stride):
+        for r, phi in np.asarray(split.people_polar[a], np.float64).reshape(-1, 2):
+            jobs.append((a, r, phi))
+    net.eval()
+    with torch.no_grad():
+        for start in range(0, len(jobs), batch):
+            chunk = jobs[start:start + batch]
+            intact = [split.scans[split.annotated[a]] for a, _, _ in chunk]
+            masked = [keep_window(s, np.zeros((0, 2)), (), angles, beam_span(angles, phi, r, PROBE_ARC_M), net.max_range_m)[0]
+                      for s, (_, r, phi) in zip(intact, chunk, strict=True)]
+            both = torch.from_numpy(np.stack(intact + masked).astype(np.float32)).to(device)
+            logits = net.person_logit(net(both)[0]).cpu().numpy()
+            for i, (_, r, phi) in enumerate(chunk):
+                rows.append((r, person_score(logits[i], angles, phi, r), person_score(logits[len(chunk) + i], angles, phi, r)))
+    net.train()
+    return np.array(rows)
+
+
+def context_reading(device) -> Dict[str, object]:
+    """Reading 14 (item 107 (d)): each person's score with and without their context, by range band, for our DROW stage 2
+    on DROW test and our FROG stage 2 on FROG test."""
+    out = {}
+    cases = [(f"drow s{i}", path, DROW, load_frames("test", "official", DROW), 1) for i, path in enumerate(ARM_RUNS["drow_default_radii"])]
+    cases.append(("frog", OURS_FROG, FROG, load_frames("test", "official", FROG), 25))
+    print(f"\nScore change when everything outside {PROBE_ARC_M} m of the person is blanked (masked minus intact logit)", flush=True)
+    for name, path, spec, split, stride in cases:
+        net = calibration_network(torch.load(path, map_location="cpu"), spec.angles()).to(device)
+        rows = context_probe(net, split, spec.angles(), device, stride)
+        out[name] = {}
+        for lo, hi in zip(RANGE_EDGES_M[:-1], RANGE_EDGES_M[1:]):
+            band = rows[(rows[:, 0] >= lo) & (rows[:, 0] < hi)]
+            if not len(band):
+                continue
+            delta = band[:, 2] - band[:, 1]
+            out[name][f"{lo:.1f}-{hi:.1f} m"] = dict(people=len(band), intact=float(band[:, 1].mean()), delta=float(delta.mean()),
+                                                     median_delta=float(np.median(delta)), rises=float(np.mean(delta > 0)))
+        for b, v in out[name].items():
+            print(f"  {name:<8} {b:<12} people {v['people']:>6}  intact logit {v['intact']:>6.2f}  change mean {v['delta']:>+6.2f} "
+                  f"median {v['median_delta']:>+6.2f}  rises for {v['rises']:.0%}", flush=True)
+    return out
+
+
 def print_range_table(title: str, table: Dict[str, Dict[str, Dict[str, float]]]) -> None:
     print(f"\n{title}", flush=True)
     models = list(table)
@@ -672,6 +737,9 @@ def main() -> int:
 
     if "residual" in args.readings:
         results["residual"] = residual_reading(device)
+
+    if "context" in args.readings:
+        results["context"] = context_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.
