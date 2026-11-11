@@ -8,6 +8,26 @@ The standing comparison against published SOTA is in [`performance-log.md`](perf
 
 
 
+## Explain a gap part by part, against a reference model (the owner's method, 2026-11-10)
+
+A pooled AP says how much is lost, not where. Split the evaluation by a property of the data -- the person's range,
+the scan's geometry, people per scan, look-alikes nearby, the kind of recording -- score our model **and a reference**
+(DROW3's cutout on DROW) on every part, and read the **deficit to the reference** per part: a part hard for everyone is
+not a part that is hard for us. This is what located DROW's gap (`CHANGELOG.md`, 2026-11-09 to 2026-11-10): the deficit
+was flat across novelty and look-alike bins, then grew with the person's range, and splitting **train against test per
+range band** showed far training people fitted from context a local window does not have -- which led to the
+whole-scan `GroupNorm` in every block.
+
+- **Write the per-part prediction first**, as for any other test: "the deficit grows along it while the reference stays
+  flat" names a cause; a flat deficit rules one out.
+- **Split train against test per part**, not only test: a part where we fit far above the reference and transfer far
+  below it is memorised, not hard.
+- **Beware range restriction.** A split whose parts all sit in one regime cannot test that property -- DROW test is 98%
+  enclosed, so binning it by geometry could not show the geometry effect, and DROW val, which spans both, did.
+- **Pooled AP inside a part is still pooled across scans**; read the within-scan hits beside it
+  (`ranking_summary`), or a per-part difference can be a score-calibration difference.
+- **Tools**: `utils/drow_locality_property.py` -- `ap_by_bin`, `ap_by_range`, `reference_bins`, `ranking_summary`.
+
 ## A stage-3 contribution read off val does not survive on test
 
 **Measured 2026-11-07, on two DROW chains that differ only in the decision head.** The object memory's
