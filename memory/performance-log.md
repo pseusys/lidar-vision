@@ -347,7 +347,7 @@ reads about 1.8 pp further from the cutout's 63.20% against the new default.
 
 ### The per-beam norm with a smaller field: DROW about 41.5% (2026-11-11)
 
-Official DROW test, stage 2 alone, two seeds each, `--norm position` at fields of 256 / 180 / 104 / 58 beams: **37.95 / 41.79 / 41.48 / 41.17%**, against the scan-wide norm's 29.03% and the cutout's 63.20% (`CHANGELOG.md`). FROG's cost of the smaller field is measured next; no CPU ms/frame yet for the smaller fields (fewer or smaller kernels, so no slower).
+Official DROW test, stage 2 alone, two seeds each, `--norm position` at fields of 256 / 180 / 104 / 58 beams: **37.95 / 41.79 / 41.48 / 41.17%**, against the scan-wide norm's 29.03% and the cutout's 63.20% (`CHANGELOG.md`). **FROG**, two seeds each against the same day's controls: 79.80% at kernel 5, 78.95% at kernel 3, against the per-beam norm's 79.90% and the scan norm's 81.30%. **CPU**: kernel 5 stage 2 9.16 ms against 9.02 ms per-beam and 8.62 ms scan-wide in a second interleaved sweep -- no faster than kernel 7. The configuration that wins on DROW and loses least on FROG is the per-beam norm at kernel 5: **DROW 41.79% (+12.8 pp), FROG 79.80% (-1.5 pp), stage 2 +0.4-0.7 ms**.
 
 ### ConvNeXt's per-beam norm: DROW 37.95%, FROG -1.4 pp (2026-11-10)
 

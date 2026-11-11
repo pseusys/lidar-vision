@@ -66,6 +66,50 @@ and a `labels_2d_stitched` file, with identical names.
 measured on JRDB yet: `JRDB_Dataset` reads DROW-format CSVs that nothing produces, so the first A63.3 step is
 reading one bag's topics and measuring the scan geometry and rate.
 
+## DROW part by part after the fixes, and FROG's price of them: kernel 5 is free on FROG beyond the norm (2026-11-11)
+
+*keywords: item 107 (h), item 107 (i), reading 17, reading 18, results/drow_parts.json, results/frog_field.json, crowded scans at parity 0.98, one-person scans 0.68, look-alikes without people 0.39-0.55, range past 3 m 0.47-0.54, frog_field_k5 79.80, frog_field_k3 78.95, CPU per-beam norm +0.4-0.7 ms, kernel 5 no faster*
+
+**(h) DROW test part by part** (reading 17, the owner's method), every run's AP per part as a share of the cutout's,
+mean of two seeds:
+
+| part | people | headline | per-beam norm | + kernel 5 | + kernel 3 | + kernel 3, small |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| one person in the scan | 1,036 | 0.47 | 0.56 | 0.63 | 0.66 | 0.68 |
+| 2-3 people | 673 | 0.69 | 0.81 | 0.84 | 0.87 | 0.86 |
+| 4 or more | 267 | 0.88 | 0.84 | 0.90 | **0.98** | **0.97** |
+| enclosed scan | 1,347 | 0.44 | 0.62 | 0.67 | 0.67 | 0.66 |
+| open scan | 629 | 0.50 | 0.57 | 0.65 | 0.64 | 0.66 |
+| a wheelchair or walker within 1 m of a person | 1,422 | 0.55 | 0.64 | 0.69 | 0.73 | 0.75 |
+| one in the scan, near no person | 329 | **0.29** | 0.43 | 0.55 | 0.44 | 0.39 |
+| no wheelchair or walker | 225 | 0.71 | 0.79 | 0.83 | 0.85 | 0.82 |
+| person under 2 m | 656 | 0.72 | 0.96 | 0.95 | 0.93 | 0.89 |
+| 3-5 m | 347 | 0.33 | 0.41 | 0.52 | 0.52 | 0.54 |
+| 5-10 m | 373 | 0.32 | 0.29 | 0.39 | 0.47 | 0.48 |
+
+**The prediction holds and adds a part.** What still fails sits in person-sparse scans (one person: 0.63-0.68) and
+past 3 m (0.39-0.54), as predicted -- and also in scans where a wheelchair or walker stands with nobody near it
+(0.39-0.55), the worst part of all: confident detections on look-alikes when there are few people to outrank them.
+Crowded scans are at the cutout's level (0.97-0.98 at kernel 3), and geometry no longer separates (enclosed and open
+both 0.65-0.67).
+
+**(i) FROG's price of a smaller field** (reading 18), two seeds each, each run's own test pass, all trained the same way:
+
+| FROG | s0 / s1 | mean | against the scan norm |
+| --- | --- | ---: | ---: |
+| scan-wide norm | 81.26 / 81.33% | 81.30% | -- |
+| per-beam norm | 79.63 / 80.16% | 79.90% | -1.40 pp |
+| per-beam norm, kernel 5 | 79.79 / 79.81% | 79.80% | -1.50 pp |
+| per-beam norm, kernel 3 | 78.97 / 78.92% | 78.95% | -2.35 pp |
+
+Kernel 5 costs FROG nothing beyond the norm; kernel 3 costs it another 0.85 pp. On DROW kernel 5 is also the best of
+the fields (41.79%), so **the per-beam norm at kernel 5 is the configuration that wins on DROW and loses least on FROG**.
+
+**CPU**, a second matched, interleaved sweep (4 threads, 2,000 scans, three runs each; noisier, one run per norm 2.4 ms
+high while JRDB was downloading): stage 2 medians 8.62 / 9.02 / 9.16 ms for the scan norm, the per-beam norm and the
+per-beam norm at kernel 5 -- with the first sweep's 10.44 against 11.10 ms, the per-beam norm costs 0.4-0.7 ms (5-6%),
+and kernel 5 is no faster than kernel 7: the norms, not the depthwise kernels, are what the time goes on.
+
 ## Under the per-beam norm a smaller receptive field adds 3.5 pp on DROW: 29.0% has become about 41.5% (2026-11-10/11)
 
 *keywords: item 107 (g), reading 16, results/drow_field.json, drow_field_k5 41.79, drow_field_k3 41.48, drow_field_k3_small 41.17, receptive field 256 180 104 58 beams, far-range test up 10 to 17.5, far-range train down 67.5 to 58.4, train/test 2.0 to 1.6, gap to cutout 34 to 22 pp, field in beams not metres*
