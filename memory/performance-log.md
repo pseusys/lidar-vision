@@ -21,7 +21,7 @@ Re-deriving a published accuracy figure through this pipeline adds risk without 
 | **bold** | measured by this project: our own architectures, or a gap the literature does not cover |
 | `gap` | nobody published it and we have not measured it |
 | `check paper` | the authors did publish one; it is simply not transcribed here yet. **Look it up before spending a run.** |
-| `n/a` | not measurable here — JRDB needs manual registration and is not downloaded (`gotchas.md`) |
+| `n/a` | not measured yet — JRDB's train split has been on disk since 2026-11-11, but no loader has been checked against it (`data-model.md`) |
 
 ## Accuracy — person class, AP/AUC @ 0.5 m match radius (F1 where noted)
 
@@ -354,7 +354,7 @@ Stage 2 alone, two seeds each, val-best weights; FROG against a control trained 
 | DROW official test AP | 29.03% (28.62 / 29.43) | **37.95%** (37.83 / 38.06) |
 | FROG official test AP | 81.30% (81.26 / 81.33) | 79.90% (79.63 / 80.16) |
 
-The DROW gain is all under 3 m; past 5 m nothing moved. No CPU ms/frame yet -- the two norms are timed back to back next (`CHANGELOG.md`).
+The DROW gain is all under 3 m; past 5 m nothing moved. **CPU, matched and interleaved** (`tracking_baselines.py latency --device cpu --threads 4`, 2,000 scans, batch 1, the two FROG seed-0 stage 2s behind one shared memory, three runs each): stage 2 **10.44 ms** scan-wide against **11.10 ms** per-beam (+0.66 ms, +6%), the whole detector 21.76 against 22.33 ms, inside FROG's 25 ms. The cost is the hand-written `ChannelNorm`'s explicit mean and variance; a fused `layer_norm` over the channel axis is untried.
 
 ### On a geometry-balanced DROW the gap to the cutout is 11.9 pp, not 34.2 (2026-11-09)
 
@@ -1109,7 +1109,7 @@ carried template, so this row overstates it. Re-timed under one protocol.
 It was not the loop: the decoder applied a second sigmoid to a channel `lfe_ppn.onnx` had already sigmoided, so every one of the 3,600 anchors cleared any threshold and entered an O(n²) greedy merge, 182 survivors per frame on scenes holding ~3 people.
 With that fixed LFE-PPN lands within 0.1 ms of its paper's **GPU** figure, on CPU — and the Python decode loop is dissolved rather than done.
 
-⁵ The old JRDB figures were measured with that same bug and are withdrawn rather than corrected; JRDB is not downloaded here (`gotchas.md`), so nothing can replace them yet.
+⁵ The old JRDB figures were measured with that same bug and are withdrawn rather than corrected; nothing replaces them until a loader has been checked against the JRDB files on disk since 2026-11-11 (`data-model.md`).
 Both LFE rows are otherwise real-data measurements (300 scans each) taken after the fix, so they stay methodologically comparable to each other.
 
 ⁶ Derived 2026-09-16 from step 3a's candidate caches, which stream the trained stages 1-2 one frame at a time (batch 1) and decode candidates with DROW's vote grid: 1,269 s for 120,396 train frames, 2,010 s for 195,058 val, 521 s for 50,088 test -- 10.3-10.5 ms per frame, consistently.

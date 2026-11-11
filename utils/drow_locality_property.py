@@ -55,6 +55,8 @@ what caught (`memory/gotchas.md`):
     blanked, against the intact scan's, by range band, our DROW and FROG stage 2s.
 15. **The per-beam norm** (`norm`, item 107 (f)): stage 2 normalised per beam as ConvNeXt is, against the scan-wide
     GroupNorm, on DROW by range and train against test, and FROG's cost against a control trained the same way.
+16. **The receptive field** (`field`, item 107 (g)): the per-beam norm at 180, 104 and 58 beams of field against its
+    256, read the same way.
 
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
@@ -65,6 +67,7 @@ what caught (`memory/gotchas.md`):
     python drow_locality_property.py --readings residual --out ../results/drow_residual.json
     python drow_locality_property.py --readings context --out ../results/drow_context.json
     python drow_locality_property.py --readings norm --out ../results/drow_norm.json
+    python drow_locality_property.py --readings field --out ../results/drow_field.json
 """
 
 import re
@@ -105,6 +108,10 @@ PROBE_ARC_M = 0.75
 NORM_SEEDS = (0, 1)
 NORM_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in NORM_SEEDS]
              for name in ("drow_default_radii", "drow_position_norm", "frog_scan_norm", "frog_position_norm")}
+#: Reading 16's runs (`queue_drow_field.py`): the per-beam norm at three receptive fields, 180 / 104 / 58 beams against the
+#: headline shape's 256, two seeds each, beside the per-beam norm at the headline shape.
+FIELD_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in NORM_SEEDS]
+              for name in ("drow_position_norm", "drow_field_k5", "drow_field_k3", "drow_field_k3_small")}
 RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in RESIDUAL_SEEDS])
                  for name, mode in (("drow_default_radii", "official"), ("drow_context_dropout", "official"),
                                     ("drow_places_50", "official-places-50"), ("drow_places_25", "official-places-25"))}
@@ -112,7 +119,7 @@ RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibrat
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
 READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions", "arms",
-            "ranges", "residual", "context", "norm")
+            "ranges", "residual", "context", "norm", "field")
 #: Reading 10's stage-2 runs, one directory per geometry partition and seed (`queue_drow_partitions.py` trains them), and
 #: the rule written into `TODO.md` row 106 before any of them ran.
 PARTITION_SEEDS = (0, 1)
@@ -490,18 +497,28 @@ def context_reading(device) -> Dict[str, object]:
     return out
 
 
-def norm_reading(device) -> Dict[str, object]:
-    """Reading 15 (item 107 (f)): the per-beam norm against the scan-wide one -- on DROW scored like reading 13, train and
-    test with AP by range; on FROG each run's own test pass, control and arm trained the same way."""
-    out = dict(drow={}, drow_bands={}, drow_train_bands={}, frog={})
+def drow_runs_by_range(runs: Mapping[str, Sequence[Path]], device) -> Dict[str, dict]:
+    """Official DROW stage-2 runs scored by `score_runs`, with AP by the person's range on test and on train."""
+    out = dict(drow={}, drow_bands={}, drow_train_bands={})
     test, train = load_frames("test", "official", DROW), load_frames("train", "official", DROW)
-    for name in ("drow_default_radii", "drow_position_norm"):
-        paths = NORM_RUNS[name]
+    for name, paths in runs.items():
         out["drow"][name] = score_runs("official", {name: paths}, device)[name]
         out["drow_bands"][name] = [ap_by_range(f, RANGE_EDGES_M) for f in stage2_frames(paths, test, DROW, device)]
         out["drow_train_bands"][name] = [ap_by_range(f, RANGE_EDGES_M) for f in stage2_frames(paths, train, DROW, device)]
         for split, bands in (("test", out["drow_bands"][name]), ("TRAIN", out["drow_train_bands"][name])):
             print_range_table(f"DROW official {split}, {name}, AP by the person's range", {f"s{i}": r for i, r in enumerate(bands)})
+    return out
+
+
+def field_reading(device) -> Dict[str, object]:
+    """Reading 16 (item 107 (g)): the receptive field shrunk under the per-beam norm, read like reading 15's DROW half."""
+    return drow_runs_by_range(FIELD_RUNS, device)
+
+
+def norm_reading(device) -> Dict[str, object]:
+    """Reading 15 (item 107 (f)): the per-beam norm against the scan-wide one -- on DROW scored like reading 13, train and
+    test with AP by range; on FROG each run's own test pass, control and arm trained the same way."""
+    out = dict(drow_runs_by_range({name: NORM_RUNS[name] for name in ("drow_default_radii", "drow_position_norm")}, device), frog={})
     for name in ("frog_scan_norm", "frog_position_norm"):
         out["frog"][name] = [json.loads((p.parent / "step2_results.json").read_text())["test"] for p in NORM_RUNS[name]]
     print("\nFROG official test, each run's own test pass", flush=True)
@@ -772,6 +789,9 @@ def main() -> int:
 
     if "norm" in args.readings:
         results["norm"] = norm_reading(device)
+
+    if "field" in args.readings:
+        results["field"] = field_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.
