@@ -345,6 +345,10 @@ an ignore region only under `--ignore-other-classes`, which is off. Their differ
 -- see `interpreting-evaluation.md` -- so every DROW comparison above that was read against 27.86% or 27.12% stands, and
 reads about 1.8 pp further from the cutout's 63.20% against the new default.
 
+### The per-beam norm with a smaller field: DROW about 41.5% (2026-11-11)
+
+Official DROW test, stage 2 alone, two seeds each, `--norm position` at fields of 256 / 180 / 104 / 58 beams: **37.95 / 41.79 / 41.48 / 41.17%**, against the scan-wide norm's 29.03% and the cutout's 63.20% (`CHANGELOG.md`). FROG's cost of the smaller field is measured next; no CPU ms/frame yet for the smaller fields (fewer or smaller kernels, so no slower).
+
 ### ConvNeXt's per-beam norm: DROW 37.95%, FROG -1.4 pp (2026-11-10)
 
 Stage 2 alone, two seeds each, val-best weights; FROG against a control trained the same day the same way:

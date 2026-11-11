@@ -38,6 +38,59 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## JRDB's 2019 train split is on disk, unpacked by a script that resumes (2026-11-11)
+
+*keywords: A63.3 gate met, §C JRDB block deleted, utils/unpack_jrdb.py, tests/test_unpack_jrdb.py, JRDB-data/train_dataset, train_rosbags.zip, segway/scan_multi, 27 sequences, 464 files 46.1 GB, no test rosbags, jrdb19_train_norosbag, DR-SPAAM 17/10 hold-out*
+
+**What was downloaded, and why only that.** The 2D laser is in none of the folders JRDB's file-structure PDF
+describes. It exists only in the rosbags, as the merged front+rear topic `segway/scan_multi` that DR-SPAAM's
+extractor reads. The download page offers rosbags for the **2019 train split only**: the "Full Dataset" archives
+are `*_norosbag.zip`, and there are no test rosbags anywhere. So JRDB's test split has no 2D laser to download.
+This costs nothing in comparability, because DR-SPAAM's published JRDB numbers are on a 10-sequence hold-out of
+the train split (its `dataset/jrdb_dataset.py`). The owner downloaded the five 2019 train archives
+(`memory/data-model.md`, "What to download"): rosbags 40 GB, labels 162 MB, detections 82 MB, timestamps 2.1 MB,
+calibration 4 KB. Images and Velodyne pointclouds were skipped.
+
+**`utils/unpack_jrdb.py`** puts them in DR-SPAAM's layout under `library/takheliped/include/JRDB-data/train_dataset/`.
+Every file goes to `<name>.part` and is renamed only after the CRC is checked and the size matches, so a rerun skips
+every finished file and resumes an interrupted one. Every member is checked to land inside the destination before
+anything is written. Five tests, written first and failing first: layout, rerun skips, truncated file and stale
+`.part` rewritten, path escape refused, missing archive named before any write. 5/5 pass; full suite 1,918 passed;
+ruff clean.
+
+**Run on the real archives:** 464 files, 46.1 GB, ~37 min, 29 of them the rosbags (27 bags plus two `cmd_vel`
+CSVs). A rerun skipped all 464 in 0.3 s. All 27 sequences have a bag, a `timestamps/` folder, a `labels_3d` file
+and a `labels_2d_stitched` file, with identical names.
+
+**Decision.** A63.3's gate is met and `TODO.md` §C is empty; its JRDB block was already absorbed by A63.3. Nothing is
+measured on JRDB yet: `JRDB_Dataset` reads DROW-format CSVs that nothing produces, so the first A63.3 step is
+reading one bag's topics and measuring the scan geometry and rate.
+
+## Under the per-beam norm a smaller receptive field adds 3.5 pp on DROW: 29.0% has become about 41.5% (2026-11-10/11)
+
+*keywords: item 107 (g), reading 16, results/drow_field.json, drow_field_k5 41.79, drow_field_k3 41.48, drow_field_k3_small 41.17, receptive field 256 180 104 58 beams, far-range test up 10 to 17.5, far-range train down 67.5 to 58.4, train/test 2.0 to 1.6, gap to cutout 34 to 22 pp, field in beams not metres*
+
+**The test of the receptive field**, possible only since the per-beam norm made it finite, prediction in `TODO.md` row
+107 before it ran (far-range train AP toward the cutout's, far-range test AP up). Two seeds each on official DROW, the
+headline recipe at the default radii with `--norm position`; fields measured by gradient:
+
+| field, beams (at 7 m) | parameters | test AP, s0 / s1, mean | train / test | within-scan hits | 5-10 m test / train | past 10 m test / train |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| 256, the headline shape (28.7 m) | 960,323 | 37.83 / 38.06%, **37.95%** | 2.03 / 2.00 | 58.9% | 10.3 / 67.5% | 5.2 / 64.5% |
+| 180, kernel 5 (14.0 m) | 958,467 | 40.28 / 43.30%, **41.79%** | 1.78 / 1.69 | 62.2% | 14.3 / 63.4% | 6.7 / 61.1% |
+| 104, kernel 3 (6.8 m) | 956,611 | 41.39 / 41.56%, **41.48%** | 1.82 / 1.68 | 64.1% | 16.8 / 64.2% | 6.2 / 61.5% |
+| 58, kernel 3, no bottleneck blocks, one block per stage (3.6 m) | 517,155 | 41.08 / 41.26%, **41.17%** | 1.55 / 1.66 | 65.4% | 17.5 / 58.4% | 7.0 / 55.0% |
+| cutout (1 m window) | -- | 63.20% | 1.05 | 73.5% | 36.1 / 51.7% | 19.6 / 35.0% |
+
+**Against the prediction: right in direction, partial in size.** Every smaller field beats the headline shape, the
+first step down (256 -> 180 beams) giving nearly all of it; far-range test AP rises (5-10 m: 10.3 -> 17.5%) and
+far-range train AP falls toward the cutout's (67.5 -> 58.4%, against 51.7%), so the ratio by range flattens without
+closing. Train / test falls from 2.0 to 1.6-1.7 and within-scan hits rise from 59% to 65%.
+
+**Where it leaves DROW**: the scan-wide norm's 29.0% has become about 41.5% at the same seeds, the gap to the cutout
+34 pp -> 22 pp. The smallest field still spans 3.6 m of arc at 7 m against the cutout's 1 m, and it is counted in beams,
+so on FROG's 0.25-deg grid the same kernels cover half the angle -- the next reading is FROG's cost of a smaller field.
+
 ## ConvNeXt's per-beam norm lifts DROW's stage 2 from 29.0% to 38.0% and costs FROG 1.4 pp (2026-11-10)
 
 *keywords: item 107 (f), drow_position_norm_s0 37.83 s1 38.06, frog_scan_norm 81.30, frog_position_norm 79.90, --norm position, reading 15, results/drow_norm.json, gain at close range 0-2 m 48.5 to 64.9, far range unchanged, far train AP 64-65, pooled over within 0.50 to 0.64, A1 or A2 for the owner*
