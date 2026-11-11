@@ -59,6 +59,8 @@ what caught (`memory/gotchas.md`):
     256, read the same way.
 17. **DROW test part by part** (`parts`, the owner's method): people per scan, scan geometry, look-alikes, range, every
     run's AP per part as a share of the cutout's.
+18. **FROG's cost of a smaller field** (`frog-field`, item 107 (i)): FROG's own test pass for both norms and the per-beam
+    norm at kernel 5 and kernel 3.
 
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
@@ -71,6 +73,7 @@ what caught (`memory/gotchas.md`):
     python drow_locality_property.py --readings norm --out ../results/drow_norm.json
     python drow_locality_property.py --readings field --out ../results/drow_field.json
     python drow_locality_property.py --readings parts --out ../results/drow_parts.json
+    python drow_locality_property.py --readings frog-field --out ../results/frog_field.json
 """
 
 import re
@@ -118,6 +121,9 @@ FIELD_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.p
 #: Reading 17's runs: the headline, the per-beam norm and its three smaller fields, two seeds each.
 PARTS_RUNS = {"drow_default_radii": NORM_RUNS["drow_default_radii"], **FIELD_RUNS}
 CROWDING_BINS = ("no person", "one person", "2-3 people", "4 or more")
+#: Reading 18's FROG runs (`queue_frog_field.py` trains the two new ones): both norms, and the per-beam norm at two fields.
+FROG_FIELD_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in NORM_SEEDS]
+                   for name in ("frog_scan_norm", "frog_position_norm", "frog_field_k5", "frog_field_k3")}
 RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in RESIDUAL_SEEDS])
                  for name, mode in (("drow_default_radii", "official"), ("drow_context_dropout", "official"),
                                     ("drow_places_50", "official-places-50"), ("drow_places_25", "official-places-25"))}
@@ -125,7 +131,7 @@ RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibrat
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
 READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions", "arms",
-            "ranges", "residual", "context", "norm", "field", "parts")
+            "ranges", "residual", "context", "norm", "field", "parts", "frog-field")
 #: Reading 10's stage-2 runs, one directory per geometry partition and seed (`queue_drow_partitions.py` trains them), and
 #: the rule written into `TODO.md` row 106 before any of them ran.
 PARTITION_SEEDS = (0, 1)
@@ -575,6 +581,16 @@ def parts_reading(device) -> Dict[str, object]:
     return out
 
 
+def frog_field_reading(device) -> Dict[str, object]:
+    """Reading 18 (item 107 (i)): FROG's own test pass for both norms and the per-beam norm at two smaller fields."""
+    out = {name: [json.loads((p.parent / "step2_results.json").read_text())["test"] for p in paths] for name, paths in FROG_FIELD_RUNS.items()}
+    print("\nFROG official test, each run's own test pass", flush=True)
+    for name, rows in out.items():
+        print(f"  {name:<20}" + "".join(f"  s{i} AP {r['ap']:.2%}" for i, r in enumerate(rows))
+              + f"   mean {np.mean([r['ap'] for r in rows]):.2%}", flush=True)
+    return out
+
+
 def print_range_table(title: str, table: Dict[str, Dict[str, Dict[str, float]]]) -> None:
     print(f"\n{title}", flush=True)
     models = list(table)
@@ -842,6 +858,9 @@ def main() -> int:
 
     if "parts" in args.readings:
         results["parts"] = parts_reading(device)
+
+    if "frog-field" in args.readings:
+        results["frog_field"] = frog_field_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.
