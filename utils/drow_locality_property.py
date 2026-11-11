@@ -57,6 +57,8 @@ what caught (`memory/gotchas.md`):
     GroupNorm, on DROW by range and train against test, and FROG's cost against a control trained the same way.
 16. **The receptive field** (`field`, item 107 (g)): the per-beam norm at 180, 104 and 58 beams of field against its
     256, read the same way.
+17. **DROW test part by part** (`parts`, the owner's method): people per scan, scan geometry, look-alikes, range, every
+    run's AP per part as a share of the cutout's.
 
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
@@ -68,6 +70,7 @@ what caught (`memory/gotchas.md`):
     python drow_locality_property.py --readings context --out ../results/drow_context.json
     python drow_locality_property.py --readings norm --out ../results/drow_norm.json
     python drow_locality_property.py --readings field --out ../results/drow_field.json
+    python drow_locality_property.py --readings parts --out ../results/drow_parts.json
 """
 
 import re
@@ -112,6 +115,9 @@ NORM_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pt
 #: headline shape's 256, two seeds each, beside the per-beam norm at the headline shape.
 FIELD_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in NORM_SEEDS]
               for name in ("drow_position_norm", "drow_field_k5", "drow_field_k3", "drow_field_k3_small")}
+#: Reading 17's runs: the headline, the per-beam norm and its three smaller fields, two seeds each.
+PARTS_RUNS = {"drow_default_radii": NORM_RUNS["drow_default_radii"], **FIELD_RUNS}
+CROWDING_BINS = ("no person", "one person", "2-3 people", "4 or more")
 RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in RESIDUAL_SEEDS])
                  for name, mode in (("drow_default_radii", "official"), ("drow_context_dropout", "official"),
                                     ("drow_places_50", "official-places-50"), ("drow_places_25", "official-places-25"))}
@@ -119,7 +125,7 @@ RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibrat
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
 READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions", "arms",
-            "ranges", "residual", "context", "norm", "field")
+            "ranges", "residual", "context", "norm", "field", "parts")
 #: Reading 10's stage-2 runs, one directory per geometry partition and seed (`queue_drow_partitions.py` trains them), and
 #: the rule written into `TODO.md` row 106 before any of them ran.
 PARTITION_SEEDS = (0, 1)
@@ -200,8 +206,18 @@ def confuser_bins(people_xy: Sequence[np.ndarray], others_xy: Sequence[np.ndarra
 
 
 def ap_by_bin(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]], bins: np.ndarray, names: Sequence[str]) -> Dict[str, Dict[str, float]]:
-    """`score_detections` over each bin's frames alone, keyed by the bin's name."""
-    return {name: score_detections([f for f, b in zip(frames, bins, strict=True) if b == i]) for i, name in enumerate(names)}
+    """`score_detections` over each bin's frames alone, keyed by the bin's name; a bin nobody stands in has no AP."""
+    out = {}
+    for i, name in enumerate(names):
+        part = [f for f, b in zip(frames, bins, strict=True) if b == i]
+        out[name] = score_detections(part) if sum(len(g) for _, _, g in part) else dict(ap=float("nan"), frames=len(part), people=0)
+    return out
+
+
+def crowding_bins(people_xy: Sequence[np.ndarray]) -> np.ndarray:
+    """Per scan, `CROWDING_BINS`' index: nobody, one person, two or three, four or more."""
+    counts = np.array([len(np.asarray(p).reshape(-1, 2)) for p in people_xy])
+    return np.digitize(counts, (1, 2, 4))
 
 
 def top_k_hits(frames: List[Tuple[np.ndarray, np.ndarray, np.ndarray]], radius: float = MATCH_RADIUS_M) -> float:
@@ -528,6 +544,37 @@ def norm_reading(device) -> Dict[str, object]:
     return out
 
 
+def parts_reading(device) -> Dict[str, object]:
+    """Reading 17 (item 107, the owner's method): DROW test split along every property measured so far -- people per scan,
+    scan geometry, look-alikes near people, the person's range -- each of our runs and the cutout scored per part, and
+    every run's AP over the cutout's per part, so what still fails after the per-beam norm and the field is read off."""
+    split = load_frames("test", "official", DROW)
+    ds, cfg = _load_dataset(SimpleNamespace(dataset="drow", split="test"))
+    played = {"cutout": cutout_frames(ds, cfg, split)}
+    for name, paths in PARTS_RUNS.items():
+        for i, f in enumerate(stage2_frames(paths, split, DROW, device)):
+            played[f"{name}_s{i}"] = f
+    medians = scan_statistics(split.scans[split.annotated], split.people_xy, DROW.spacing_deg)["median_range_m"]
+    properties = {"people per scan": (crowding_bins(split.people_xy), CROWDING_BINS),
+                  "scan geometry": ((np.nan_to_num(medians, nan=np.inf) >= ENCLOSED_M).astype(int), ("enclosed", "open")),
+                  "look-alikes": (confuser_bins(split.people_xy, others_xy(split)), CONFUSER_BINS)}
+    out = {}
+    for prop, (bins, names) in properties.items():
+        out[prop] = {m: ap_by_bin(f, bins, names) for m, f in played.items()}
+    out["range"] = {m: ap_by_range(f, RANGE_EDGES_M) for m, f in played.items()}
+    for prop, table in out.items():
+        print(f"\nDROW test by {prop}: AP per part, and each run's mean over seeds as a share of the cutout's", flush=True)
+        parts = list(table["cutout"])
+        print(f"  {'run':<22}" + "".join(f"{p[:18]:>20}" for p in parts), flush=True)
+        for name in ["cutout", *PARTS_RUNS]:
+            rows = [table[m] for m in table if m == name or m.startswith(name + "_s")]
+            ap = [np.nanmean([r[p]["ap"] for r in rows]) for p in parts]
+            cut = [table["cutout"][p]["ap"] for p in parts]
+            print(f"  {name:<22}" + "".join(f"{a:>12.2%} ({a / c if c else float('nan'):.2f})" for a, c in zip(ap, cut, strict=True)), flush=True)
+        print(f"  {'people':<22}" + "".join(f"{table['cutout'][p]['people']:>20}" for p in parts), flush=True)
+    return out
+
+
 def print_range_table(title: str, table: Dict[str, Dict[str, Dict[str, float]]]) -> None:
     print(f"\n{title}", flush=True)
     models = list(table)
@@ -792,6 +839,9 @@ def main() -> int:
 
     if "field" in args.readings:
         results["field"] = field_reading(device)
+
+    if "parts" in args.readings:
+        results["parts"] = parts_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.

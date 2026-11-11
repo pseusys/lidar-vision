@@ -15,7 +15,8 @@ UTILS = Path(__file__).resolve().parents[1] / "utils"
 if str(UTILS) not in sys.path:
     sys.path.insert(0, str(UTILS))
 
-from drow_locality_property import (ap_by_bin, ap_by_range, beam_span, confuser_bins, exact_twins, nearest_distance,  # noqa: E402
+from drow_locality_property import (ap_by_bin, ap_by_range, beam_span, confuser_bins, crowding_bins, exact_twins,  # noqa: E402
+                                    nearest_distance,
                                     partition_verdict, person_ranges, person_score, range_band_frames, ranking_summary, recording_type,
                                     reference_bins, scan_descriptor, scan_levels, scan_statistics, sister_recordings, top_k_hits,
                                     transfer_summary)
@@ -291,6 +292,12 @@ class TestContextProbe:
         logits[178:183] = [1.0, 3.0, 2.0, 0.5, -1.0]
         logits[100] = 9.0                                 # a better beam elsewhere is not this person's
         assert person_score(logits, self.ANGLES, 0.0, 4.0, 0.35) == pytest.approx(3.0)
+
+
+class TestCrowdingBins:
+    def test_scans_by_how_many_people_they_hold(self):
+        people = [np.zeros((0, 2)), np.ones((1, 2)), np.ones((2, 2)), np.ones((3, 2)), np.ones((4, 2)), np.ones((9, 2))]
+        assert crowding_bins(people).tolist() == [0, 1, 2, 2, 3, 3]
 
 
 class TestExactTwins:
