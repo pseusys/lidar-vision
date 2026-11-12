@@ -61,6 +61,10 @@ what caught (`memory/gotchas.md`):
     run's AP per part as a share of the cutout's.
 18. **FROG's cost of a smaller field** (`frog-field`, item 107 (i)): FROG's own test pass for both norms and the per-beam
     norm at kernel 5 and kernel 3.
+19. **The two DROW follow-ups** (`followups`, rows 109 and 110): the multi-class head on the new stage 2, and the new
+    stage 2 on `geometry-balanced` against the cutout trained there, train / test and part by part.
+20. **FROG end to end** (`freeze`, row 108): candidates and whole detector for the frozen seeds and the per-beam norm at
+    kernel 5 through the same pipeline.
 
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
@@ -74,6 +78,8 @@ what caught (`memory/gotchas.md`):
     python drow_locality_property.py --readings field --out ../results/drow_field.json
     python drow_locality_property.py --readings parts --out ../results/drow_parts.json
     python drow_locality_property.py --readings frog-field --out ../results/frog_field.json
+    python drow_locality_property.py --readings followups --out ../results/drow_followups.json
+    python drow_locality_property.py --readings freeze --out ../results/frog_freeze_k5.json
 """
 
 import re
@@ -124,6 +130,14 @@ CROWDING_BINS = ("no person", "one person", "2-3 people", "4 or more")
 #: Reading 18's FROG runs (`queue_frog_field.py` trains the two new ones): both norms, and the per-beam norm at two fields.
 FROG_FIELD_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in NORM_SEEDS]
                    for name in ("frog_scan_norm", "frog_position_norm", "frog_field_k5", "frog_field_k3")}
+#: Reading 19's runs (`queue_position_norm_k5.py` trains the new ones): the per-beam norm at kernel 5 with the multi-class
+#: head on official DROW, and on `geometry-balanced`, beside the binary head on official and the old stage 2 on the partition.
+FOLLOWUP_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in NORM_SEEDS]
+                 for name in ("drow_field_k5", "drow_multiclass_k5", "drow_geometry_balanced", "drow_balanced_k5")}
+#: Reading 20's stage-3 runs: the frozen detector's three seeds, and the same pipeline on the per-beam norm at kernel 5.
+FREEZE_SEEDS = (0, 1, 2)
+FREEZE_RUNS = {"frozen": [CHECKPOINTS / f"a71_freeze_s{s}" for s in FREEZE_SEEDS],
+               "per_beam_norm_k5": [CHECKPOINTS / f"frog_k5_freeze_s{s}" for s in FREEZE_SEEDS]}
 RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in RESIDUAL_SEEDS])
                  for name, mode in (("drow_default_radii", "official"), ("drow_context_dropout", "official"),
                                     ("drow_places_50", "official-places-50"), ("drow_places_25", "official-places-25"))}
@@ -131,7 +145,7 @@ RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibrat
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
 READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions", "arms",
-            "ranges", "residual", "context", "norm", "field", "parts", "frog-field")
+            "ranges", "residual", "context", "norm", "field", "parts", "frog-field", "followups", "freeze")
 #: Reading 10's stage-2 runs, one directory per geometry partition and seed (`queue_drow_partitions.py` trains them), and
 #: the rule written into `TODO.md` row 106 before any of them ran.
 PARTITION_SEEDS = (0, 1)
@@ -550,14 +564,16 @@ def norm_reading(device) -> Dict[str, object]:
     return out
 
 
-def parts_reading(device) -> Dict[str, object]:
+def parts_reading(device, mode: str = "official", runs: Mapping[str, Sequence[Path]] = None, cutout: Path = None) -> Dict[str, object]:
     """Reading 17 (item 107, the owner's method): DROW test split along every property measured so far -- people per scan,
     scan geometry, look-alikes near people, the person's range -- each of our runs and the cutout scored per part, and
-    every run's AP over the cutout's per part, so what still fails after the per-beam norm and the field is read off."""
-    split = load_frames("test", "official", DROW)
-    ds, cfg = _load_dataset(SimpleNamespace(dataset="drow", split="test"))
-    played = {"cutout": cutout_frames(ds, cfg, split)}
-    for name, paths in PARTS_RUNS.items():
+    every run's AP over the cutout's per part, so what still fails after the per-beam norm and the field is read off.
+    `mode`, `runs` and `cutout` (the cutout trained on that partition) let rows 109 and 110 read the same way."""
+    runs = PARTS_RUNS if runs is None else runs
+    split = load_frames("test", mode, DROW)
+    ds, cfg = _load_dataset(SimpleNamespace(dataset="drow", split="test", frog_mode=mode))
+    played = {"cutout": cutout_frames(ds, cfg, split, cutout)}
+    for name, paths in runs.items():
         for i, f in enumerate(stage2_frames(paths, split, DROW, device)):
             played[f"{name}_s{i}"] = f
     medians = scan_statistics(split.scans[split.annotated], split.people_xy, DROW.spacing_deg)["median_range_m"]
@@ -569,15 +585,39 @@ def parts_reading(device) -> Dict[str, object]:
         out[prop] = {m: ap_by_bin(f, bins, names) for m, f in played.items()}
     out["range"] = {m: ap_by_range(f, RANGE_EDGES_M) for m, f in played.items()}
     for prop, table in out.items():
-        print(f"\nDROW test by {prop}: AP per part, and each run's mean over seeds as a share of the cutout's", flush=True)
+        print(f"\nDROW {mode} test by {prop}: AP per part, and each run's mean over seeds as a share of the cutout's", flush=True)
         parts = list(table["cutout"])
         print(f"  {'run':<22}" + "".join(f"{p[:18]:>20}" for p in parts), flush=True)
-        for name in ["cutout", *PARTS_RUNS]:
+        for name in ["cutout", *runs]:
             rows = [table[m] for m in table if m == name or m.startswith(name + "_s")]
             ap = [np.nanmean([r[p]["ap"] for r in rows]) for p in parts]
             cut = [table["cutout"][p]["ap"] for p in parts]
             print(f"  {name:<22}" + "".join(f"{a:>12.2%} ({a / c if c else float('nan'):.2f})" for a, c in zip(ap, cut, strict=True)), flush=True)
         print(f"  {'people':<22}" + "".join(f"{table['cutout'][p]['people']:>20}" for p in parts), flush=True)
+    return out
+
+
+def followups_reading(device) -> Dict[str, object]:
+    """Reading 19 (rows 109 and 110): the multi-class head on the new stage 2 against the binary one on official DROW, and
+    the new stage 2 on `geometry-balanced` against the cutout trained there, each with train / test and part by part."""
+    official = {n: FOLLOWUP_RUNS[n] for n in ("drow_field_k5", "drow_multiclass_k5")}
+    balanced = {n: FOLLOWUP_RUNS[n] for n in ("drow_geometry_balanced", "drow_balanced_k5")}
+    return {"official": score_runs("official", official, device), "balanced": score_runs("geometry-balanced", balanced, device),
+            "official_parts": parts_reading(device, "official", official, CUTOUT),
+            "balanced_parts": parts_reading(device, "geometry-balanced", balanced, CUTOUT_BALANCED)}
+
+
+def freeze_reading(device) -> Dict[str, object]:
+    """Reading 20 (row 108): FROG end to end -- candidates and whole detector, every 5th test frame, each stage-3 run's own
+    test pass -- for the frozen detector's three seeds and the same pipeline on the per-beam norm at kernel 5."""
+    out = {}
+    print("\nFROG official test, every 5th annotated frame: stage 2's candidates and the whole detector", flush=True)
+    for name, dirs in FREEZE_RUNS.items():
+        rows = [json.loads((d / "step3a_results.json").read_text())["test"]["stride_5"] for d in dirs]
+        out[name] = [dict(candidates=r["candidates"], memory=r["memory"]) for r in rows]
+        print(f"  {name:<18}" + "".join(f"  s{i} {r['candidates']:.2%} / {r['memory']:.2%}" for i, r in enumerate(out[name]))
+              + f"   mean {np.mean([r['candidates'] for r in out[name]]):.2%} / {np.mean([r['memory'] for r in out[name]]):.2%}",
+              flush=True)
     return out
 
 
@@ -861,6 +901,12 @@ def main() -> int:
 
     if "frog-field" in args.readings:
         results["frog_field"] = frog_field_reading(device)
+
+    if "followups" in args.readings:
+        results["followups"] = followups_reading(device)
+
+    if "freeze" in args.readings:
+        results["freeze"] = freeze_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.
