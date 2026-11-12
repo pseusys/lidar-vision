@@ -29,6 +29,9 @@ NEW = ("--norm", "position", "--kernel-size", "5")
 STAGE2 = ("--checkpoint-every", "0.25", "--no-aggregator", "--label-sigma-m", "0.3", *NEW)
 DROW = ("--dataset", "drow", "--max-range-m", "29.99", "--eval-max-range-m", "10", "--label-radius", "0.35", "0.6", "0.4")
 DROW_ARMS = {"drow_balanced_k5": ("--frog-mode", "geometry-balanced"), "drow_multiclass_k5": ("--head", "multiclass", "--class-norm", "softmax")}
+#: Row 109's rerun (2026-11-12): both multi-class runs above stopped early (best epochs 1.0 and 4.24), so they are
+#: retrained with the patience rule held off until epoch 8, the binary head's best epochs being 7.75-9.0.
+DROW_ARMS["drow_multiclass_k5_long"] = (*DROW_ARMS["drow_multiclass_k5"], "--min-epochs", "8")
 #: The frozen detector's stage 3, flag for flag as `a71_freeze_s0-2` stored them.
 FROZEN = ("--recurrence", "mingru", "--chunk-s", "10", "--no-exchange", "--no-learned-match", "--no-coast")
 AVERAGED = "step2_calibration.averaged.pth"
@@ -44,7 +47,8 @@ def drow_stage2(name: str, seed: int) -> Job:
                     "--resume"))
 
 
-DROW_JOBS = [drow_stage2(name, seed) for seed in NORM_SEEDS for name in DROW_ARMS]
+DROW_JOBS = [drow_stage2(name, seed) for seed in NORM_SEEDS for name in DROW_ARMS if name != "drow_multiclass_k5_long"]
+LONG_JOBS = [drow_stage2("drow_multiclass_k5_long", seed) for seed in NORM_SEEDS]
 FOLLOWUPS = Job(name="followups_reading", outputs=(RESULTS / "drow_followups.json",), needs=tuple(j.name for j in DROW_JOBS),
                 cli=("drow_locality_property.py", "--readings", "followups", "--out", str(RESULTS / "drow_followups.json")))
 
@@ -62,7 +66,12 @@ FREEZE = Job(name="freeze_reading", outputs=(RESULTS / "frog_freeze_k5.json",),
              needs=tuple(r.name for r in FREEZE_RUNS["per_beam_norm_k5"]),
              cli=("drow_locality_property.py", "--readings", "freeze", "--out", str(RESULTS / "frog_freeze_k5.json")))
 
-JOBS = [*DROW_JOBS, FOLLOWUPS, *FROG_JOBS, FREEZE]
+MULTICLASS = Job(name="multiclass_reading", outputs=(RESULTS / "drow_multiclass_long.json",), needs=tuple(j.name for j in LONG_JOBS),
+                 cli=("drow_locality_property.py", "--readings", "multiclass", "--out", str(RESULTS / "drow_multiclass_long.json")))
+
+#: The rerun was added after the chain had started, so it runs on the next launch, once FROG's stage 3 has the GPU back;
+#: it does not wait on FROG's reading, so a FROG failure cannot block it.
+JOBS = [*DROW_JOBS, FOLLOWUPS, *FROG_JOBS, FREEZE, *LONG_JOBS, MULTICLASS]
 
 
 if __name__ == "__main__":

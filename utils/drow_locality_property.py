@@ -65,6 +65,7 @@ what caught (`memory/gotchas.md`):
     stage 2 on `geometry-balanced` against the cutout trained there, train / test and part by part.
 20. **FROG end to end** (`freeze`, row 108): candidates and whole detector for the frozen seeds and the per-beam norm at
     kernel 5 through the same pipeline.
+21. **The multi-class head, trained to term** (`multiclass`, row 109's rerun): at least eight epochs, against the binary.
 
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
@@ -80,6 +81,7 @@ what caught (`memory/gotchas.md`):
     python drow_locality_property.py --readings frog-field --out ../results/frog_field.json
     python drow_locality_property.py --readings followups --out ../results/drow_followups.json
     python drow_locality_property.py --readings freeze --out ../results/frog_freeze_k5.json
+    python drow_locality_property.py --readings multiclass --out ../results/drow_multiclass_long.json
 """
 
 import re
@@ -133,7 +135,8 @@ FROG_FIELD_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.b
 #: Reading 19's runs (`queue_position_norm_k5.py` trains the new ones): the per-beam norm at kernel 5 with the multi-class
 #: head on official DROW, and on `geometry-balanced`, beside the binary head on official and the old stage 2 on the partition.
 FOLLOWUP_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in NORM_SEEDS]
-                 for name in ("drow_field_k5", "drow_multiclass_k5", "drow_geometry_balanced", "drow_balanced_k5")}
+                 for name in ("drow_field_k5", "drow_multiclass_k5", "drow_geometry_balanced", "drow_balanced_k5",
+                              "drow_multiclass_k5_long")}
 #: Reading 20's stage-3 runs: the frozen detector's three seeds, and the same pipeline on the per-beam norm at kernel 5.
 FREEZE_SEEDS = (0, 1, 2)
 FREEZE_RUNS = {"frozen": [CHECKPOINTS / f"a71_freeze_s{s}" for s in FREEZE_SEEDS],
@@ -145,7 +148,7 @@ RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibrat
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
 READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions", "arms",
-            "ranges", "residual", "context", "norm", "field", "parts", "frog-field", "followups", "freeze")
+            "ranges", "residual", "context", "norm", "field", "parts", "frog-field", "followups", "freeze", "multiclass")
 #: Reading 10's stage-2 runs, one directory per geometry partition and seed (`queue_drow_partitions.py` trains them), and
 #: the rule written into `TODO.md` row 106 before any of them ran.
 PARTITION_SEEDS = (0, 1)
@@ -621,6 +624,13 @@ def freeze_reading(device) -> Dict[str, object]:
     return out
 
 
+def multiclass_reading(device) -> Dict[str, object]:
+    """Reading 21 (row 109's rerun): the multi-class head trained at least eight epochs, against the binary head, on
+    official DROW, train / test and part by part."""
+    runs = {n: FOLLOWUP_RUNS[n] for n in ("drow_field_k5", "drow_multiclass_k5_long")}
+    return {"official": score_runs("official", runs, device), "official_parts": parts_reading(device, "official", runs, CUTOUT)}
+
+
 def frog_field_reading(device) -> Dict[str, object]:
     """Reading 18 (item 107 (i)): FROG's own test pass for both norms and the per-beam norm at two smaller fields."""
     out = {name: [json.loads((p.parent / "step2_results.json").read_text())["test"] for p in paths] for name, paths in FROG_FIELD_RUNS.items()}
@@ -907,6 +917,9 @@ def main() -> int:
 
     if "freeze" in args.readings:
         results["freeze"] = freeze_reading(device)
+
+    if "multiclass" in args.readings:
+        results["multiclass"] = multiclass_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.
