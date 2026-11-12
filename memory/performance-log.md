@@ -345,6 +345,10 @@ an ignore region only under `--ignore-other-classes`, which is off. Their differ
 -- see `interpreting-evaluation.md` -- so every DROW comparison above that was read against 27.86% or 27.12% stands, and
 reads about 1.8 pp further from the cutout's 63.20% against the new default.
 
+### The new stage 2 on a geometry-balanced DROW: 0.90 of the cutout (2026-11-12)
+
+Per-beam norm at kernel 5, two seeds: **48.60%** on `geometry-balanced` test against the cutout's 53.75% there (0.90), where on official DROW it is 41.79% against 63.20% (0.66). About three quarters of the remaining official gap is the train / test geometric asymmetry, about a quarter the architecture's own (`CHANGELOG.md`). The ratio is the comparable quantity; the two test splits differ.
+
 ### The per-beam norm with a smaller field: DROW about 41.5% (2026-11-11)
 
 Official DROW test, stage 2 alone, two seeds each, `--norm position` at fields of 256 / 180 / 104 / 58 beams: **37.95 / 41.79 / 41.48 / 41.17%**, against the scan-wide norm's 29.03% and the cutout's 63.20% (`CHANGELOG.md`). **FROG**, two seeds each against the same day's controls: 79.80% at kernel 5, 78.95% at kernel 3, against the per-beam norm's 79.90% and the scan norm's 81.30%. **CPU**: kernel 5 stage 2 9.16 ms against 9.02 ms per-beam and 8.62 ms scan-wide in a second interleaved sweep -- no faster than kernel 7. The configuration that wins on DROW and loses least on FROG is the per-beam norm at kernel 5: **DROW 41.79% (+12.8 pp), FROG 79.80% (-1.5 pp), stage 2 +0.4-0.7 ms**.

@@ -66,6 +66,47 @@ and a `labels_2d_stitched` file, with identical names.
 measured on JRDB yet: `JRDB_Dataset` reads DROW-format CSVs that nothing produces, so the first A63.3 step is
 reading one bag's topics and measuring the scan geometry and rate.
 
+## On a geometry-balanced DROW the new stage 2 reaches 0.90 of the cutout: about three quarters of the remaining official gap is the train / test asymmetry (2026-11-12)
+
+*keywords: item 110, item 109, reading 19, results/drow_followups.json, drow_balanced_k5 47.75 49.45, ours over cutout 0.90 balanced 0.66 official, train/test 1.45 against 1.27, architecture share about a quarter, drow_multiclass_k5 stopped early epoch 1.0 and 4.24, incomplete runs, rerun with --min-epochs*
+
+**Row 110, the owner's question** -- how much of the remaining difference is the geometric asymmetry between DROW's
+train and test, and how much is the architecture's own: the new stage 2 (per-beam norm, kernel 5, DROW's default
+radii) at two seeds on `geometry-balanced`, read against DROW3's cutout trained on the same partition, beside the same
+comparison on official DROW (best epochs 9.0 / 7.75; prediction in `TODO.md` before the run):
+
+| | official DROW | `geometry-balanced` |
+| --- | ---: | ---: |
+| cutout: test AP, train / test | 63.20%, 1.05 | 53.75%, 1.27 |
+| **new stage 2**: test AP (s0 / s1), train / test | 41.79% (40.28 / 43.30), 1.73 | **48.60%** (47.75 / 49.45), **1.45** |
+| **new stage 2 over the cutout** | **0.66** (21.4 pp behind) | **0.90** (5.2 pp behind) |
+| old stage 2 over the cutout, for reference | 0.46 | 0.78 |
+
+**The prediction is met, at its edge**: 0.90 against the bar of 0.9, and train / test 1.45 approaching the cutout's
+1.27. In shares of the cutout's AP, the new stage 2's shortfall falls from 0.34 on official DROW to 0.10 when train
+and test carry the same geometry: **about three quarters of what remains on official DROW is the train / test
+geometric asymmetry, about a quarter is the architecture's own** -- and that quarter sits where it sat before, now on a
+split that cannot blame the geometry for it:
+
+| `geometry-balanced` test, new stage 2 over the cutout | |
+| --- | ---: |
+| people under 2 m / crowded scans (4 or more) | 1.00 / 0.99 |
+| 3-5 m / 5-10 m | 0.81 / 0.70 |
+| one person in the scan | 0.73 |
+| enclosed scans / open scans | 0.75 / 0.93 |
+| a wheelchair or walker near nobody | 0.86 |
+
+**Read with care**: one cutout seed on this partition; the partition also reunites official val's sister segments and
+swaps four of five test recordings, so "geometry" here means everything the balanced construction changed; the ratio,
+not the AP, is the comparable quantity across partitions.
+
+**Row 109, the multi-class head, is inconclusive.** `--head multiclass --class-norm softmax` on the new stage 2: test AP
+22.06 / 34.83%, train AP 24.28 / 41.42%, the look-alike part 0.36 of the cutout's against the binary head's 0.55 -- but
+both runs were **stopped early by the patience rule**, at best epochs **1.0** and **4.24** against the binary head's
+7.75-9.0 (the run ended at epoch 3.99 for seed 0), and a train AP of 24% says the arm never trained. By
+`memory/interpreting-evaluation.md`'s rule an arm that stopped early is an incomplete run, not a worse architecture;
+the answer needs a rerun with a minimum epoch count (`--min-epochs`), queued behind FROG's end-to-end run.
+
 ## DROW part by part after the fixes, and FROG's price of them: kernel 5 is free on FROG beyond the norm (2026-11-11)
 
 *keywords: item 107 (h), item 107 (i), reading 17, reading 18, results/drow_parts.json, results/frog_field.json, crowded scans at parity 0.98, one-person scans 0.68, look-alikes without people 0.39-0.55, range past 3 m 0.47-0.54, frog_field_k5 79.80, frog_field_k3 78.95, CPU per-beam norm +0.4-0.7 ms, kernel 5 no faster*
