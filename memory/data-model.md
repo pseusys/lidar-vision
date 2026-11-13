@@ -285,17 +285,18 @@ By `dtime=20`, ~35 cm — close to half a walking stride.
 ## JRDB (`JRDB_Dataset`)
 
 DROW-compatible format, 541 beams, 270 deg FoV -- **assumed by the loader, never checked against real files**.
-Requires free manual registration at jrdb.erc.monash.edu and manual extraction into `library/takheliped/include/JRDB-data/` — never auto-downloaded, so its absence is normal (`gotchas.md`).
+Requires free manual registration at jrdb.erc.monash.edu, and is never auto-downloaded, so its absence on a fresh clone is normal (`gotchas.md`).
+The archives below are unpacked by `utils/unpack_jrdb.py` into `library/takheliped/include/JRDB-data/train_dataset/`, in DR-SPAAM's layout (`rosbags/`, `timestamps/`, `labels/`, `detections/`, `calibration/`).
+A rerun skips files already complete and resumes an interrupted run (`commands.md`).
 
 ### What to download
 
 Worked out 2026-11-10 from JRDB's two PDFs (*File Structure and Label Format*, *Sensor Setup*) and DR-SPAAM's released
 `bin/setup_jrdb_dataset.py` and `datahandle/jrdb_handle.py`. **Not yet checked against the files themselves.**
 
-- **The 2D laser is in none of the folders the file-structure PDF describes** (images, pointclouds, labels,
-  detections, timestamps). It exists only in the **rosbags**, as the merged front+rear topic `segway/scan_multi`,
-  which is the one topic DR-SPAAM's extractor reads. The rosbags are also the only source of wheel odometry (what
-  `.odom2` needs) and of the 1-channel lasers' mounting transform (`/tf`), which neither PDF gives.
+- **The 2D laser is in none of the folders the file-structure PDF describes** (images, pointclouds, labels, detections, timestamps).
+  It exists only in the **rosbags**, as the merged front+rear topic `segway/scan_multi`, which is the one topic DR-SPAAM's extractor reads.
+  The rosbags are also the only source of wheel odometry (what `.odom2` needs) and of the 1-channel lasers' mounting transform (`/tf`), which neither PDF gives.
 - **The download page (checked 2026-11-10) offers rosbags for the 2019 train split only** -- "Train Rosbags
   (40 GB)". The "Full Train/Test Dataset" archives are `jrdb19_*_norosbag.zip`, and no test rosbags are listed
   anywhere, so **JRDB's test split has no 2D laser to download** and its released test labels cannot be used here.

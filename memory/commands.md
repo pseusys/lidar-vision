@@ -21,6 +21,7 @@ Do not use bare `python3` or `make venv` — see `gotchas.md`.
 
 ```bash
 pip install ./library                                       # library + downloads (DROW, FROG, bundled DROW/DR-SPAAM/LFE weights)
+.venv/Scripts/python.exe -I utils/unpack_jrdb.py            # JRDB, downloaded by hand: the five 2019 train archives from ~/Downloads (--source) into include/JRDB-data/train_dataset/; rerun resumes
 make build-lib                                               # cmake + make in library/cpp_core/build; installs system-wide only if run as root
 python -c "import takheliped; from takheliped.detectors import AlgorithmicDetector; print('OK')"   # confirms the C++ extension built
 ```

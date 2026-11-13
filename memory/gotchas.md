@@ -247,7 +247,8 @@ Platform and environment traps that have cost real debugging time.
   Double it: `76.3%%`. `tests/test_train_eval_consistency.py::test_both_clis_can_print_help` now catches it.
 
 - **JRDB requires manual registration** (jrdb.erc.monash.edu) **and is never auto-downloaded.**
-  Absence of `library/takheliped/include/JRDB-data/` is normal, not a broken install; every JRDB column in this project's own results is `n/a` for that reason, not a code limitation.
+  Absence of `library/takheliped/include/JRDB-data/` on a fresh clone is normal, not a broken install.
+  The archives are downloaded by hand (which ones: `data-model.md`) and unpacked with `utils/unpack_jrdb.py` (`commands.md`).
 - **DirectML training crashes are not necessarily a code bug.**
   See `AGENTS.md` I4 for the three distinct crash modes hit training `Li2FormerDetector` — don't sink more than one workaround attempt into a DirectML-only crash before flagging it as an environment limitation.
 - **`.venv` is not a self-contained interpreter — its `pyvenv.cfg` points `home` at `C:\Users\...\AppData\Local\Programs\Python\Python312`.**

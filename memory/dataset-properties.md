@@ -614,5 +614,5 @@ Two consequences, both negative and both worth knowing before building anything:
 
 - **Whether temporal *ordering* carries information about the label at all**, model-free. The 0.5pp shuffle result tested one architecture with a known-weak spatial backbone; it is not evidence about the data.
 - **Whether missed people leave sub-threshold evidence.** If the 21% of people a detector misses mostly produce weak-but-persistent responses, a temporal model has recall headroom that a tracker which only filters cannot reach. A tracker that *rescores* from track confidence can (CBMOT, `../docs/RESEARCH.md` §7.4.1), so that part of the headroom is not exclusive to an architecture, and E14-E15 measure how much of it a rule reaches.
-- **JRDB**, at all. Needs manual registration and is not downloaded (`gotchas.md`).
+- **JRDB**, at all: its train split has been on disk since 2026-11-11 (`data-model.md`), and nothing has been measured on it yet.
 - **Any venue beyond these two.**
