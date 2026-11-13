@@ -310,3 +310,25 @@ class TestExactTwins:
 def test_the_distance_runs_on_the_given_device():
     bank = np.ones((4, 8), np.float32)
     assert nearest_distance(bank[:1], bank, max_shift=1, device=torch.device("cpu")).dtype == np.float64
+
+
+def test_the_freeze_reading_takes_each_stage_3_run_s_ap_out_of_its_full_record(tmp_path, monkeypatch):
+    """`step3a_results.json` keeps a whole record per score (AP, precision, recall, ...), not the AP alone."""
+    import json
+
+    import drow_locality_property
+
+    runs = {}
+    for name, aps in (("frozen", [(0.80, 0.85), (0.82, 0.87)]), ("arm", [(0.70, 0.75), (0.72, 0.77)])):
+        runs[name] = []
+        for seed, (candidates, memory) in enumerate(aps):
+            run = tmp_path / f"{name}_s{seed}"
+            run.mkdir()
+            record = {"candidates": {"ap": candidates, "precision": 0.5, "recall": 0.9},
+                      "memory": {"ap": memory, "precision": 0.7, "recall": 0.8, "exchange_rate": 6.6}}
+            (run / "step3a_results.json").write_text(json.dumps({"test": {"stride_5": record}}))
+            runs[name].append(run)
+    monkeypatch.setattr(drow_locality_property, "FREEZE_RUNS", runs)
+    out = drow_locality_property.freeze_reading(None)
+    assert [r["candidates"]["ap"] for r in out["frozen"]] == [0.80, 0.82]
+    assert [r["memory"]["ap"] for r in out["arm"]] == [0.75, 0.77]

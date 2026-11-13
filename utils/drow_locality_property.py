@@ -618,9 +618,9 @@ def freeze_reading(device) -> Dict[str, object]:
     for name, dirs in FREEZE_RUNS.items():
         rows = [json.loads((d / "step3a_results.json").read_text())["test"]["stride_5"] for d in dirs]
         out[name] = [dict(candidates=r["candidates"], memory=r["memory"]) for r in rows]
-        print(f"  {name:<18}" + "".join(f"  s{i} {r['candidates']:.2%} / {r['memory']:.2%}" for i, r in enumerate(out[name]))
-              + f"   mean {np.mean([r['candidates'] for r in out[name]]):.2%} / {np.mean([r['memory'] for r in out[name]]):.2%}",
-              flush=True)
+        aps = [(r["candidates"]["ap"], r["memory"]["ap"]) for r in out[name]]
+        print(f"  {name:<18}" + "".join(f"  s{i} {c:.2%} / {m:.2%}" for i, (c, m) in enumerate(aps))
+              + f"   mean {np.mean([c for c, _ in aps]):.2%} / {np.mean([m for _, m in aps]):.2%}", flush=True)
     return out
 
 

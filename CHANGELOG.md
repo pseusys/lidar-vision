@@ -38,6 +38,61 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The per-beam norm at kernel 5, end to end on FROG: the whole detector 84.51% against the frozen 86.29% (2026-11-13)
+
+*keywords: item 108, reading 20, results/frog_freeze_k5.json, frog_k5_freeze_s0 frog_k5_freeze_s1 frog_k5_freeze_s2, frog_field_k5_s0-2 averaged, a71_freeze_s0-2, --norm position --kernel-size 5, whole detector 84.51 86.29 -1.78, candidates 79.73 82.80 -3.07, stage 3 lift 4.78 3.49, lat_freeze_frozen lat_freeze_per_beam_norm_k5, CPU 20.04 19.00 ms, p99 22.08 20.92, A1 A2, freeze_reading TypeError, seed spread 0.22 corrected to 0.32*
+
+**Row 108 measured.** The per-beam norm at kernel 5 (`--norm position --kernel-size 5`) went through the frozen
+detector's whole pipeline on FROG: three stage-2 seeds on the adopted recipe (`frog_field_k5_s0-2`), each averaged
+over its val-chosen window (1.00-2.00 for all three, val AP 73.50 / 73.37 / 73.44%), then stage 3 at the frozen
+recipe on each. The only difference from `a71_freeze_s0-2` is stage 2's norm and kernel.
+
+FROG official test, every 5th annotated frame (10,034 frames, 30,737 people), each stage-3 run's own test pass:
+
+| AP @ 0.5 m | s0 | s1 | s2 | **mean** |
+| --- | ---: | ---: | ---: | ---: |
+| frozen, candidates | 82.76% | 82.73% | 82.92% | 82.80% |
+| frozen, whole detector | 86.11% | 86.33% | 86.43% | **86.29%** |
+| per-beam norm k5, candidates | 79.81% | 79.80% | 79.58% | 79.73% |
+| per-beam norm k5, whole detector | 84.36% | 84.52% | 84.64% | **84.51%** |
+
+- **The whole detector loses 1.78 pp, and no seed overlaps.** The best new seed sits 1.47 pp under the worst frozen
+  one. The frozen seeds range 0.32 pp (sample sd 0.17 pp), the new ones 0.28 pp (sd 0.14 pp). Row 108's condition
+  quoted a 0.22 pp spread for the frozen detector; its three seeds range 0.32 pp.
+- **Stage 2 loses more than the whole detector does.** The candidates fall 3.07 pp, and stage 3 lifts them 4.78 pp
+  against the frozen detector's 3.49, so the memory recovers 1.29 pp of the loss. At 0.3 m the same picture: whole
+  detector 83.2 against 85.2%.
+- **The stage-2 loss doubles between stage 2's own pass and the averaged candidates.** The val-best stage-2 test
+  passes differ by 1.56 pp (79.89 against 81.45%, the 1.5 pp row 107 reported); the averaged checkpoints' val AP
+  differs by 3.55 pp (73.44 against 76.99%), and their candidates by 3.07 pp. Where that happens -- the averaging, or
+  the candidate decode -- is not measured.
+- **The error mix barely moves.** Whole detector precision 72.5 against 73.2%, recall 85.2 against 84.8%, 0.99
+  against 0.95 false positives per frame. The new candidates carry slightly fewer false positives (2.74 against 2.84).
+
+**CPU, matched.** `tracking_baselines.py latency --device cpu --threads 4`, 2,000 consecutive FROG test scans, batch 1,
+three rounds interleaved frozen / new on an idle host, each arm with its own stage 2 and stage 3
+(`results/lat_freeze_frozen_r1-3`, `results/lat_freeze_per_beam_norm_k5_r1-3`). The stage 2s differ, so the protocol's
+usual noise floor -- the `stage2` phase being byte-identical work -- is the `memory` phase here, the same arithmetic
+in both arms:
+
+| ms/frame, mean of three medians | stage 2 | decode | memory | **total** | total p99 | p99 vs 25 ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| frozen | 10.30 | 1.75 | 6.98 | **19.00** | 20.92 | 84% |
+| per-beam norm k5 | 10.97 | 2.15 | 7.02 | **20.04** | 22.08 | 88% |
+
+The memory phases agree to 0.04 ms, so the session is clean. Stage 2 costs 0.67 ms more, as row 107 measured, and
+decode 0.40 ms more -- not from more candidates, since there are fewer. Both fit FROG's 25 ms period at the tail.
+This session reads the frozen detector's stage 2 at 10.30 ms where the speed table's 2026-10 session read 8.44; only
+the interleaved pair compares.
+
+**What it decides is the owner's call, A1 or A2 (`TODO.md`).** As a new default (A1) it trades the whole detector's
+1.78 pp and 1.04 ms on FROG for DROW's +12.8 pp at stage 2. As a drop-in (A2) this run supplies the half of the
+evidence that A2 needs from where the property does not hold: on FROG it is not unnecessary but harmful.
+
+**The reading crashed on the first try.** `freeze_reading` formatted each run's whole results record as a percentage
+where it meant the record's `ap`, so the queue stopped after three attempts at 13:06. A test now pins the record's
+layout (`tests/test_drow_locality_property.py`); the reading was re-run by hand.
+
 ## The softmax head never collapsed: its person score was the raw column logit, which softmax leaves free (2026-11-13)
 
 *keywords: item 109, results/drow_multiclass_long.json, reading 21, drow_multiclass_k5_long 22.07 35.78, person_logit raw column, softmax person probability, logsumexp, per-beam constant, shift invariance, drow_heads_softmax 19.50 27.39, drow_radii_softmax 34.18 30.47, drow_multiclass_k5 29.66 44.27, last epoch 42.20 43.79, softmax collapse withdrawn, 0.6 m disks withdrawn, drow_heads_stage3 withdrawn, val-best chosen by a broken score, --min-epochs*
