@@ -359,9 +359,9 @@ reads about 1.8 pp further from the cutout's 63.20% against the new default.
 
 Three seeds each, FROG official test, every 5th annotated frame, the frozen stage 3 recipe on each averaged stage 2: whole detector **84.51%** against the frozen **86.29%** (-1.78 pp, every new seed below every frozen one), candidates 79.73% against 82.80% (-3.07 pp); stage 3 recovers 1.29 pp of stage 2's loss. **CPU**, one interleaved sweep, each arm with its own stage 2 and stage 3: **20.04 against 19.00 ms** median, p99 22.08 against 20.92 (88% against 84% of FROG's 25 ms) -- stage 2 +0.67 ms, decode +0.40 ms, memory level. The frozen detector stays the default until the owner's A1 / A2 call (`TODO.md`, `CHANGELOG.md`). On DROW the same stage 2 reads 41.79% against 29.03% (below).
 
-### The softmax multi-class head on the new stage 2: a floor of about 43%, once its score is read correctly (2026-11-13)
+### The softmax multi-class head on the new stage 2: DROW 46.40%, +4.6 pp over the binary head (2026-11-13)
 
-Per-beam norm at kernel 5, official DROW test, two seeds, the last checkpoint of a run held to at least eight epochs: **42.20 / 43.79%** read as the softmax person probability, against the binary head's 40.28 / 43.30% -- level, inside DROW's seed spread. A floor, not the head's number: the run's early stopping, best-checkpoint pick and plateau schedule all read the raw person-column logit, which softmax leaves free by a per-beam constant (`CHANGELOG.md`). Every earlier softmax number in this file carries the same defect and is marked withdrawn.
+Per-beam norm at kernel 5, official DROW test, stage 2 alone, two seeds, val-best, trained and scored with the person score as the softmax probability: **45.86 / 46.94%** against the binary head's 40.28 / 43.30% (41.79%), both seeds above both, at the same train AP -- it transfers better (train / test 1.53 against 1.73). 0.73 of the cutout's 63.20%, from 0.66. The gain is entirely in scans holding a wheelchair or walker (no-look-alike scans: 57.69 against 57.65%); past 5 m both heads stay at 0.34-0.40 of the cutout. The day's earlier "floor of 43%" was the same head mis-trained by the broken score (`CHANGELOG.md`). Every softmax number in this file from before 2026-11-13 carries that defect and is marked withdrawn.
 
 ### The new stage 2 on a geometry-balanced DROW: 0.90 of the cutout (2026-11-12)
 

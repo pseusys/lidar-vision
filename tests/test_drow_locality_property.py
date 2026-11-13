@@ -312,6 +312,26 @@ def test_the_distance_runs_on_the_given_device():
     assert nearest_distance(bank[:1], bank, max_shift=1, device=torch.device("cpu")).dtype == np.float64
 
 
+class TestPlacedWindows:
+    """`average_checkpoints.WINDOWS` ends by epoch 2.25; a run that peaks later is averaged before its peak. The placed
+    menu takes the same widths and centres them on the run's own val-best epoch."""
+    EPOCHS = [0.25 * i for i in range(1, 17)]           # 0.25 ... 4.0, as `--checkpoint-every 0.25` writes them
+
+    def test_each_width_is_centred_on_the_best_epoch(self):
+        from drow_locality_property import placed_windows
+        assert placed_windows(2.75, self.EPOCHS, widths=(0.5, 1.0)) == [(2.5, 3.0), (2.25, 3.25)]
+
+    def test_a_window_is_clipped_to_the_checkpoints_the_run_has(self):
+        from drow_locality_property import placed_windows
+        assert placed_windows(4.0, self.EPOCHS, widths=(1.0,)) == [(3.5, 4.0)]
+        assert placed_windows(0.25, self.EPOCHS, widths=(1.0,)) == [(0.25, 0.75)]
+
+    def test_a_window_holding_fewer_than_two_checkpoints_is_dropped_and_a_repeat_kept_once(self):
+        from drow_locality_property import placed_windows
+        sparse = [1.0, 2.0, 3.0]
+        assert placed_windows(2.0, sparse, widths=(0.5, 2.0, 3.0)) == [(1.0, 3.0)]
+
+
 def test_the_freeze_reading_takes_each_stage_3_run_s_ap_out_of_its_full_record(tmp_path, monkeypatch):
     """`step3a_results.json` keeps a whole record per score (AP, precision, recall, ...), not the AP alone."""
     import json

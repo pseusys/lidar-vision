@@ -108,6 +108,33 @@ class TestBinaryIsBitIdenticalToTheHeadThatProducedEveryNumberOnFile:
         assert multi.person_logit(multi(scan())[0]).shape == (2, 48)
 
 
+class TestASoftmaxHeadsPersonScoreIsItsSoftmaxProbability:
+    """Every decoder takes `sigmoid(person_logit)` as the person probability. Softmax cross-entropy does not change when
+    one constant is added to all of a beam's columns, so a softmax head's raw person column carries a per-beam offset
+    nothing in training pins down; read raw, it ranks beams by that offset (`CHANGELOG.md`, 2026-11-13)."""
+
+    def _logits(self):
+        torch.manual_seed(0)
+        return torch.randn(2, 48, 4) * 3.0
+
+    def test_sigmoid_of_it_is_the_softmax_person_column(self):
+        multi = net(head="multiclass", class_norm="softmax", classes=3)
+        logits = self._logits()
+        assert torch.allclose(torch.sigmoid(multi.person_logit(logits)), torch.softmax(logits, dim=-1)[..., 1], atol=1e-6)
+
+    def test_a_constant_added_to_all_of_a_beam_s_columns_leaves_it_unchanged(self):
+        multi = net(head="multiclass", class_norm="softmax", classes=3)
+        logits = self._logits()
+        shifted = logits + 10.0 * torch.randn(2, 48, 1)
+        assert torch.allclose(multi.person_logit(shifted), multi.person_logit(logits), atol=1e-4)
+
+    def test_a_sigmoid_head_still_reads_its_person_column_as_it_stands(self):
+        """Its columns are scored independently, so there is no free offset and nothing to correct."""
+        multi = net(head="multiclass", class_norm="sigmoid", classes=3)
+        logits = self._logits()[..., :3]
+        assert torch.equal(multi.person_logit(logits), logits[..., 0])
+
+
 class TestOneClassSigmoidIsTheBinaryHeadAndNotMerelyCloseToIt:
     def _pair(self):
         source = net()

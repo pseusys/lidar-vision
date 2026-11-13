@@ -207,7 +207,8 @@ range, its deviation from a median window, and deltas to four neighbours: **10 c
 ### Stage 2 — a single-scan ConvNeXt 1-D U-Net
 
 A 1-D U-Net over the beam axis built from ConvNeXt blocks (depthwise `k=7`, `GroupNorm(1, C)` -- over the channels and
-every beam of the scan, not ConvNeXt's per-position LayerNorm, so each block sees the whole scene's statistics -- inverted
+every beam of the scan, not ConvNeXt's per-position LayerNorm, so each block sees the whole scene's statistics; see
+[`STAGE2_NORMALISATION.md`](STAGE2_NORMALISATION.md) -- inverted
 bottleneck ×4, GELU, residual), widths (32, 64, 128) at `N`, `N/2`, `N/4`, a bottleneck over `N/8` sectors with a 3-tap convolution across
 sectors, and skip connections on the way up. The head is **DROW's**: a person logit and a 2-D vote toward the person's
 centre per beam — deliberately unchanged, so the comparison against DROW3 and DR-SPAAM is an *architecture*

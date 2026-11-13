@@ -38,6 +38,69 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The softmax head, scored as its softmax probability: DROW 46.40% against the binary head's 41.79% (2026-11-13)
+
+*keywords: item 109, person_logit, softmax person probability, logsumexp, TestASoftmaxHeadsPersonScoreIsItsSoftmaxProbability, drow_softmax_k5_s0 drow_softmax_k5_s1, 45.86 46.94, drow_field_k5 40.28 43.30, results/drow_softmax_k5.json, reading 21, look-alike in frame 0.55 0.61, look-alike within 1 m 0.69 0.76, no look-alike 0.83 held, train / test 1.53 1.73*
+
+**The fix, approved by the owner.** `CalibrationNetwork.person_logit` now returns a softmax head's person score as
+`l_person - logsumexp(l_other)`, so `sigmoid` of it is the softmax person probability; the binary and sigmoid paths
+are unchanged. Every consumer goes through it -- stage 2's validation and test, stage 3's candidates, the latency
+harness, the readings -- so one change covers them. Two tests in `tests/test_decision_head.py` pin it (the probability
+equals the softmax column; a constant added to all of a beam's logits leaves it unchanged); both failed before the fix,
+and a third pins that a sigmoid head still reads its column as it stands. The suite passes, 1,923 tests.
+
+**Row 109 retrained on it**: `drow_softmax_k5_s0/s1`, the flags of `drow_multiclass_k5` (per-beam norm, kernel 5,
+DROW's radii, `--head multiclass --class-norm softmax`) and no `--min-epochs`, so the recipe is the binary head's own.
+Read correctly, the runs trained like the binary head: val AP climbing steadily to 36.00 / 36.99% at epochs 7.24 / 7.99
+(the binary head's best epochs 7.75-9.0), 2.4-2.9 false positives per frame where the mis-scored runs sat at 45-60.
+
+| DROW official test, stage 2, val-best | train AP | **test AP** | train / test | test FP / frame |
+| --- | ---: | ---: | ---: | ---: |
+| binary head (`drow_field_k5`), s0 / s1 | 71.70 / 73.00% | 40.28 / 43.30% | 1.78 / 1.69 | -- |
+| **softmax head** (`drow_softmax_k5`), s0 / s1 | 71.36 / 70.72% | **45.86 / 46.94%** | 1.56 / 1.51 | 1.96 / 2.30 |
+
+**+4.61 pp, both softmax seeds above both binary ones**, at the same training fit: the head does not fit DROW's training
+recordings better, it transfers better (train / test 1.53 against 1.73). Over the cutout's 63.20% the new stage 2 now
+reaches 0.73, from 0.66.
+
+**Part by part (reading 21), each run's mean over seeds as a share of the cutout's:**
+
+| part | binary | softmax | people |
+| --- | ---: | ---: | ---: |
+| a look-alike in the frame, none within 1 m of a person (**row 109's target**) | 21.70% (0.55) | 24.33% (0.61) | 329 |
+| a look-alike within 1 m of a person | 50.22% (0.69) | 54.68% (0.76) | 1,422 |
+| no look-alike in the frame | 57.69% (0.83) | 57.65% (0.83) | 225 |
+| enclosed scans / open scans | 45.83 / 35.35% | 53.00 / 34.77% | 1,347 / 629 |
+| one person / 2-3 people / 4 or more | 46.92 / 57.51 / 68.56% | 51.59 / 61.60 / 67.50% | 1,036 / 673 / 267 |
+| under 2 m / 2-3 m / 3-5 m / 5-10 m / 10-30 m | 63.83 / 39.33 / 29.38 / 14.27 / 6.75% | 67.87 / 39.12 / 28.92 / 12.40 / 7.91% | 656 / 441 / 347 / 373 / 159 |
+
+**The prediction, written first: if the look-alike false positives come from never teaching wheelchairs and walkers as
+their own classes, that part rises toward the cutout's while the other parts hold. Met, more widely than written.** The
+target part rose (0.55 -> 0.61), and so did the part where a look-alike stands within a metre of a person (0.69 ->
+0.76); scans with no look-alike did not move at all (57.69 against 57.65%). So the whole gain lives in scans holding a
+wheelchair or walker, which is what naming them as classes would do and nothing else would. The enclosed scans and the
+first two metres are where those scans are: enclosed rises 0.67 -> 0.78 and under 2 m reaches the cutout (1.01), while
+open scans and every band past 3 m move by 1.9 pp or less either way, inside DROW's seed spread of about 2 pp. What is still missing on DROW is range, not look-alikes: past 5 m the
+new stage 2 is at 0.34-0.40 of the cutout whichever head it has.
+
+**What it settles and what it does not.** The 2026-11-13 floor of 43.0% was a mis-trained head, as its entry said; the
+answer is 46.40%. The head is already a component the dataset chooses -- DROW labels three classes and FROG one -- and
+DROW3's own head is a softmax over them; whether it becomes DROW's default head, and whether DROW's whole-detector run
+(row 115) should carry it, is the owner's call. FROG is untouched: with one class a softmax head is a binary one.
+
+## Stage 2's normalisation gets its own page (2026-11-13)
+
+*keywords: item 117, docs/STAGE2_NORMALISATION.md, GroupNorm(1, C), Modified Layer Normalization, MLN, PoolFormer, MetaFormer, Yu et al. CVPR 2022, ConvNeXt LayerNorm per position, --norm scan, --norm position, ChannelNorm*
+
+The owner asked for a separate note on the component that departs from its source.
+[`docs/STAGE2_NORMALISATION.md`](docs/STAGE2_NORMALISATION.md) says what ConvNeXt's per-position LayerNorm does, what
+stage 2's `GroupNorm(1, C)` does instead, how it got in, what each measures on DROW and FROG, and how the architecture
+should be described. The one new fact in it: the scan-wide normalisation is published -- it is PoolFormer's *Modified
+Layer Normalization*, "mean and variance along token and channel dimensions", which its authors implement as
+`GroupNorm` with one group (Yu et al., *MetaFormer Is Actually What You Need for Vision*, CVPR 2022, supplementary
+material) -- so stage 2 is a ConvNeXt U-Net with PoolFormer's normalisation, and is to be described as one.
+`docs/RESEARCH.md`, `docs/ARCHITECTURE.md` and `memory/detector-architectures.md` point to the page.
+
 ## The per-beam norm at kernel 5, end to end on FROG: the whole detector 84.51% against the frozen 86.29% (2026-11-13)
 
 *keywords: item 108, reading 20, results/frog_freeze_k5.json, frog_k5_freeze_s0 frog_k5_freeze_s1 frog_k5_freeze_s2, frog_field_k5_s0-2 averaged, a71_freeze_s0-2, --norm position --kernel-size 5, whole detector 84.51 86.29 -1.78, candidates 79.73 82.80 -3.07, stage 3 lift 4.78 3.49, lat_freeze_frozen lat_freeze_per_beam_norm_k5, CPU 20.04 19.00 ms, p99 22.08 20.92, A1 A2, freeze_reading TypeError, seed spread 0.22 corrected to 0.32*

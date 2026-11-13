@@ -12,7 +12,7 @@ from math import log, radians, sqrt
 from typing import List, Optional, Tuple
 
 from torch import (
-    Tensor, arange, arctan, argsort, atan2, cat, cos, cumprod, exp, expm1, floor, full, full_like, isfinite, linspace, log1p, long,
+    Tensor, arange, arctan, argsort, atan2, cat, cos, cumprod, exp, expm1, floor, full, full_like, isfinite, linspace, log1p, logsumexp, long,
     minimum, nn, ones_like, randn, as_tensor,
     sigmoid,
     no_grad, ones, sin, stack, tanh, where, zeros, zeros_like,
@@ -1126,8 +1126,16 @@ class CalibrationNetwork(nn.Module):
         return person_column(self.head_kind, self.class_norm)
 
     def person_logit(self, logits: Tensor) -> Tensor:
-        """The person logit `[B, N]` out of whichever head this is, so a decoder does not have to ask which."""
-        return logits if logits.dim() == 2 else logits[..., self.person_column]
+        """The person logit `[B, N]` out of whichever head this is, so a decoder does not have to ask which.
+
+        Under `softmax` it is the softmax person probability written as a binary logit, `l_person - logsumexp(l_other)`,
+        so that `sigmoid` of it is that probability: the raw column carries a per-beam offset softmax leaves free."""
+        if logits.dim() == 2:
+            return logits
+        c = self.person_column
+        if self.class_norm != "softmax":
+            return logits[..., c]
+        return logits[..., c] - logsumexp(cat([logits[..., :c], logits[..., c + 1:]], dim=-1), dim=-1)
 
     def _encode(self, x: Tensor, prior: Optional[Tensor]) -> Tuple[List[Tensor], Tensor]:
         skips = []

@@ -211,6 +211,12 @@ phase is read first**: it is byte-identical work across arms, so its spread *is*
 catches ordering bias -- in the 2026-10-27 sweep it showed `dim 64` running 0.31 ms slower on identical work purely
 because it went second.
 
+**When the arms' stage 2s differ** -- a stage-2 change priced end to end, each arm with its own stage 2 and the stage 3
+trained on it -- the `stage2` phase is the thing being measured, not the noise floor. Read the **`memory` phase** for
+the floor instead, provided both memories share one recipe and feature width: it is the same arithmetic in both arms.
+In the per-beam norm's end-to-end sweep (2026-11-13; `results/lat_freeze_frozen_r1-3` against
+`results/lat_freeze_per_beam_norm_k5_r1-3`) the two memory phases agreed to 0.04 ms.
+
 **`calibrate_rescore.py` is post-hoc and monotone, and that is the whole safety argument**. It fits
 `calibrated = (logit + bias) / temperature` on **val** by binary NLL, so **AP, recall at matched false positives and
 every other rank-based number cannot move** -- only the fixed-threshold columns do, which is the decalibration the diagnosis
@@ -467,6 +473,15 @@ cd utils && ../.venv/Scripts/python.exe queue_drow_locality_arms.py --list   # t
 # Phase 2 of row 106: DROW3's cutout on geometry-balanced, DR-SPAAM's recipe, then scored on its test and train (~5 h).
 # train.py and evaluate.py read DROW's partitions through --frog-mode, as train_takheliped.py does.
 cd utils && ../.venv/Scripts/python.exe queue_drow_partition_cutout.py --list   # then launch detached
+# The per-beam norm at kernel 5 and its follow-ups, one queue: the DROW pair (geometry-balanced, and the softmax
+# multi-class head, retrained once its person score was fixed), FROG end to end at the frozen stage-3 recipe (three
+# stage-2 seeds averaged, then stage 3 on each: about a GPU-day), and the averaging reading. Done jobs are skipped.
+cd utils && ../.venv/Scripts/python.exe queue_position_norm_k5.py --list   # then launch detached
+# Its readings alone: FROG end to end against the frozen detector; the softmax head against the binary one, part by
+# part; where weight averaging puts each stage 2 against its own best epoch (FROG and DROW, both norms, ~40 min GPU).
+cd utils && ../.venv/Scripts/python.exe drow_locality_property.py --readings freeze --out ../results/frog_freeze_k5.json
+cd utils && ../.venv/Scripts/python.exe drow_locality_property.py --readings multiclass --out ../results/drow_softmax_k5.json
+cd utils && ../.venv/Scripts/python.exe drow_locality_property.py --readings averaging --out ../results/stage2_averaging.json
 # Where DROW's labels sit on its scans, what a 0.6 m and a 0.35 m person disk take in, and how often a walker or a
 # wheelchair has a person on top of it. Model-free, minutes.
 cd utils && ../.venv/Scripts/python.exe drow_label_geometry.py   # not -I: it imports its sibling scripts

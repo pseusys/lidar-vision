@@ -65,7 +65,12 @@ what caught (`memory/gotchas.md`):
     stage 2 on `geometry-balanced` against the cutout trained there, train / test and part by part.
 20. **FROG end to end** (`freeze`, row 108): candidates and whole detector for the frozen seeds and the per-beam norm at
     kernel 5 through the same pipeline.
-21. **The multi-class head, trained to term** (`multiclass`, row 109's rerun): at least eight epochs, against the binary.
+21. **The softmax multi-class head, scored as its softmax probability** (`multiclass`, row 109): `drow_softmax_k5`,
+    trained with the person score fixed (`CHANGELOG.md`, 2026-11-13), against the binary head, train / test and part by
+    part. Until that fix it read `drow_multiclass_k5_long`, whose numbers are withdrawn.
+22. **Where averaging puts each stage 2** (`averaging`, row 114): the val-best checkpoint, the standard window menu's
+    val choice and a menu of the same widths centred on the run's own val-best epoch, on val and on test -- FROG's
+    frozen and per-beam stage 2s, DROW's old and per-beam ones.
 
     python drow_locality_property.py
     python drow_locality_property.py --readings drow-test frog-ranking --out ../results/drow_locality_ranking.json
@@ -81,7 +86,8 @@ what caught (`memory/gotchas.md`):
     python drow_locality_property.py --readings frog-field --out ../results/frog_field.json
     python drow_locality_property.py --readings followups --out ../results/drow_followups.json
     python drow_locality_property.py --readings freeze --out ../results/frog_freeze_k5.json
-    python drow_locality_property.py --readings multiclass --out ../results/drow_multiclass_long.json
+    python drow_locality_property.py --readings multiclass --out ../results/drow_softmax_k5.json
+    python drow_locality_property.py --readings averaging --out ../results/stage2_averaging.json
 """
 
 import re
@@ -96,13 +102,16 @@ import numpy as np
 import torch
 from scipy.stats import spearmanr
 
+from average_checkpoints import VAL_FRAMES, WINDOWS, average_window, window_members
 from check_drow_scoring import detections_by_frame
+from duration_curve import checkpoints
 from evaluate import _load_dataset, eval_nn_model
 from takheliped.datasets.drow_partitions import ENCLOSED_M
 from takheliped.utils.drow_utils import project_cartesian_from_polar
 from train import detect_device
 from train_takheliped import (DROW, FROG, MATCH_RADIUS_M, EVAL_BATCH, FrameSplit, calibration_frames, calibration_network,
-                              frames_from_dataset, keep_window, load_frames, recording_bounds, score_detections)
+                              evaluate_calibration, frames_from_dataset, keep_window, load_frames, recording_bounds,
+                              score_detections)
 
 _HERE = Path(__file__).parent
 CHECKPOINTS = _HERE.parent / "checkpoints_three_horizon"
@@ -136,7 +145,7 @@ FROG_FIELD_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.b
 #: head on official DROW, and on `geometry-balanced`, beside the binary head on official and the old stage 2 on the partition.
 FOLLOWUP_RUNS = {name: [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibration.best.pth" for seed in NORM_SEEDS]
                  for name in ("drow_field_k5", "drow_multiclass_k5", "drow_geometry_balanced", "drow_balanced_k5",
-                              "drow_multiclass_k5_long")}
+                              "drow_multiclass_k5_long", "drow_softmax_k5")}
 #: Reading 20's stage-3 runs: the frozen detector's three seeds, and the same pipeline on the per-beam norm at kernel 5.
 FREEZE_SEEDS = (0, 1, 2)
 FREEZE_RUNS = {"frozen": [CHECKPOINTS / f"a71_freeze_s{s}" for s in FREEZE_SEEDS],
@@ -147,8 +156,18 @@ RESIDUAL_RUNS = {name: (mode, [CHECKPOINTS / f"{name}_s{seed}" / "step2_calibrat
 #: Our FROG stage 2 whose train and test AP (93.66% / 80.89%) item 96 measured, and the stride that 80.89% is at.
 OURS_FROG = CHECKPOINTS / "a69_no_aggregator_s0" / "step2_calibration.best.pth"
 FROG_TEST_STRIDE = 5
+#: Reading 22's stage 2s, as run directories since averaging reads their periodic checkpoints: on FROG the frozen
+#: detector's three (each `a71_freeze_s*` stored which) and the per-beam norm at kernel 5, on DROW the per-beam norm
+#: against the old norm at DROW's own radii.
+AVERAGING_RUNS = {"frog": {"frozen": [CHECKPOINTS / n for n in ("a71_soft_label_s0", "a72_soft_s1", "a72_soft_s2")],
+                           "per_beam_norm_k5": [CHECKPOINTS / f"frog_field_k5_s{s}" for s in FREEZE_SEEDS]},
+                  "drow": {"old_norm": [CHECKPOINTS / f"drow_default_radii_s{s}" for s in NORM_SEEDS],
+                           "per_beam_norm_k5": [CHECKPOINTS / f"drow_field_k5_s{s}" for s in NORM_SEEDS]}}
+#: The placed menu: the standard menu's widths, centred on the run's own val-best epoch.
+PLACED_WIDTHS = (0.5, 1.0, 1.5, 2.0)
 READINGS = ("novelty", "drow-test", "drow-train", "frog-ranking", "score-level", "geometry", "val-geometry", "partitions", "arms",
-            "ranges", "residual", "context", "norm", "field", "parts", "frog-field", "followups", "freeze", "multiclass")
+            "ranges", "residual", "context", "norm", "field", "parts", "frog-field", "followups", "freeze", "multiclass",
+            "averaging")
 #: Reading 10's stage-2 runs, one directory per geometry partition and seed (`queue_drow_partitions.py` trains them), and
 #: the rule written into `TODO.md` row 106 before any of them ran.
 PARTITION_SEEDS = (0, 1)
@@ -625,10 +644,62 @@ def freeze_reading(device) -> Dict[str, object]:
 
 
 def multiclass_reading(device) -> Dict[str, object]:
-    """Reading 21 (row 109's rerun): the multi-class head trained at least eight epochs, against the binary head, on
-    official DROW, train / test and part by part."""
-    runs = {n: FOLLOWUP_RUNS[n] for n in ("drow_field_k5", "drow_multiclass_k5_long")}
+    """Reading 21 (row 109): the softmax multi-class head trained and scored with its person score as the softmax
+    probability, against the binary head, on official DROW, train / test and part by part."""
+    runs = {n: FOLLOWUP_RUNS[n] for n in ("drow_field_k5", "drow_softmax_k5")}
     return {"official": score_runs("official", runs, device), "official_parts": parts_reading(device, "official", runs, CUTOUT)}
+
+
+def placed_windows(best_epoch: float, epochs: Sequence[float], widths: Sequence[float] = PLACED_WIDTHS) -> List[Tuple[float, float]]:
+    """Windows of `widths` centred on `best_epoch` and clipped to the checkpoints the run has, each holding at least two,
+    each kept once."""
+    out = []
+    for width in widths:
+        window = (max(min(epochs), best_epoch - width / 2), min(max(epochs), best_epoch + width / 2))
+        if len(window_members(epochs, window)) > 1 and window not in out:
+            out.append(window)
+    return out
+
+
+def averaging_reading(device) -> Dict[str, object]:
+    """Reading 22 (row 114): where weight averaging puts each stage 2 -- the val-best checkpoint, the standard menu's
+    val-chosen window and the placed menu's, each on `average_checkpoints`' own val sample, the three then on test (FROG
+    every 5th annotated frame, DROW all of them)."""
+    out = {}
+    for dataset, spec in (("frog", FROG), ("drow", DROW)):
+        val, test = load_frames("val", "official", spec), load_frames("test", "official", spec)
+        val_positions = np.unique(np.linspace(0, len(val.annotated) - 1, VAL_FRAMES).astype(int))
+        test_positions = np.arange(0, len(test.annotated), FROG_TEST_STRIDE if dataset == "frog" else 1)
+
+        def score(ckpt, split, positions, spec=spec):
+            return evaluate_calibration(calibration_network(ckpt, spec.angles()).to(device), split, positions, device, EVAL_BATCH)
+
+        out[dataset] = {}
+        print(f"\n{dataset.upper()} official: val AP on {len(val_positions)} frames, then test AP -- val-best / standard menu / placed menu",
+              flush=True)
+        for name, runs in AVERAGING_RUNS[dataset].items():
+            out[dataset][name] = []
+            for run in runs:
+                best = torch.load(run / "step2_calibration.best.pth", map_location="cpu", weights_only=False)
+                epochs = [e for e, _ in checkpoints(run, [])]
+                menus = {"standard": [w for w in WINDOWS if len(window_members(epochs, w)) > 1],
+                         "placed": placed_windows(float(best["epoch"]), epochs)}
+                val_ap = {"best": score(best, val, val_positions)["ap"]}
+                for window in dict.fromkeys(menus["standard"] + menus["placed"]):
+                    val_ap[f"{window[0]:.2f}-{window[1]:.2f}"] = score(average_window(run, window), val, val_positions)["ap"]
+                chosen = {menu: max((f"{lo:.2f}-{hi:.2f}" for lo, hi in windows), key=val_ap.get) for menu, windows in menus.items()}
+                test_r = {"best": score(best, test, test_positions)}
+                for menu, key in chosen.items():
+                    test_r[menu] = score(average_window(run, tuple(float(x) for x in key.split("-"))), test, test_positions)
+                row = dict(run=run.name, best_epoch=float(best["epoch"]), val_ap=val_ap, chosen=chosen, test=test_r)
+                out[dataset][name].append(row)
+                print(f"  {name:<18} {run.name:<22} best epoch {row['best_epoch']:.2f}  val {val_ap['best']:.2%} / "
+                      f"{val_ap[chosen['standard']]:.2%} ({chosen['standard']}) / {val_ap[chosen['placed']]:.2%} ({chosen['placed']})  "
+                      f"test {test_r['best']['ap']:.2%} / {test_r['standard']['ap']:.2%} / {test_r['placed']['ap']:.2%}", flush=True)
+        for name, rows in out[dataset].items():
+            print(f"  {name:<18} mean test  " + " / ".join(f"{np.mean([r['test'][k]['ap'] for r in rows]):.2%}"
+                                                    for k in ("best", "standard", "placed")), flush=True)
+    return out
 
 
 def frog_field_reading(device) -> Dict[str, object]:
@@ -920,6 +991,8 @@ def main() -> int:
 
     if "multiclass" in args.readings:
         results["multiclass"] = multiclass_reading(device)
+    if "averaging" in args.readings:
+        results["averaging"] = averaging_reading(device)
 
     if "frog-ranking" in args.readings:
         # 6. Our FROG stage 2, the same readings as 4, through the pass that scored its 80.89%.
