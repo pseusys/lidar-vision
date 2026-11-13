@@ -1,6 +1,6 @@
 # Gotchas
 
-*keywords:* bad allocation, std::bad_alloc, host memory not GPU, chunk-s host memory, tokens streams depth, long chunk wall clock, average_checkpoints flags, averaging window wrong val, frog_laser_angles hardcoded, beam-stride helper scripts, re-scoring a checkpoint needs its flags, encoding, unicode, cp1252, BOM, U+FEFF, utf-8-sig, mojibake, CRLF, DirectML, venv, python3, ABI mismatch, pip install -e, JRDB, torch_utils, set_num_threads, OMP_NUM_THREADS, spin-wait, CPU time vs wall time, docker, ROS, launch-docker-local, WSL
+*keywords:* averaging window before the peak, WINDOWS ends at epoch 2.25, placed windows, DROW peaks late, bad allocation, std::bad_alloc, host memory not GPU, chunk-s host memory, tokens streams depth, long chunk wall clock, average_checkpoints flags, averaging window wrong val, frog_laser_angles hardcoded, beam-stride helper scripts, re-scoring a checkpoint needs its flags, encoding, unicode, cp1252, BOM, U+FEFF, utf-8-sig, mojibake, CRLF, DirectML, venv, python3, ABI mismatch, pip install -e, JRDB, torch_utils, set_num_threads, OMP_NUM_THREADS, spin-wait, CPU time vs wall time, docker, ROS, launch-docker-local, WSL
 
 Platform and environment traps that have cost real debugging time.
 
@@ -342,6 +342,21 @@ stage-2 re-score of a re-ranked checkpoint would need if one is ever wanted.
 `averaging.json`, for two reasons found by `--list`: the runner skips a job whose declared output already exists,
 and every wrongly-ranked run already has an `averaging.json` -- which is also the evidence that diagnosed the
 defect, the 64.50% and the monotonic fall across windows. A fix must not overwrite what it is checked against.
+
+## Averaging's window menu is in epochs, placed for one stage 2's early peak
+
+`average_checkpoints.WINDOWS` is six windows that all end by epoch **2.25**, because the scan-norm FROG stage 2 it was
+set on peaks at epochs 1.25-2.75. Nothing in the script looks at where a run actually peaks, so a run that peaks later
+is averaged over checkpoints it had outgrown, and val then picks the least-bad early window without complaint.
+**On DROW every run peaks at epochs 5.5-10.5**, and the menu cost the per-beam stage 2 7.9 pp of test AP (33.89
+against its val-best 41.79%); the per-beam FROG stage 2, peaking at 2.75-3.0, lost 0.78 pp to it. Every DROW stage-3
+run on file was trained on such an average (`CHANGELOG.md`, 2026-11-13).
+
+**The tell is the chosen window against the run's best epoch**, both in the run directory: `averaging.json`'s
+`chosen` against `step2_calibration.best.pth`'s `epoch`. A window that ends before the best epoch means the menu did not
+reach the run. `drow_locality_property.py --readings averaging` scores a menu centred on each run's own peak
+(`placed_windows`) beside the standard one; it changes no checkpoint. Which rule the recipe should use is an open
+decision, so until it is taken, quote any averaged non-FROG stage 2 with its window and its best epoch.
 
 ## `argparse` reads a per cent sign in a help string as a format specifier
 

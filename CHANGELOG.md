@@ -38,6 +38,50 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## Weight averaging's windows end before the per-beam stage 2's peak, and long before DROW's (2026-11-13)
+
+*keywords: item 114, reading 22, results/stage2_averaging.json, average_checkpoints WINDOWS, placed windows, placed_windows, PLACED_WIDTHS, val-best epoch, FROG gap 1.56 3.04 2.26, per-beam averaged 79.75 placed 80.53, frozen averaged 82.79, DROW standard menu 33.89 against 41.79, drow_stage2_s0 averaged 1.00-2.00 best epoch 5.49, every DROW stage-3 run on file, candidate decoder not the cause*
+
+**Row 108 left one question: where the per-beam stage 2's FROG cost doubles**, from 1.56 pp at its own test pass to
+3.07 pp at the averaged candidates. Reading 22 scored each stage 2 three ways -- its val-best checkpoint, the average
+over the window `average_checkpoints.py` chooses from its six standard windows, and the average over the best of the
+same widths centred on the run's own val-best epoch (the placed menu) -- on `average_checkpoints`' own 2,000-frame val
+sample and on test through stage 2's own decoder (FROG every 5th annotated frame, DROW all 2,428). Means over seeds:
+
+| test AP, stage 2's decoder | val-best | standard menu | placed menu | val: best / standard / placed |
+| --- | ---: | ---: | ---: | ---: |
+| FROG, frozen (3 seeds) | 81.48% | **82.79%** | 82.73% | 76.19 / 76.99 / 77.05% |
+| FROG, per-beam norm k5 (3 seeds) | 79.92% | 79.75% | **80.53%** | 73.85 / 73.44 / 74.30% |
+| *FROG gap* | *-1.56 pp* | *-3.04 pp* | *-2.26 pp against the frozen's own average* | |
+| DROW, old norm at DROW's radii (2 seeds) | 29.02% | 27.03% | 29.35% | 28.94 / 22.43 / 28.82% |
+| DROW, per-beam norm k5 (2 seeds) | **41.79%** | 33.89% | 38.87% | 35.30 / 23.38 / 34.85% |
+
+Its val-best rows reproduce each run's own test pass (FROG within 0.06 pp at the stride, DROW exactly), and its
+standard-menu choices are the windows each FROG run's `averaging.json` recorded.
+
+- **It is the averaging, not the candidate decoder.** The averaged stage 2's own gap, 3.04 pp, is the averaged
+  candidates' 3.07 pp, so nothing widens between stage 2's decoder and stage 3's.
+- **The standard menu sits before the per-beam stage 2's peak.** All six windows end by epoch 2.25 and the per-beam
+  runs peak at 2.75-3.0, so all three picked 1.00-2.00 and scored below their own val-best on val. Centred on the
+  peak (1.75-3.75, 2.25-3.25, 2.50-3.50), the average beats the val-best on val on every seed and gains 0.61 pp on test.
+  **The prediction, written first -- the placed window scores at or above the val-best on val, and the test gap
+  shrinks toward the 1.56 pp -- is met on val and half met on test:** the gap falls from 3.04 to 2.26 pp. The rest is
+  that averaging gains the scan-norm stage 2 more (+1.31 pp, against +0.61 even when placed).
+- **On DROW the standard menu is wrong by a long way.** Its runs peak at epochs 7.7-10.5, so a window ending by 2.25
+  averages a network that has barely trained: the per-beam stage 2 loses **7.9 pp** (33.89 against 41.79%). Placed,
+  it loses 2.9 pp, and on one of the two seeds no placed window beats the val-best checkpoint even on val.
+
+**What it reaches beyond this row.** Every DROW stage-3 run on file trained on a stage 2 averaged by the standard menu
+before its peak: `drow_stage3_s0` and `drow_stage3_chunk35_s0` on `drow_stage2_s0` averaged over 1.00-2.00 (20.58% on
+DROW val; the run peaked at epoch 5.49), and `drow_sigmoid_stage3_s0` on `drow_sigmoid_fixed_s0` averaged over
+1.00-2.00 (peak 7.99). So the DROW whole detector's 46.0% -- whose candidates read 23.45% against the best
+checkpoint's 29.5% -- measures a memory over a stage 2 averaged well before its peak, and its +22.56 pp lift is a lift
+over a handicapped footing. On FROG, where every run on file peaks inside the menu, the frozen detector is untouched.
+
+**What it does not change:** the averaged checkpoints on disk, the frozen detector and the recipe. A new averaging
+rule is an A1-class decision, and its two uses -- DROW's end-to-end run (row 115), and whether FROG's three per-beam
+stage-3 runs are retrained on placed averages before the A1 / A2 call -- are the owner's.
+
 ## The softmax head, scored as its softmax probability: DROW 46.40% against the binary head's 41.79% (2026-11-13)
 
 *keywords: item 109, person_logit, softmax person probability, logsumexp, TestASoftmaxHeadsPersonScoreIsItsSoftmaxProbability, drow_softmax_k5_s0 drow_softmax_k5_s1, 45.86 46.94, drow_field_k5 40.28 43.30, results/drow_softmax_k5.json, reading 21, look-alike in frame 0.55 0.61, look-alike within 1 m 0.69 0.76, no look-alike 0.83 held, train / test 1.53 1.73*
