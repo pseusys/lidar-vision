@@ -38,6 +38,59 @@ When it does, move this file's entries to `memory/changelog-archive/CHANGELOG-v<
 
 ---
 
+## The softmax head never collapsed: its person score was the raw column logit, which softmax leaves free (2026-11-13)
+
+*keywords: item 109, results/drow_multiclass_long.json, reading 21, drow_multiclass_k5_long 22.07 35.78, person_logit raw column, softmax person probability, logsumexp, per-beam constant, shift invariance, drow_heads_softmax 19.50 27.39, drow_radii_softmax 34.18 30.47, drow_multiclass_k5 29.66 44.27, last epoch 42.20 43.79, softmax collapse withdrawn, 0.6 m disks withdrawn, drow_heads_stage3 withdrawn, val-best chosen by a broken score, --min-epochs*
+
+**Row 109's rerun answered its own question and turned up a defect.** Held to at least eight epochs
+(`--min-epochs 8`), both multi-class runs trained to epoch 8.24 and scored **22.07 / 35.78%** -- the first runs'
+22.06 / 34.83% again, because the val-best checkpoint was still the same early epoch (1.0 and 3.99). So the
+stopping rule was not the cause. The runs' val AP never climbed: it swung between 3% and 25% from one quarter-epoch
+to the next, at 45-60 false positives per frame from the first evaluation on, where the binary head on the identical
+setup climbs steadily from 16% to 34% at about 7.
+
+**The cause is the score, not the head.** `CalibrationNetwork.person_logit` returns a softmax head's person column
+as it stands, and every decoder takes `sigmoid` of it as the person probability: stage 2's validation and test, stage
+3's candidates, the latency harness. Softmax cross-entropy does not change when one constant is added to all of a
+beam's logits, so that column carries a per-beam offset nothing in training pins down, and ranking beams by it ranks
+the offsets. DROW's own softmax head scores the softmax probability. Every softmax checkpoint on file, re-scored on
+DROW official test (all 2,428 annotated frames, the same `calibration_frames` / `score_detections` every reading uses,
+on the CPU) with only the score changed -- the softmax probability written as a binary logit,
+`l_person - logsumexp(l_other)`, so that `sigmoid` of it is exactly the softmax column:
+
+| DROW official test, person AP | checkpoint | raw column logit, as reported | **softmax probability** |
+| --- | --- | ---: | ---: |
+| `drow_heads_softmax_s0` (scan norm, 0.6 m for all classes, 2026-11-07) | val-best, epoch 2.75 | 19.50% | **27.39%** |
+| `drow_radii_softmax_s0` / `_s1` (scan norm, DROW's radii, 2026-11-08) | val-best, 7.24 / 3.99 | 29.03 / 30.51% | **34.18 / 30.47%** |
+| `drow_multiclass_k5_s0` / `_s1` (per-beam norm, kernel 5, 2026-11-12) | val-best, 1.0 / 4.24 | 22.06 / 34.83% | **29.66 / 44.27%** |
+| `drow_multiclass_k5_long_s0` / `_s1` (the same, at least 8 epochs) | val-best, 1.0 / 3.99 | 22.07 / 35.78% | **29.66 / 43.51%** |
+| the same two runs | last, epoch 8.24 | 23.13 / 32.14% | **42.20 / 43.79%** |
+| binary head, the same setup (`drow_field_k5`), for reference | val-best | 40.28 / 43.30% | -- |
+
+False positives at the decoder's threshold fall from 16-39 per frame to 2.3-3.3 under the same change.
+
+**What it withdraws.** Nothing binary and nothing on FROG: a binary head has one column, and a sigmoid head's
+columns are scored independently, so neither carries the free offset. Withdrawn are:
+
+- **the "softmax collapse" of 2026-11-07**: 19.50%, -9.95 pp. Read correctly it is 27.39%, -2.06 pp against its
+  29.45% headline seed, inside the 3.19 pp seed spread;
+- **its explanation of 2026-11-08**, "the collapse was the shared 0.6 m disks". There was no collapse to explain;
+  DROW's radii read correctly give 32.33% at two seeds against 27.39% at one;
+- **the softmax half of "a multi-class head costs the DROW whole detector about 8 pp whatever its normalisation"**
+  (`drow_heads_stage3_s0`, 38.70%): its stage 3 trained on the same mis-read candidate scores. The sigmoid half,
+  37.51%, stands;
+- **row 109's first reading** (2026-11-12: 22.06 / 34.83%, the look-alike part 0.36 of the cutout's) and
+  **reading 21's tables** in `results/drow_multiclass_long.json`.
+
+`memory/performance-log.md` and `memory/static-detector-diagnosis.md` mark each passage withdrawn.
+
+**What it does not yet answer is row 109 itself.** The training read the broken score too: early stopping, the
+val-best checkpoint and the plateau schedule all follow val AP, and the multi-class runs' learning rate was down to
+1e-5 by epoch 6 where the binary head's held at 1e-3 past epoch 8. So **42.20 / 43.79%** (mean 43.0% against the
+binary head's 41.79%) is a mis-trained head read correctly: a floor for the softmax head, level with the binary one,
+and not yet its number. The answer needs the score fixed in the library and the two runs retrained. That is a code
+change, so it is a plan in `TODO.md` row 109 awaiting the owner, not done here.
+
 ## JRDB's 2019 train split is on disk, unpacked by a script that resumes (2026-11-11)
 
 *keywords: A63.3 gate met, §C JRDB block deleted, utils/unpack_jrdb.py, tests/test_unpack_jrdb.py, JRDB-data/train_dataset, train_rosbags.zip, segway/scan_multi, 27 sequences, 464 files 46.1 GB, no test rosbags, jrdb19_train_norosbag, DR-SPAAM 17/10 hold-out*

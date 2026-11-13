@@ -219,7 +219,9 @@ these arms: the headline recipe re-run at seed 1 and nothing else changed scores
 arms whose differences are mostly smaller than their own noise, and only two conclusions in it survive: the
 **range span** (+5.20 pp on matched labels, which has a second seed on its 29.99 m side -- 31.16% and 28.18%,
 mean 29.67%, against the 10 m arm's 36.36%), and the fact that the **softmax head collapses** (-9.95 pp, three
-times the spread). Everything between -5.3 and +2.7 pp is a guess, including the kernel arms -- whose
+times the spread) -- **withdrawn 2026-11-13**: every softmax number in this section was scored on the head's raw
+person-column logit, which softmax leaves free by a per-beam constant; read as the softmax probability the arm
+scores 27.39%, -2.06 pp, inside the spread (`CHANGELOG.md`, 2026-11-13). Everything between -5.3 and +2.7 pp is a guess, including the kernel arms -- whose
 non-monotonicity *is* this spread -- and the sigmoid arm, whose +2.65 pp did not survive having its class
 balance fixed (28.79% and 31.01% at two seeds, mean 29.90% against the headline's 27.86%). The stopping rule is
 the likely mechanism: these runs took their best val AP anywhere between epoch 3.7 and epoch 8.0.
@@ -274,6 +276,11 @@ one, and the arm fires harder -- which is the operating point it reported. Its +
 change **and** a class-balance change. The binary numbers everywhere else in this file are unaffected: the
 binary branch counts from hard labels, and FROG has one class.
 
+*Withdrawn 2026-11-13, kept for the record of what was believed: the softmax arm's scores here, at stage 2 and through
+stage 3, were read from its raw person-column logit, which softmax leaves free by a per-beam constant. Read as the
+softmax probability it scores 27.39%, not 19.50%, and neither candidate below was the cause (`CHANGELOG.md`,
+2026-11-13). The sigmoid and binary numbers are unaffected.*
+
 **The softmax arm collapsed** to 19.50% at 23.331 FP/frame and 97.9% recall, early-stopping after 23
 evaluations against the sigmoid arm's 59. Two unmeasured candidates: `cross_entropy` normalises a weighted mean
 by the sum of the class weights for an index target and by the batch size for a probability target, so the
@@ -306,6 +313,9 @@ opposite of the test ordering, which is why the memory's contribution is quoted 
 (2026-11-07, `drow_sigmoid_stage3_s0`, the `pos_weight`-fixed arm). **37.51%** at test stride 1, the worst of
 the three on both halves. Its `--max-epochs 42` cap did **not** bind -- best val at epoch 21, patience ended it
 at 29 -- so the figure is about the head.
+
+*Withdrawn 2026-11-13: the softmax chain (38.70%, candidates 20.73%) is a mis-scored arm (see above), so the paragraph
+below rests on one arm, the sigmoid's, not two; the memory's-lift trend keeps two points, 23.45 / 19.82.*
 
 Two readings come out of having three chains instead of two. **A multi-class head costs the DROW whole detector
 about 8 pp whatever its normalisation**: 37.51% and 38.70% against 46.01%, agreeing with each other to 1.19 pp,
@@ -344,6 +354,10 @@ are **one objective trained twice**: the binary head reads only the person's rad
 an ignore region only under `--ignore-other-classes`, which is off. Their difference is this machine's run-to-run spread
 -- see `interpreting-evaluation.md` -- so every DROW comparison above that was read against 27.86% or 27.12% stands, and
 reads about 1.8 pp further from the cutout's 63.20% against the new default.
+
+### The softmax multi-class head on the new stage 2: a floor of about 43%, once its score is read correctly (2026-11-13)
+
+Per-beam norm at kernel 5, official DROW test, two seeds, the last checkpoint of a run held to at least eight epochs: **42.20 / 43.79%** read as the softmax person probability, against the binary head's 40.28 / 43.30% -- level, inside DROW's seed spread. A floor, not the head's number: the run's early stopping, best-checkpoint pick and plateau schedule all read the raw person-column logit, which softmax leaves free by a per-beam constant (`CHANGELOG.md`). Every earlier softmax number in this file carries the same defect and is marked withdrawn.
 
 ### The new stage 2 on a geometry-balanced DROW: 0.90 of the cutout (2026-11-12)
 
